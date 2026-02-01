@@ -1,0 +1,111 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cortex-llm"
+version = "1.0.6"
+description = "GPU-Accelerated LLM Terminal for Apple Silicon"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Cortex Development Team"},
+]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Environment :: Console",
+    "Environment :: GPU",
+]
+keywords = ["llm", "gpu", "metal", "mps", "apple-silicon", "ai", "machine-learning", "terminal", "mlx", "pytorch"]
+
+# Core dependencies only
+dependencies = [
+    # Core ML/AI Libraries
+    "torch>=2.1.0",
+    "mlx>=0.30.4",
+    "mlx-lm>=0.30.5",
+    "transformers>=4.36.0",
+    "safetensors>=0.4.0",
+    "huggingface-hub>=0.19.0",
+    "accelerate>=0.25.0",
+    
+    # Model format support (GGUF is essential)
+    "llama-cpp-python>=0.2.0",
+    
+    # Configuration and CLI
+    "pyyaml>=6.0",
+    "pydantic>=2.5.0",
+    "rich>=13.0.0",
+    
+    # Performance and Utilities
+    "psutil>=5.9.0",
+    "numpy>=1.24.0",
+    "packaging>=23.0",
+    "requests>=2.31.0",
+
+]
+
+[project.optional-dependencies]
+# Development tools
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.8.0",
+]
+
+# Optional model format support
+optional = [
+    "sentencepiece>=0.1.99",     # For certain tokenizers (needs cmake to build)
+    "auto-gptq>=0.7.0",          # GPTQ quantized models
+    "autoawq>=0.2.0",            # AWQ quantized models
+    "bitsandbytes>=0.41.0",      # 8-bit and 4-bit quantization
+    "optimum>=1.16.0",           # HuggingFace optimization
+    "torchvision>=0.16.0",       # Vision models
+    "torchaudio>=2.1.0",         # Audio models
+]
+
+[project.scripts]
+cortex = "cortex.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/faisalmumtaz/Cortex"
+"Bug Tracker" = "https://github.com/faisalmumtaz/Cortex/issues"
+Documentation = "https://github.com/faisalmumtaz/Cortex/wiki"
+
+[tool.setuptools]
+packages = ["cortex", "cortex.metal", "cortex.ui", "cortex.fine_tuning", "cortex.quantization", "cortex.template_registry", "cortex.template_registry.template_profiles", "cortex.template_registry.template_profiles.complex", "cortex.template_registry.template_profiles.standard"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+cortex = ["config.yaml"]
+
+[tool.black]
+line-length = 100
+target-version = ['py311', 'py312']
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that require GPU/Metal and may be slow",
+]
