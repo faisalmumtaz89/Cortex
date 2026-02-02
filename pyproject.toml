@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cortex-llm"
-version = "1.0.8"
+version = "1.0.10"
 description = "GPU-Accelerated LLM Terminal for Apple Silicon"
 readme = "README.md"
 license = "MIT"
@@ -83,7 +83,7 @@ Homepage = "https://github.com/faisalmumtaz/Cortex"
 Documentation = "https://github.com/faisalmumtaz/Cortex/wiki"
 
 [tool.setuptools]
-packages = ["cortex", "cortex.metal", "cortex.ui", "cortex.fine_tuning", "cortex.quantization", "cortex.template_registry", "cortex.template_registry.template_profiles", "cortex.template_registry.template_profiles.complex", "cortex.template_registry.template_profiles.standard"]
+packages = ["cortex", "cortex.metal", "cortex.ui", "cortex.fine_tuning", "cortex.quantization", "cortex.template_registry", "cortex.template_registry.template_profiles", "cortex.template_registry.template_profiles.complex", "cortex.template_registry.template_profiles.standard", "cortex.tools"]
 include-package-data = true
 
 [tool.setuptools.package-data]

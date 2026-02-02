@@ -26,7 +26,7 @@ def read_requirements():
 
 setup(
     name="cortex-llm",
-    version="1.0.8",
+    version="1.0.10",
     author="Cortex Development Team",
     description="GPU-Accelerated LLM Terminal for Apple Silicon",
     long_description=README,
