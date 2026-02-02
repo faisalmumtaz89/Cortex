@@ -191,3 +191,4 @@ models/
 
 # Cortex specific
 .cortex_history
+config.yaml

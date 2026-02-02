@@ -243,6 +243,33 @@ class InferenceEngine:
         tokens_generated = 0
         first_token_time = None
         last_metrics_update = time.time()
+        stream_total_text = ""
+        stream_cumulative = False
+
+        def normalize_stream_chunk(chunk: Any) -> str:
+            """Normalize streaming output to delta chunks when backend yields cumulative text."""
+            nonlocal stream_total_text, stream_cumulative
+            if chunk is None:
+                return ""
+            if not isinstance(chunk, str):
+                chunk = str(chunk)
+
+            if stream_cumulative:
+                if chunk.startswith(stream_total_text):
+                    delta = chunk[len(stream_total_text):]
+                    stream_total_text = chunk
+                    return delta
+                stream_total_text += chunk
+                return chunk
+
+            if stream_total_text and len(chunk) > len(stream_total_text) and chunk.startswith(stream_total_text):
+                stream_cumulative = True
+                delta = chunk[len(stream_total_text):]
+                stream_total_text = chunk
+                return delta
+
+            stream_total_text += chunk
+            return chunk
         
         try:
             # Use MLX accelerator's optimized generation if available
@@ -262,10 +289,14 @@ class InferenceEngine:
                     if self._cancel_event.is_set():
                         self.status = InferenceStatus.CANCELLED
                         break
-                    
+
+                    delta = normalize_stream_chunk(token) if request.stream else str(token)
+                    if not delta:
+                        continue
+
                     if first_token_time is None:
                         first_token_time = time.time() - start_time
-                    
+
                     tokens_generated += 1
                     
                     # Update metrics less frequently
@@ -284,13 +315,18 @@ class InferenceEngine:
                         last_metrics_update = current_time
                     
                     # Token is already a string from generate_optimized
-                    yield token
+                    yield delta
                     
                     if any(stop in token for stop in request.stop_sequences):
                         break
             elif mlx_generate:
                 # Fallback to standard MLX generation
-                logger.info("Using standard MLX generation")
+                if request.stream and mlx_stream_generate:
+                    logger.info("Using MLX streaming generation")
+                    generate_fn = mlx_stream_generate
+                else:
+                    logger.info("Using standard MLX generation")
+                    generate_fn = mlx_generate
                 
                 # Import sample_utils for creating sampler
                 try:
@@ -314,7 +350,7 @@ class InferenceEngine:
                 if request.seed is not None and request.seed >= 0:
                     mx.random.seed(request.seed)
                 
-                for response in mlx_generate(
+                for response in generate_fn(
                     model,
                     tokenizer,
                     **generation_kwargs
@@ -328,10 +364,14 @@ class InferenceEngine:
                         token = response.text
                     else:
                         token = str(response)
-                    
+
+                    delta = normalize_stream_chunk(token) if request.stream else token
+                    if request.stream and not delta:
+                        continue
+
                     if first_token_time is None:
                         first_token_time = time.time() - start_time
-                    
+
                     tokens_generated += 1
                     
                     # Update metrics less frequently to reduce overhead
@@ -352,7 +392,7 @@ class InferenceEngine:
                         )
                         last_metrics_update = current_time
                     
-                    yield token
+                    yield delta
                     
                     if any(stop in token for stop in request.stop_sequences):
                         break

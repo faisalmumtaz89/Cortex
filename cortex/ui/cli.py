@@ -18,6 +18,7 @@ from textwrap import wrap
 
 from rich.live import Live
 from rich.style import Style
+from rich.text import Text
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ from cortex.conversation_manager import ConversationManager, MessageRole
 from cortex.model_downloader import ModelDownloader
 from cortex.template_registry import TemplateRegistry
 from cortex.fine_tuning import FineTuneWizard
+from cortex.tools import ToolRunner
+from cortex.tools import protocol as tool_protocol
 from cortex.ui.markdown_render import ThinkMarkdown, PrefixedRenderable, render_plain_with_think
 
 
@@ -58,6 +61,11 @@ class CortexCLI:
         
         # Initialize fine-tuning wizard
         self.fine_tune_wizard = FineTuneWizard(model_manager, config)
+
+        # Tooling support (always enabled)
+        self.tool_runner = ToolRunner(Path.cwd())
+        self.tool_runner.set_confirm_callback(self._confirm_tool_change)
+        self.max_tool_iterations = 4
         
         
         self.running = True
@@ -132,6 +140,86 @@ class CortexCLI:
             # Don't call sys.exit() here - let the main loop exit naturally
             # This prevents traceback from the parent process
             print("\n", file=sys.stderr)  # Just add a newline for cleaner output
+
+    def _confirm_tool_change(self, prompt: str) -> bool:
+        """Prompt user to approve a tool-driven change."""
+        print("\n" + prompt)
+        response = input("Apply change? [y/N]: ").strip().lower()
+        return response in {"y", "yes"}
+
+    def _ensure_tool_instructions(self) -> None:
+        """Inject tool instructions into the conversation once."""
+        conversation = self.conversation_manager.get_current_conversation()
+        if conversation is None:
+            conversation = self.conversation_manager.new_conversation()
+        marker = "[CORTEX_TOOL_INSTRUCTIONS v2]"
+        for message in conversation.messages:
+            if message.role == MessageRole.SYSTEM and marker in message.content:
+                return
+        self.conversation_manager.add_message(MessageRole.SYSTEM, self.tool_runner.tool_instructions())
+
+    def _summarize_tool_call(self, call: dict) -> str:
+        name = str(call.get("name", "tool"))
+        args = call.get("arguments") or {}
+        parts = []
+        preferred = ("path", "query", "anchor", "start_line", "end_line", "recursive", "max_results")
+        for key in preferred:
+            if key in args:
+                value = args[key]
+                if isinstance(value, str) and len(value) > 60:
+                    value = value[:57] + "..."
+                parts.append(f"{key}={value!r}")
+        if not parts and args:
+            for key in list(args.keys())[:3]:
+                value = args[key]
+                if isinstance(value, str) and len(value) > 60:
+                    value = value[:57] + "..."
+                parts.append(f"{key}={value!r}")
+        arg_str = ", ".join(parts)
+        return f"{name}({arg_str})" if arg_str else f"{name}()"
+
+    def _summarize_tool_result(self, result: dict) -> str:
+        name = str(result.get("name", "tool"))
+        if not result.get("ok", False):
+            error = result.get("error") or "unknown error"
+            return f"{name} -> error: {error}"
+        payload = result.get("result") or {}
+        if name == "list_dir":
+            entries = payload.get("entries") or []
+            return f"{name} -> entries={len(entries)}"
+        if name == "search":
+            matches = payload.get("results") or []
+            return f"{name} -> results={len(matches)}"
+        if name == "read_file":
+            path = payload.get("path") or ""
+            start = payload.get("start_line")
+            end = payload.get("end_line")
+            if start and end:
+                return f"{name} -> {path} lines {start}-{end}"
+            if start:
+                return f"{name} -> {path} from line {start}"
+            return f"{name} -> {path}"
+        if name in {"write_file", "create_file", "delete_file", "replace_in_file", "insert_after", "insert_before"}:
+            path = payload.get("path") or ""
+            return f"{name} -> {path}"
+        return f"{name} -> ok"
+
+    def _print_tool_activity(self, tool_calls: list, tool_results: list) -> None:
+        lines = []
+        for call, result in zip(tool_calls, tool_results):
+            lines.append(f"tool {self._summarize_tool_call(call)} -> {self._summarize_tool_result(result)}")
+        if not lines:
+            return
+        text = Text("\n".join(lines), style=Style(color="bright_black", italic=True))
+        renderable = PrefixedRenderable(text, prefix="  ", prefix_style=Style(dim=True), indent="  ", auto_space=False)
+        original_console_width = self.console._width
+        target_width = max(40, int(self.get_terminal_width() * 0.75))
+        self.console.width = target_width
+        try:
+            self.console.print(renderable, highlight=False, soft_wrap=True)
+            self.console.print()
+        finally:
+            self.console._width = original_console_width
     
     
     def get_terminal_width(self) -> int:
@@ -1110,16 +1198,10 @@ class CortexCLI:
         except Exception as e:
             logger.debug(f"Failed to get template profile: {e}")
         
-        # Build conversation context with proper formatting BEFORE adding to conversation
-        formatted_prompt = self._format_prompt_with_chat_template(user_input)
-        
-        # DEBUG: Uncomment these lines to see the exact prompt being sent to the model
-        # This is crucial for debugging when models give unexpected responses
-        # It shows the formatted prompt with all special tokens and formatting
-        # print(f"\033[33m[DEBUG] Formatted prompt being sent to model:\033[0m", file=sys.stderr)
-        # print(f"\033[33m{repr(formatted_prompt[:200])}...\033[0m", file=sys.stderr)
-        
-        # Now add user message to conversation history  
+        # Ensure tool instructions are present before adding user message
+        self._ensure_tool_instructions()
+
+        # Now add user message to conversation history
         self.conversation_manager.add_message(MessageRole.USER, user_input)
         
         # Start response on a new line; prefix is rendered with the markdown output.
@@ -1134,130 +1216,154 @@ class CortexCLI:
             except Exception as e:
                 logger.debug(f"Could not get stop sequences: {e}")
         
-        # Create generation request with formatted prompt
-        request = GenerationRequest(
-            prompt=formatted_prompt,
-            max_tokens=self.config.inference.max_tokens,
-            temperature=self.config.inference.temperature,
-            top_p=self.config.inference.top_p,
-            top_k=self.config.inference.top_k,
-            repetition_penalty=self.config.inference.repetition_penalty,
-            stream=self.config.inference.stream_output,
-            seed=self.config.inference.seed if self.config.inference.seed >= 0 else None,
-            stop_sequences=stop_sequences
-        )
-        
-        # Generate response
+        # Generate response (with tool loop)
         self.generating = True
-        generated_text = ""
-        start_time = time.time()
-        token_count = 0
-        first_token_time = None
 
         try:
-            # Reset streaming state for reasoning templates if supported
-            if uses_reasoning_template and template_profile and template_profile.supports_streaming():
-                if hasattr(template_profile, 'reset_streaming_state'):
-                    template_profile.reset_streaming_state()
+            tool_iterations = 0
+            while tool_iterations < self.max_tool_iterations:
+                tool_iterations += 1
 
-            display_text = ""
-            accumulated_response = ""
-            last_render_time = 0.0
-            render_interval = 0.05  # seconds
-            prefix_style = Style(color="cyan")
+                formatted_prompt = self._format_prompt_with_chat_template(user_input, include_user=False)
 
-            def build_renderable(text: str):
-                if getattr(self.config.ui, "markdown_rendering", True):
-                    markdown = ThinkMarkdown(
-                        text,
-                        code_theme="monokai",
-                        use_line_numbers=False,
-                        syntax_highlighting=getattr(self.config.ui, "syntax_highlighting", True),
-                    )
-                    renderable = markdown
-                else:
-                    renderable = render_plain_with_think(text)
+                # DEBUG: Uncomment these lines to see the exact prompt being sent to the model
+                # print(f"\033[33m[DEBUG] Formatted prompt being sent to model:\033[0m", file=sys.stderr)
+                # print(f"\033[33m{repr(formatted_prompt[:200])}...\033[0m", file=sys.stderr)
 
-                return PrefixedRenderable(renderable, prefix="⏺ ", prefix_style=prefix_style, indent="  ")
+                request = GenerationRequest(
+                    prompt=formatted_prompt,
+                    max_tokens=self.config.inference.max_tokens,
+                    temperature=self.config.inference.temperature,
+                    top_p=self.config.inference.top_p,
+                    top_k=self.config.inference.top_k,
+                    repetition_penalty=self.config.inference.repetition_penalty,
+                    stream=self.config.inference.stream_output,
+                    seed=self.config.inference.seed if self.config.inference.seed >= 0 else None,
+                    stop_sequences=stop_sequences
+                )
 
-            original_console_width = self.console._width
-            target_width = max(40, int(self.get_terminal_width() * 0.75))
-            self.console.width = target_width
-            try:
-                with Live(
-                    build_renderable(""),
-                    console=self.console,
-                    auto_refresh=False,
-                    refresh_per_second=20,
-                    transient=False,
-                    vertical_overflow="visible",
-                ) as live:
-                    for token in self.inference_engine.generate(request):
-                        if first_token_time is None:
-                            first_token_time = time.time()
+                generated_text = ""
+                start_time = time.time()
+                token_count = 0
+                first_token_time = None
+                tool_calls_started = False
 
-                        generated_text += token
-                        token_count += 1
+                if uses_reasoning_template and template_profile and template_profile.supports_streaming():
+                    if hasattr(template_profile, 'reset_streaming_state'):
+                        template_profile.reset_streaming_state()
 
-                        display_token = token
-                        if uses_reasoning_template and template_profile and template_profile.supports_streaming():
-                            display_token, should_display = template_profile.process_streaming_response(
-                                token, accumulated_response
-                            )
-                            accumulated_response += token
-                            if not should_display:
-                                display_token = ""
+                display_text = ""
+                accumulated_response = ""
+                last_render_time = 0.0
+                render_interval = 0.05  # seconds
+                prefix_style = Style(color="cyan")
 
-                        if display_token:
-                            display_text += display_token
+                def build_renderable(text: str):
+                    if getattr(self.config.ui, "markdown_rendering", True):
+                        markdown = ThinkMarkdown(
+                            text,
+                            code_theme="monokai",
+                            use_line_numbers=False,
+                            syntax_highlighting=getattr(self.config.ui, "syntax_highlighting", True),
+                        )
+                        renderable = markdown
+                    else:
+                        renderable = render_plain_with_think(text)
 
-                        now = time.time()
-                        if display_token and ("\n" in display_token or now - last_render_time >= render_interval):
+                    return PrefixedRenderable(renderable, prefix="⏺", prefix_style=prefix_style, indent="  ", auto_space=True)
+
+                original_console_width = self.console._width
+                target_width = max(40, int(self.get_terminal_width() * 0.75))
+                self.console.width = target_width
+                try:
+                    with Live(
+                        build_renderable(""),
+                        console=self.console,
+                        auto_refresh=False,
+                        refresh_per_second=20,
+                        transient=False,
+                        vertical_overflow="visible",
+                    ) as live:
+                        for token in self.inference_engine.generate(request):
+                            if first_token_time is None:
+                                first_token_time = time.time()
+
+                            generated_text += token
+                            token_count += 1
+
+                            if not tool_calls_started and tool_protocol.find_tool_calls_block(generated_text)[0] is not None:
+                                tool_calls_started = True
+                                display_text = "<think>tools running...</think>"
+                                live.update(build_renderable(display_text), refresh=True)
+
+                            display_token = token
+                            if uses_reasoning_template and template_profile and template_profile.supports_streaming():
+                                display_token, should_display = template_profile.process_streaming_response(
+                                    token, accumulated_response
+                                )
+                                accumulated_response += token
+                                if not should_display:
+                                    display_token = ""
+
+                            if not tool_calls_started and display_token:
+                                display_text += display_token
+
+                            now = time.time()
+                            if (not tool_calls_started and display_token and
+                                    ("\n" in display_token or now - last_render_time >= render_interval)):
+                                live.update(build_renderable(display_text), refresh=True)
+                                last_render_time = now
+
+                        if not tool_calls_started and uses_reasoning_template and template_profile:
+                            final_text = template_profile.process_response(generated_text)
+                            generated_text = final_text
+                            if not template_profile.config.show_reasoning:
+                                display_text = final_text
                             live.update(build_renderable(display_text), refresh=True)
-                            last_render_time = now
+                finally:
+                    self.console._width = original_console_width
 
-                    if uses_reasoning_template and template_profile:
-                        final_text = template_profile.process_response(generated_text)
-                        generated_text = final_text
-                        if not template_profile.config.show_reasoning:
-                            display_text = final_text
+                tool_calls, parse_error = tool_protocol.parse_tool_calls(generated_text)
+                if parse_error:
+                    print(f"\n\033[31m✗ Tool call parse error:\033[0m {parse_error}", file=sys.stderr)
 
-                    live.update(build_renderable(display_text), refresh=True)
-            finally:
-                self.console._width = original_console_width
+                if tool_calls:
+                    tool_results = self.tool_runner.run_calls(tool_calls)
+                    self._print_tool_activity(tool_calls, tool_results)
+                    self.conversation_manager.add_message(
+                        MessageRole.SYSTEM,
+                        tool_protocol.format_tool_results(tool_results)
+                    )
+                    if tool_iterations >= self.max_tool_iterations:
+                        print("\n\033[31m✗\033[0m Tool loop limit reached.", file=sys.stderr)
+                        break
+                    continue
 
-            # Display final metrics in a clean, professional way
-            elapsed = time.time() - start_time
-            if token_count > 0 and elapsed > 0:
-                tokens_per_sec = token_count / elapsed
-                first_token_latency = first_token_time - start_time if first_token_time else 0
-                
-                # Build metrics parts - all will be wrapped in dim for subtlety
-                metrics_parts = []
-                
-                if first_token_latency > 0.1:
-                    # First token latency
-                    metrics_parts.append(f"first {first_token_latency:.2f}s")
-                
-                # Total time
-                metrics_parts.append(f"total {elapsed:.1f}s")
-                
-                # Token count
-                metrics_parts.append(f"tokens {token_count}")
-                
-                # Throughput
-                metrics_parts.append(f"speed {tokens_per_sec:.1f} tok/s")
-                
-                # Print entire metrics line as dim/secondary to make it less prominent
-                # Indent metrics to align with response text
-                metrics_line = " · ".join(metrics_parts)
-                print(f"  \033[2m{metrics_line}\033[0m")
-            
-            if token_count >= request.max_tokens:
-                print(f"  \033[2m(output truncated at max_tokens={request.max_tokens}; increase in config.yaml)\033[0m")
-            
-            # Add assistant message to conversation history
-            self.conversation_manager.add_message(MessageRole.ASSISTANT, generated_text)
+                final_text = generated_text
+                if parse_error:
+                    final_text = tool_protocol.strip_tool_blocks(generated_text)
+                    if tool_calls_started and final_text.strip():
+                        self.console.print(build_renderable(final_text))
+
+                elapsed = time.time() - start_time
+                if token_count > 0 and elapsed > 0:
+                    tokens_per_sec = token_count / elapsed
+                    first_token_latency = first_token_time - start_time if first_token_time else 0
+
+                    metrics_parts = []
+                    if first_token_latency > 0.1:
+                        metrics_parts.append(f"first {first_token_latency:.2f}s")
+                    metrics_parts.append(f"total {elapsed:.1f}s")
+                    metrics_parts.append(f"tokens {token_count}")
+                    metrics_parts.append(f"speed {tokens_per_sec:.1f} tok/s")
+                    metrics_line = " · ".join(metrics_parts)
+                    print(f"  \033[2m{metrics_line}\033[0m")
+
+                if token_count >= request.max_tokens:
+                    print(f"  \033[2m(output truncated at max_tokens={request.max_tokens}; increase in config.yaml)\033[0m")
+
+                self.conversation_manager.add_message(MessageRole.ASSISTANT, final_text)
+                break
             
         except Exception as e:
             print(f"\n\033[31m✗ Error:\033[0m {str(e)}", file=sys.stderr)
@@ -1274,7 +1380,7 @@ class CortexCLI:
         except (KeyboardInterrupt, EOFError):
             raise
     
-    def _format_prompt_with_chat_template(self, user_input: str) -> str:
+    def _format_prompt_with_chat_template(self, user_input: str, include_user: bool = True) -> str:
         """Format the prompt with appropriate chat template for the model."""
         # Get current conversation context
         conversation = self.conversation_manager.get_current_conversation()
@@ -1297,10 +1403,11 @@ class CortexCLI:
                 })
         
         # Add current user message
-        messages.append({
-            "role": "user",
-            "content": user_input
-        })
+        if include_user:
+            messages.append({
+                "role": "user",
+                "content": user_input
+            })
         
         # Use template registry to format messages
         try:

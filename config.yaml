@@ -30,7 +30,7 @@ stream_output: true
 seed: -1
 model_path: ~/models
 default_model: ''
-last_used_model: ''
+last_used_model: /Users/faisalmumtaz/models/Qwen3-4B
 model_cache_dir: ~/.cortex/models
 preload_models: []
 max_loaded_models: 3

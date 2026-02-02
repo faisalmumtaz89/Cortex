@@ -29,6 +29,22 @@ cortex
 - Command history persisted in `~/.cortex_history`
 - Signal handling (Ctrl+C cancels generation or exits when idle)
 
+## Tooling (Experimental, Work in Progress)
+
+Cortex includes early tooling support to let the model read/search the current repo and propose file edits. This is **experimental** and **work in progress**.
+
+**What it can do (today):**
+- Read files and list directories in the current repo
+- Search for text/regex matches
+- Propose edits (create, write, replace, insert, delete) with explicit confirmation
+
+**Scope and safety:**
+- Tool paths are **repo-relative**. Cortex will not access files outside the repo root.
+- Any write/delete operation **requires explicit approval** before it is applied.
+- The tool system is evolving: behavior and output may change, tool calls may fail, and UI presentation may be adjusted.
+
+**Important (WIP):** Treat tooling as a preview. Use it on non-critical tasks first, and always review proposed changes before approving them.
+
 ## Interactive Commands
 
 All functionality in Cortex is accessed through slash commands in the interactive interface:

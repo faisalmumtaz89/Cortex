@@ -73,6 +73,10 @@ Cortex supports:
   - `docs/template-registry.md`
 - **Inference engine details** and backend behavior
   - `docs/inference-engine.md`
+- **Tooling (experimental, WIP)** for repo-scoped read/search and optional file edits with explicit confirmation
+  - `docs/cli.md`
+
+**Important (Work in Progress):** Tooling is actively evolving and should be considered experimental. Behavior, output format, and available actions may change; tool calls can fail; and UI presentation may be adjusted. Use tooling on non-critical work first, and always review any proposed file changes before approving them.
 
 ## Configuration
 

@@ -190,11 +190,13 @@ class PrefixedRenderable:
         prefix: str,
         prefix_style: Style | None = None,
         indent: str | None = None,
+        auto_space: bool = False,
     ) -> None:
         self.renderable = renderable
         self.prefix = prefix
         self.prefix_style = prefix_style
         self.indent = indent if indent is not None else " " * len(prefix)
+        self.auto_space = auto_space
 
     def __rich_console__(self, console: Console, options):
         prefix_width = cell_len(self.prefix)
@@ -205,6 +207,7 @@ class PrefixedRenderable:
 
         yield Segment(self.prefix, self.prefix_style)
 
+        inserted_space = False
         for segment in console.render(self.renderable, inner_options):
             if segment.control:
                 yield segment
@@ -212,6 +215,12 @@ class PrefixedRenderable:
 
             text = segment.text
             style = segment.style
+
+            if self.auto_space and not inserted_space:
+                if text:
+                    if not text[0].isspace():
+                        yield Segment(" ", None)
+                    inserted_space = True
 
             if "\n" not in text:
                 yield segment
