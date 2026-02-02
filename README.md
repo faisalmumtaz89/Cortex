@@ -2,6 +2,8 @@
 
 GPU-accelerated local LLMs on Apple Silicon, built for the terminal.
 
+![Cortex preview](docs/assets/cortex-llm.png)
+
 Cortex is a fast, native CLI for running and fine-tuning LLMs on Apple Silicon using MLX and Metal. It automatically detects chat templates, supports multiple model formats, and keeps your workflow inside the terminal.
 
 ## Highlights
