@@ -30,7 +30,7 @@ stream_output: true
 seed: -1
 model_path: ~/models
 default_model: ''
-last_used_model: /Users/faisalmumtaz/models/Nanbeige4-3B-Thinking-2511
+last_used_model: ''
 model_cache_dir: ~/.cortex/models
 preload_models: []
 max_loaded_models: 3

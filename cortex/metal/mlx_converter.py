@@ -66,9 +66,22 @@ class MLXConverter:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.conversion_cache = self.cache_dir / "conversion_cache.json"
         self._load_conversion_cache()
+        self._warned_mlx_lm_compat = False
         
         logger.info(f"MLX Converter initialized with cache dir: {self.cache_dir}")
         logger.info(f"MLX LM available: {mlx_utils is not None and load is not None}")
+
+    def _warn_mlx_lm_compat(self, missing: str) -> None:
+        """Warn once when mlx-lm is missing newer helper APIs."""
+        if self._warned_mlx_lm_compat:
+            return
+        self._warned_mlx_lm_compat = True
+        message = (
+            f"[WARN] mlx-lm is missing '{missing}'. Using compatibility fallback. "
+            "For best support, upgrade mlx-lm to a newer version."
+        )
+        logger.warning(message)
+        print(message)
     
     def _load_conversion_cache(self) -> None:
         """Load conversion cache metadata."""
@@ -205,6 +218,83 @@ class MLXConverter:
             )
         
         return download_dir
+
+    def _mlx_get_model_path(self, source_path: Path) -> Tuple[Path, Optional[str]]:
+        """Resolve model path with MLX LM compatibility fallbacks."""
+        if mlx_utils is not None and hasattr(mlx_utils, "get_model_path"):
+            return mlx_utils.get_model_path(str(source_path))
+        self._warn_mlx_lm_compat("get_model_path")
+
+        # Fallback: local path or direct HF download.
+        model_path = Path(source_path)
+        if model_path.exists():
+            hf_repo = None
+            try:
+                from huggingface_hub import ModelCard
+
+                card_path = model_path / "README.md"
+                if card_path.is_file():
+                    card = ModelCard.load(card_path)
+                    hf_repo = getattr(card.data, "base_model", None)
+            except Exception:
+                hf_repo = None
+            return model_path, hf_repo
+
+        try:
+            model_path = Path(
+                snapshot_download(
+                    str(source_path),
+                    allow_patterns=[
+                        "*.json",
+                        "model*.safetensors",
+                        "*.py",
+                        "tokenizer.model",
+                        "*.tiktoken",
+                        "tiktoken.model",
+                        "*.txt",
+                        "*.jsonl",
+                        "*.jinja",
+                    ],
+                )
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to download model from Hugging Face: {e}") from e
+
+        return model_path, str(source_path)
+
+    def _mlx_fetch_from_hub(
+        self,
+        model_path: Path,
+        trust_remote_code: bool = False
+    ) -> Tuple[Any, Dict[str, Any], Any]:
+        """Fetch model/config/tokenizer with MLX LM compatibility fallbacks."""
+        if mlx_utils is not None and hasattr(mlx_utils, "fetch_from_hub"):
+            return mlx_utils.fetch_from_hub(
+                model_path,
+                lazy=True,
+                trust_remote_code=trust_remote_code
+            )
+        self._warn_mlx_lm_compat("fetch_from_hub")
+
+        if mlx_utils is not None and hasattr(mlx_utils, "load_model") and hasattr(mlx_utils, "load_tokenizer"):
+            model, model_config = mlx_utils.load_model(model_path, lazy=True)
+            try:
+                tokenizer = mlx_utils.load_tokenizer(
+                    model_path,
+                    eos_token_ids=model_config.get("eos_token_id", None),
+                    tokenizer_config_extra={"trust_remote_code": trust_remote_code},
+                )
+            except TypeError:
+                tokenizer = mlx_utils.load_tokenizer(
+                    model_path,
+                    eos_token_ids=model_config.get("eos_token_id", None),
+                )
+            return model, model_config, tokenizer
+
+        raise RuntimeError(
+            "mlx_lm.utils is missing required helpers (fetch_from_hub/load_model). "
+            "Upgrade mlx-lm to a newer version."
+        )
 
     def _requires_sentencepiece(self, model_path: Path) -> bool:
         """Return True if the model likely needs SentencePiece."""
@@ -379,10 +469,17 @@ class MLXConverter:
             # Build quantization configuration
             quantize_config = self._build_quantization_config(config)
 
-            model_path, hf_repo = mlx_utils.get_model_path(str(source_path))
-            model, model_config, tokenizer = mlx_utils.fetch_from_hub(
-                model_path, lazy=True, trust_remote_code=False
-            )
+            try:
+                model_path, hf_repo = self._mlx_get_model_path(Path(source_path))
+            except Exception as e:
+                return False, f"Model path resolution failed: {e}", None
+
+            try:
+                model, model_config, tokenizer = self._mlx_fetch_from_hub(
+                    model_path, trust_remote_code=False
+                )
+            except Exception as e:
+                return False, f"Model fetch failed: {e}", None
 
             dtype = model_config.get("torch_dtype", None)
             if dtype in ["float16", "bfloat16", "float32"]:
@@ -398,6 +495,8 @@ class MLXConverter:
                 model.update(tree_map_with_path(set_dtype, model.parameters()))
 
             if config.quantization != QuantizationRecipe.NONE:
+                if mlx_utils is None or not hasattr(mlx_utils, "quantize_model"):
+                    return False, "MLX LM quantize_model not available; upgrade mlx-lm.", None
                 quant_predicate = None
                 if quantize_config and "quant_predicate" in quantize_config:
                     quant_predicate = quantize_config["quant_predicate"]
@@ -411,6 +510,8 @@ class MLXConverter:
                 )
 
             normalized_hf_repo = self._normalize_hf_repo(hf_repo)
+            if mlx_utils is None or not hasattr(mlx_utils, "save"):
+                return False, "MLX LM save() not available; upgrade mlx-lm.", None
             mlx_utils.save(output_path, model_path, model, tokenizer, model_config, hf_repo=normalized_hf_repo)
             logger.info("MLX conversion completed")
             
