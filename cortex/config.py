@@ -74,7 +74,7 @@ class InferenceConfig(BaseModel):
     top_p: float = Field(default=0.95, ge=0.0, le=1.0)
     top_k: int = Field(default=40, ge=0)
     repetition_penalty: float = Field(default=1.1, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=2048, ge=1)
+    max_tokens: int = Field(default=4096, ge=1)
     stream_output: bool = True
     seed: int = Field(default=-1)
 

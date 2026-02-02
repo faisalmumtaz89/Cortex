@@ -25,7 +25,7 @@ temperature: 0.7
 top_p: 0.95
 top_k: 40
 repetition_penalty: 1.1
-max_tokens: 2048
+max_tokens: 4096
 stream_output: true
 seed: -1
 model_path: ~/models

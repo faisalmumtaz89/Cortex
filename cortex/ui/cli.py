@@ -1180,47 +1180,52 @@ class CortexCLI:
 
                 return PrefixedRenderable(renderable, prefix="⏺ ", prefix_style=prefix_style, indent="  ")
 
-            with Live(
-                build_renderable(""),
-                console=self.console,
-                refresh_per_second=20,
-                transient=False,
-            ) as live:
-                for token in self.inference_engine.generate(request):
-                    if first_token_time is None:
-                        first_token_time = time.time()
+            original_console_width = self.console._width
+            target_width = max(40, int(self.get_terminal_width() * 0.75))
+            self.console.width = target_width
+            try:
+                with Live(
+                    build_renderable(""),
+                    console=self.console,
+                    auto_refresh=False,
+                    refresh_per_second=20,
+                    transient=False,
+                    vertical_overflow="visible",
+                ) as live:
+                    for token in self.inference_engine.generate(request):
+                        if first_token_time is None:
+                            first_token_time = time.time()
 
-                    generated_text += token
-                    token_count += 1
+                        generated_text += token
+                        token_count += 1
 
-                    display_token = token
-                    if uses_reasoning_template and template_profile and template_profile.supports_streaming():
-                        display_token, should_display = template_profile.process_streaming_response(
-                            token, accumulated_response
-                        )
-                        accumulated_response += token
-                        if not should_display:
-                            display_token = ""
+                        display_token = token
+                        if uses_reasoning_template and template_profile and template_profile.supports_streaming():
+                            display_token, should_display = template_profile.process_streaming_response(
+                                token, accumulated_response
+                            )
+                            accumulated_response += token
+                            if not should_display:
+                                display_token = ""
 
-                    if display_token:
-                        display_text += display_token
+                        if display_token:
+                            display_text += display_token
 
-                    now = time.time()
-                    if display_token and ("\n" in display_token or now - last_render_time >= render_interval):
-                        live.update(build_renderable(display_text))
-                        last_render_time = now
+                        now = time.time()
+                        if display_token and ("\n" in display_token or now - last_render_time >= render_interval):
+                            live.update(build_renderable(display_text), refresh=True)
+                            last_render_time = now
 
-                if uses_reasoning_template and template_profile:
-                    final_text = template_profile.process_response(generated_text)
-                    generated_text = final_text
-                    if not template_profile.config.show_reasoning:
-                        display_text = final_text
+                    if uses_reasoning_template and template_profile:
+                        final_text = template_profile.process_response(generated_text)
+                        generated_text = final_text
+                        if not template_profile.config.show_reasoning:
+                            display_text = final_text
 
-                live.update(build_renderable(display_text))
+                    live.update(build_renderable(display_text), refresh=True)
+            finally:
+                self.console._width = original_console_width
 
-            # Add blank line for spacing between response and metrics
-            print()
-            
             # Display final metrics in a clean, professional way
             elapsed = time.time() - start_time
             if token_count > 0 and elapsed > 0:
@@ -1247,6 +1252,9 @@ class CortexCLI:
                 # Indent metrics to align with response text
                 metrics_line = " · ".join(metrics_parts)
                 print(f"  \033[2m{metrics_line}\033[0m")
+            
+            if token_count >= request.max_tokens:
+                print(f"  \033[2m(output truncated at max_tokens={request.max_tokens}; increase in config.yaml)\033[0m")
             
             # Add assistant message to conversation history
             self.conversation_manager.add_message(MessageRole.ASSISTANT, generated_text)

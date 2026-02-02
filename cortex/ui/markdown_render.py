@@ -3,6 +3,7 @@
 from typing import List
 
 from rich.console import Console
+from rich.cells import cell_len
 from rich.markdown import Markdown
 from rich.segment import Segment
 from rich.style import Style
@@ -196,9 +197,15 @@ class PrefixedRenderable:
         self.indent = indent if indent is not None else " " * len(prefix)
 
     def __rich_console__(self, console: Console, options):
+        prefix_width = cell_len(self.prefix)
+        indent_width = cell_len(self.indent) if self.indent is not None else prefix_width
+        offset = max(prefix_width, indent_width)
+        inner_width = max(1, options.max_width - offset)
+        inner_options = options.update_width(inner_width)
+
         yield Segment(self.prefix, self.prefix_style)
 
-        for segment in console.render(self.renderable, options):
+        for segment in console.render(self.renderable, inner_options):
             if segment.control:
                 yield segment
                 continue
