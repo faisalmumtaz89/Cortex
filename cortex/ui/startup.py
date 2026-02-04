@@ -37,7 +37,6 @@ def print_welcome(*, cli) -> None:
         print(f" \033[2m※ Last model:\033[0m \033[93m{display_name}\033[0m")
 
     print(" \033[2m※ Tip: Use\033[0m \033[93m/download\033[0m \033[2mto get models from HuggingFace\033[0m")
-    print(" \033[2m※ Basic input mode (install prompt-toolkit for enhanced features)\033[0m")
     update_status = version_check.get_update_status(config=cli.config)
     if update_status:
         print(
