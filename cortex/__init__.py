@@ -5,7 +5,7 @@ A high-performance terminal interface for running Hugging Face LLMs locally
 with exclusive GPU acceleration via Metal Performance Shaders (MPS) and MLX.
 """
 
-__version__ = "1.0.10"
+__version__ = "1.0.18"
 __author__ = "Cortex Development Team"
 __license__ = "MIT"
 

@@ -53,7 +53,7 @@ Cortex/
 │   │   └── performance_profiler.py # GPU performance profiling
 │   ├── ui/                         # User interface
 │   │   ├── __init__.py
-│   │   ├── cli.py                  # Claude Code-style CLI (CortexCLI)
+│   │   ├── cli.py                  # Interactive CLI (CortexCLI)
 │   │   ├── markdown_render.py      # Markdown rendering helpers
 │   │   └── terminal_app.py         # Textual-based terminal UI
 │   ├── fine_tuning/                # Fine-tuning support

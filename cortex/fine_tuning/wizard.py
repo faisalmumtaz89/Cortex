@@ -76,9 +76,6 @@ class FineTuneWizard:
             else:
                 return False, "Training failed"
                 
-        except KeyboardInterrupt:
-            print("\n\033[93m⚠\033[0m Fine-tuning cancelled by user")
-            return False, "Fine-tuning cancelled"
         except FileNotFoundError as e:
             logger.error(f"File not found: {e}")
             print(f"\n\033[31m✗\033[0m File not found: {e}")
@@ -481,9 +478,6 @@ class FineTuneWizard:
         except ValueError as e:
             print(f"\033[31m✗\033[0m Invalid value entered: {e}")
             return None
-        except KeyboardInterrupt:
-            print("\n\033[93m⚠\033[0m Configuration cancelled")
-            return None
     
     def _get_output_name(self, base_model: str) -> Optional[str]:
         """Get the output model name from user."""
@@ -637,9 +631,6 @@ class FineTuneWizard:
                 print("\n\033[31m✗\033[0m Fine-tuning failed")
                 return False
                 
-        except KeyboardInterrupt:
-            print("\n\n\033[93m⚠\033[0m Training interrupted by user")
-            return False
         except Exception as e:
             logger.error(f"Training failed: {e}")
             print(f"\n\n\033[31m✗\033[0m Training error: {e}")

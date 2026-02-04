@@ -82,6 +82,62 @@ class GenerationRequest:
         if self.stop_sequences is None:
             self.stop_sequences = []
 
+
+class StreamDeltaNormalizer:
+    """Normalize streaming chunks to deltas, handling cumulative or overlapping output."""
+
+    def __init__(self, max_overlap: int = 4096, min_cumulative_length: int = 32) -> None:
+        self._total_text = ""
+        self._max_overlap = max_overlap
+        self._min_cumulative_length = min_cumulative_length
+        self._cumulative_mode = False
+
+    def normalize(self, chunk: Any) -> str:
+        if chunk is None:
+            return ""
+        if not isinstance(chunk, str):
+            chunk = str(chunk)
+        if not chunk:
+            return ""
+
+        if not self._total_text:
+            self._total_text = chunk
+            return chunk
+
+        if not self._cumulative_mode:
+            if len(chunk) > len(self._total_text) and chunk.startswith(self._total_text):
+                self._cumulative_mode = True
+                delta = chunk[len(self._total_text):]
+                self._total_text = chunk
+                return delta
+            if chunk == self._total_text and len(chunk) >= self._min_cumulative_length:
+                # Likely a cumulative stream repeating the full text; don't re-emit.
+                self._cumulative_mode = True
+                return ""
+            # Default to delta mode to avoid dropping legitimate repeats.
+            self._total_text += chunk
+            return chunk
+
+        # Cumulative mode: emit only new suffix.
+        if chunk.startswith(self._total_text):
+            delta = chunk[len(self._total_text):]
+            self._total_text = chunk
+            return delta
+
+        # Handle partial overlap in cumulative streams.
+        max_overlap = min(len(self._total_text), len(chunk), self._max_overlap)
+        if max_overlap > 0:
+            tail = self._total_text[-max_overlap:]
+            for i in range(max_overlap, 0, -1):
+                if tail[-i:] == chunk[:i]:
+                    delta = chunk[i:]
+                    self._total_text += delta
+                    return delta
+
+        # Fallback: treat as fresh delta to avoid loss.
+        self._total_text += chunk
+        return chunk
+
 class InferenceEngine:
     """GPU-accelerated inference engine."""
     
@@ -243,33 +299,7 @@ class InferenceEngine:
         tokens_generated = 0
         first_token_time = None
         last_metrics_update = time.time()
-        stream_total_text = ""
-        stream_cumulative = False
-
-        def normalize_stream_chunk(chunk: Any) -> str:
-            """Normalize streaming output to delta chunks when backend yields cumulative text."""
-            nonlocal stream_total_text, stream_cumulative
-            if chunk is None:
-                return ""
-            if not isinstance(chunk, str):
-                chunk = str(chunk)
-
-            if stream_cumulative:
-                if chunk.startswith(stream_total_text):
-                    delta = chunk[len(stream_total_text):]
-                    stream_total_text = chunk
-                    return delta
-                stream_total_text += chunk
-                return chunk
-
-            if stream_total_text and len(chunk) > len(stream_total_text) and chunk.startswith(stream_total_text):
-                stream_cumulative = True
-                delta = chunk[len(stream_total_text):]
-                stream_total_text = chunk
-                return delta
-
-            stream_total_text += chunk
-            return chunk
+        normalizer = StreamDeltaNormalizer() if request.stream else None
         
         try:
             # Use MLX accelerator's optimized generation if available
@@ -290,7 +320,7 @@ class InferenceEngine:
                         self.status = InferenceStatus.CANCELLED
                         break
 
-                    delta = normalize_stream_chunk(token) if request.stream else str(token)
+                    delta = normalizer.normalize(token) if normalizer else str(token)
                     if not delta:
                         continue
 
@@ -365,7 +395,7 @@ class InferenceEngine:
                     else:
                         token = str(response)
 
-                    delta = normalize_stream_chunk(token) if request.stream else token
+                    delta = normalizer.normalize(token) if normalizer else token
                     if request.stream and not delta:
                         continue
 
@@ -477,6 +507,7 @@ class InferenceEngine:
                 if request.stream:
                     from transformers import TextIteratorStreamer
                     
+                    normalizer = StreamDeltaNormalizer()
                     streamer = TextIteratorStreamer(
                         tokenizer,
                         skip_prompt=True,
@@ -499,6 +530,10 @@ class InferenceEngine:
                         if self._cancel_event.is_set():
                             self.status = InferenceStatus.CANCELLED
                             break
+
+                        delta = normalizer.normalize(token)
+                        if not delta:
+                            continue
                         
                         if first_token_time is None:
                             first_token_time = time.time() - start_time
@@ -523,7 +558,7 @@ class InferenceEngine:
                             )
                             last_metrics_update = current_time
                         
-                        yield token
+                        yield delta
                         
                         if any(stop in token for stop in request.stop_sequences):
                             break
@@ -603,6 +638,7 @@ class InferenceEngine:
             )
             
             if request.stream:
+                normalizer = StreamDeltaNormalizer()
                 # Stream tokens
                 for chunk in response:
                     if self._cancel_event.is_set():
@@ -610,11 +646,12 @@ class InferenceEngine:
                     
                     if 'choices' in chunk and len(chunk['choices']) > 0:
                         token = chunk['choices'][0].get('text', '')
-                        if token:
+                        delta = normalizer.normalize(token)
+                        if delta:
                             if first_token_time is None:
                                 first_token_time = time.time()
                             tokens_generated += 1
-                            yield token
+                            yield delta
             else:
                 # Return full response
                 if 'choices' in response and len(response['choices']) > 0:

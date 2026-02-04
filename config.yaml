@@ -30,7 +30,7 @@ stream_output: true
 seed: -1
 model_path: ~/models
 default_model: ''
-last_used_model: /Users/faisalmumtaz/models/Qwen3-4B
+last_used_model: ''
 model_cache_dir: ~/.cortex/models
 preload_models: []
 max_loaded_models: 3
@@ -70,11 +70,10 @@ startup_checks:
 - compile_shaders
 shutdown_timeout: 5
 crash_recovery: true
-auto_update_check: false
+auto_update_check: true
 debug_mode: false
 profile_inference: false
 metal_capture: false
 verbose_gpu_logs: false
-claude_md_path: CLAUDE.md
 templates_dir: ~/.cortex/templates
 plugins_dir: ~/.cortex/plugins

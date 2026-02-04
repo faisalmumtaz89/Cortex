@@ -146,18 +146,21 @@ class DeveloperConfig(BaseModel):
 
 class PathsConfig(BaseModel):
     """Path configuration."""
-    claude_md_path: Path = Field(default_factory=lambda: Path("./CLAUDE.md"))
     templates_dir: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "templates")
     plugins_dir: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "plugins")
 
 class Config:
     """Main configuration class for Cortex."""
-    
+
+    # State file for runtime state (not committed to git)
+    STATE_FILE = Path.home() / ".cortex" / "state.yaml"
+
     def __init__(self, config_path: Optional[Path] = None):
         """Initialize configuration."""
         self.config_path = config_path or Path("config.yaml")
         self._raw_config: Dict[str, Any] = {}
-        
+        self._state: Dict[str, Any] = {}
+
         self.gpu: GPUConfig
         self.memory: MemoryConfig
         self.performance: PerformanceConfig
@@ -169,8 +172,9 @@ class Config:
         self.system: SystemConfig
         self.developer: DeveloperConfig
         self.paths: PathsConfig
-        
+
         self.load()
+        self._load_state()
     
     def load(self) -> None:
         """Load configuration from YAML file."""
@@ -273,7 +277,7 @@ class Config:
             
             self.paths = PathsConfig(**self._get_section({
                 k: v for k, v in self._raw_config.items()
-                if k in ["claude_md_path", "templates_dir", "plugins_dir"]
+                if k in ["templates_dir", "plugins_dir"]
             }))
             
         except Exception as e:
@@ -303,26 +307,71 @@ class Config:
     def save(self, path: Optional[Path] = None) -> None:
         """Save configuration to YAML file."""
         save_path = path or self.config_path
-        
+
+        # Keys that belong in state file, not config file
+        state_keys = {"last_used_model"}
+
         # Convert Path objects to strings for YAML serialization
         config_dict = {}
         for section in [self.gpu, self.memory, self.performance, self.inference,
                        self.model, self.ui, self.logging, self.conversation,
                        self.system, self.developer, self.paths]:
             section_dict = section.model_dump()
-            # Convert Path objects to strings
+            # Convert Path objects to strings and exclude state keys
             for key, value in section_dict.items():
+                if key in state_keys:
+                    continue  # Skip state keys - they go in state file
                 if isinstance(value, Path):
                     section_dict[key] = str(value)
+            # Remove state keys from section_dict
+            for key in state_keys:
+                section_dict.pop(key, None)
             config_dict.update(section_dict)
-        
+
         with open(save_path, 'w') as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
     
+    def _load_state(self) -> None:
+        """Load runtime state from state file."""
+        if self.STATE_FILE.exists():
+            try:
+                with open(self.STATE_FILE, 'r') as f:
+                    self._state = yaml.safe_load(f) or {}
+                # Apply state to model config
+                if "last_used_model" in self._state:
+                    self.model.last_used_model = self._state["last_used_model"]
+            except Exception as e:
+                print(f"Warning: Failed to load state from {self.STATE_FILE}: {e}")
+                self._state = {}
+
+    def _save_state(self) -> None:
+        """Save runtime state to state file."""
+        # Ensure directory exists
+        self.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(self.STATE_FILE, 'w') as f:
+                yaml.dump(self._state, f, default_flow_style=False)
+        except Exception as e:
+            print(f"Warning: Failed to save state to {self.STATE_FILE}: {e}")
+
+    def get_state_value(self, key: str, default: Any = None) -> Any:
+        """Get a runtime state value."""
+        return self._state.get(key, default)
+
+    def set_state_value(self, key: str, value: Any) -> None:
+        """Set a runtime state value and persist it."""
+        self._state[key] = value
+        self._save_state()
+
+    def is_setting_explicit(self, key: str) -> bool:
+        """Return True if a config key was explicitly set in config.yaml."""
+        return key in self._raw_config
+
     def update_last_used_model(self, model_name: str) -> None:
-        """Update the last used model and save to config file."""
+        """Update the last used model and save to state file."""
         self.model.last_used_model = model_name
-        self.save()
+        self._state["last_used_model"] = model_name
+        self._save_state()
     
     def __repr__(self) -> str:
         """String representation."""

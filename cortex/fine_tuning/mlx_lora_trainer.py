@@ -246,10 +246,6 @@ class MLXLoRATrainer:
                 logger.error("Failed to save fine-tuned model")
                 return False
                 
-        except KeyboardInterrupt:
-            logger.info("Training interrupted by user")
-            print("\n\033[93m⚠\033[0m Training interrupted by user")
-            return False
         except Exception as e:
             logger.error(f"Training failed: {e}")
             print(f"\n\033[31m✗\033[0m Training error: {str(e)}")

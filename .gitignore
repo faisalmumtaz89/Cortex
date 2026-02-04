@@ -191,4 +191,5 @@ models/
 
 # Cortex specific
 .cortex_history
-config.yaml
+# Local release helper script
+publish_and_verify_update.sh

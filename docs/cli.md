@@ -2,7 +2,7 @@
 
 ## Overview
 
-Cortex provides a Claude Code-style interactive CLI for GPU-accelerated LLM inference on Apple Silicon. The interface focuses on simplicity and efficiency - just type `cortex` and start chatting with AI models.
+Cortex provides an interactive CLI for GPU-accelerated LLM inference on Apple Silicon. The interface focuses on simplicity and efficiency - just type `cortex` and start chatting with AI models.
 
 ## Main Command
 
@@ -21,7 +21,7 @@ cortex
 ```
 
 **Features:**
-- Simple, clean Claude Code-style interface
+- Simple, clean interface
 - Real-time GPU-accelerated text generation 
 - Slash commands for model management
 - Keyboard shortcuts for quick actions
@@ -340,7 +340,7 @@ Cortex supports several keyboard shortcuts for efficient interaction:
 
 ## User Interface
 
-Cortex provides a clean, Claude Code-inspired interface:
+Cortex provides a clean interface:
 
 ### Welcome Screen
 ```

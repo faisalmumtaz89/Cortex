@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cortex-llm"
-version = "1.0.10"
+version = "1.0.18"
 description = "GPU-Accelerated LLM Terminal for Apple Silicon"
 readme = "README.md"
 license = "MIT"

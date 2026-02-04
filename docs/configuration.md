@@ -4,12 +4,14 @@
 
 Cortex reads configuration from `config.yaml` in the project root. The file uses a flat key structure (no nested sections). If `config.yaml` is missing, defaults from `cortex/config.py` are used.
 
+**Runtime state:** Ephemeral values like `last_used_model` are stored in `~/.cortex/state.yaml`, not in `config.yaml`. This avoids polluting git diffs when you change models.
+
 **Note on wiring:** Cortex accepts a broad set of configuration keys. The CLI currently **reads** these keys directly:
 
 - `compute_backend`, `force_gpu`, `mlx_backend`, `gpu_optimization_level`
 - `batch_size`, `max_batch_size`, `context_length`
 - `temperature`, `top_p`, `top_k`, `repetition_penalty`, `max_tokens`, `stream_output`, `seed`
-- `model_path`, `default_model`, `last_used_model`, `model_cache_dir`, `quantization_cache`
+- `model_path`, `default_model`, `model_cache_dir`, `quantization_cache`
 - `max_loaded_models`, `auto_quantize`, `default_quantization`, `supported_quantizations`
 - `markdown_rendering`, `syntax_highlighting`
 - `save_directory`, `auto_save`, `max_conversation_history`
@@ -124,7 +126,7 @@ max_conversation_history: 100
 ### Models
 - `model_path` (default: `~/models`)
 - `default_model` (default: empty)
-- `last_used_model` (default: empty)
+- `last_used_model` is persisted to `~/.cortex/state.yaml` (default: empty)
 - `model_cache_dir` (default: `~/.cortex/models`)
 - `preload_models` (default: `[]`)
 - `max_loaded_models` (default: `3`)
@@ -170,11 +172,11 @@ max_conversation_history: 100
 - `enable_branching` (default: `true`)
 
 ### System
-- **Wired today:** startup validation runs internally; keys below are currently advisory.
+- **Wired today:** `auto_update_check` is honored at startup for pipx installs; other keys below remain advisory.
 - `startup_checks` (default: `verify_metal_support`, `check_gpu_memory`, `validate_models`, `compile_shaders`)
 - `shutdown_timeout` (default: `5`)
 - `crash_recovery` (default: `true`)
-- `auto_update_check` (default: `false`)
+- `auto_update_check` (default: `false`, but update checks run unless explicitly set to `false`)
 
 ### Developer
 - **Wired today:** developer toggles are currently advisory.
@@ -185,7 +187,6 @@ max_conversation_history: 100
 
 ### Paths
 - **Wired today:** template and plugin paths are used by the template registry; other keys are advisory.
-- `claude_md_path` (default: `./CLAUDE.md`)
 - `templates_dir` (default: `~/.cortex/templates`)
 - `plugins_dir` (default: `~/.cortex/plugins`)
 
