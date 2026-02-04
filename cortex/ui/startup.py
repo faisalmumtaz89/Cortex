@@ -52,7 +52,7 @@ def load_default_model(*, cli) -> None:
     model_to_load = cli.config.model.last_used_model or cli.config.model.default_model
 
     if not model_to_load:
-        print("\n \033[96m⚡\033[0m No model loaded. Use \033[93m/model\033[0m to select a model.")
+        print(" \033[96m⚡\033[0m No model loaded. Use \033[93m/model\033[0m to select a model.")
         return
 
     if "_4bit" in model_to_load or "_5bit" in model_to_load or "_8bit" in model_to_load:
@@ -62,7 +62,7 @@ def load_default_model(*, cli) -> None:
             if len(parts) > 3:
                 clean_name = parts[-1]
 
-        print(f"\n \033[96m⚡\033[0m Loading: \033[93m{clean_name}\033[0m \033[2m(MLX optimized)\033[0m...")
+        print(f" \033[96m⚡\033[0m Loading: \033[93m{clean_name}\033[0m \033[2m(MLX optimized)\033[0m...")
         success, message = cli.model_manager.load_model(model_to_load)
 
         if success:
@@ -110,7 +110,7 @@ def load_default_model(*, cli) -> None:
                             )
                         return
 
-            print(f"\n \033[31m⚠\033[0m Previously used model not found: \033[93m{model_to_load}\033[0m")
+            print(f" \033[31m⚠\033[0m Previously used model not found: \033[93m{model_to_load}\033[0m")
             print(" Use \033[93m/model\033[0m to select a different model or \033[93m/download\033[0m to get new models.")
         return
 
@@ -131,11 +131,11 @@ def load_default_model(*, cli) -> None:
                     break
 
     if not model_path:
-        print(f"\n \033[31m⚠\033[0m Previously used model not found: \033[93m{model_to_load}\033[0m")
+        print(f" \033[31m⚠\033[0m Previously used model not found: \033[93m{model_to_load}\033[0m")
         print(" Use \033[93m/model\033[0m to select a different model or \033[93m/download\033[0m to get new models.")
         return
 
-    print(f"\n \033[96m⚡\033[0m Loading: \033[93m{model_to_load}\033[0m...")
+    print(f" \033[96m⚡\033[0m Loading: \033[93m{model_to_load}\033[0m...")
     success, message = cli.model_manager.load_model(str(model_path))
 
     if success:
