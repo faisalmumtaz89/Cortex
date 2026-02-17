@@ -12,7 +12,7 @@ Cortex now uses a hybrid runtime:
 3. Frontend and backend communicate via line-delimited JSON-RPC 2.0 plus structured event frames.
 
 ## Why
-Legacy rendering mixed Rich `Live` updates and raw ANSI/stdout writes from multiple paths, which created duplicate or unstable output under streaming/tooling flows. The split enforces a single terminal writer and separates UI concerns from inference/tool execution.
+Previous rendering mixed live updates and raw ANSI/stdout writes from multiple paths, which created duplicate or unstable output under streaming/tooling flows. The split enforces a single terminal writer and separates UI concerns from inference/tool execution.
 
 ## Components
 - Frontend package: `/Users/faisalmumtaz/Documents/GitHub/Cortex/frontend/cortex-tui`
@@ -42,13 +42,13 @@ Supported event types:
 Protocol version is strict (`1.0.0`). Handshake mismatch fails fast.
 
 ## Worker Output Safety
-Worker mode reserves real stdout for JSON-RPC frames and redirects normal `print`/stdout writes away from the RPC channel. This prevents accidental protocol corruption from backend logging or legacy print paths.
+Worker mode reserves real stdout for JSON-RPC frames and redirects normal `print`/stdout writes away from the RPC channel. This prevents accidental protocol corruption from backend logging or stray print paths.
 
 ## Current Scope
 - Supported target for migration: `darwin-arm64`.
 - Local inference/fine-tuning remain Python-first (MLX/PyTorch/GGUF).
 - OpenTUI is default launch target via `cortex`.
-- Legacy Rich UI remains available as explicit compatibility mode (`--legacy-ui`) while command parity is completed.
+- OpenTUI is the only interactive runtime.
 
 ## Non-Goals (Current Phase)
 - MCP/plugin loading

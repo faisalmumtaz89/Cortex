@@ -7,18 +7,26 @@ import subprocess
 import sys
 from typing import Any, Optional
 
-from rich.text import Text
-
 from cortex.cloud.credentials import CloudCredentialStore
 from cortex.cloud.types import CloudProvider
 
 
 def _emit(cli: Any, text: str = "") -> None:
-    """Render ANSI-formatted legacy text through Rich console."""
+    """Render ANSI-formatted text to the active console/stdout."""
+    console = getattr(cli, "console", None)
+    if console is not None and hasattr(console, "print"):
+        try:
+            if text:
+                console.print(text)
+            else:
+                console.print()
+            return
+        except Exception:
+            pass
     if not text:
-        cli.console.print()
+        print()
         return
-    cli.console.print(Text.from_ansi(text))
+    print(text)
 
 
 def login(*, cli: Any, args: str = "") -> None:

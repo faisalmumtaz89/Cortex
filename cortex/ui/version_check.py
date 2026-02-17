@@ -82,7 +82,7 @@ def _get_installed_version() -> Optional[str]:
 
 
 def _get_pipx_installed_version() -> Optional[str]:
-    """Read the installed version from pipx, if available (legacy fallback)."""
+    """Read the installed version from pipx, if available."""
     if not shutil.which("pipx"):
         return None
 

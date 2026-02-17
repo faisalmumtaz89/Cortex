@@ -25,7 +25,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --no-deps -e .
           python -m pip install mypy ruff types-PyYAML types-psutil textual sentencepiece
-          python -m pip install torch mlx mlx-lm transformers safetensors huggingface-hub accelerate pyyaml pydantic rich psutil numpy packaging requests openai anthropic keyring
+          python -m pip install torch mlx mlx-lm transformers safetensors huggingface-hub accelerate pyyaml pydantic psutil numpy packaging requests openai anthropic keyring
 
       - name: Run mypy
         run: ./scripts/typecheck.sh

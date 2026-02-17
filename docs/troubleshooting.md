@@ -6,8 +6,6 @@ Cortex uses a split runtime:
 - `cortex` launches an OpenTUI frontend sidecar (terminal renderer)
 - frontend talks to Python backend worker (`python -m cortex --worker-stdio`) over JSON-RPC
 
-Compatibility fallback remains available with `cortex --legacy-ui`.
-
 **Available slash commands:**
 
 | Command | Description |
@@ -40,23 +38,18 @@ Compatibility fallback remains available with `cortex --legacy-ui`.
 
 ### OpenTUI sidecar unavailable
 
-If the sidecar frontend binary (or Bun dev runtime) is missing, Cortex logs a warning and falls back to `--legacy-ui` automatically.
+If the sidecar frontend binary (or Bun dev runtime) is missing, Cortex exits with an error and prints setup guidance.
 
 Options:
 
-1. Run compatibility mode explicitly:
-```bash
-cortex --legacy-ui
-```
-
-2. For source development, install Bun and frontend deps:
+1. For source development, install Bun and frontend deps:
 ```bash
 cd frontend/cortex-tui
 npm install
 bun run scripts/build.ts
 ```
 
-3. Verify worker path manually:
+2. Verify worker path manually:
 ```bash
 python -m cortex --worker-stdio
 ```

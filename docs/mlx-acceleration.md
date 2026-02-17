@@ -378,4 +378,4 @@ Actual performance varies by model size, quantization, context length, and chip.
 - [MLX Documentation](https://ml-explore.github.io/mlx/)
 - [MLX GitHub](https://github.com/ml-explore/mlx)
 - [Apple Developer - Metal](https://developer.apple.com/metal/)
-- [Cortex GitHub](https://github.com/faisalmumtaz/Cortex)
+- [Cortex GitHub](https://github.com/faisalmumtaz89/Cortex)

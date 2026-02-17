@@ -14,8 +14,7 @@ Default runtime:
 - Launches OpenTUI frontend sidecar (single terminal writer)
 - Starts backend in worker mode over JSON-RPC (`python -m cortex --worker-stdio`)
 
-Compatibility modes:
-- `cortex --legacy-ui` runs the old Rich UI path
+Runtime modes:
 - `python -m cortex --worker-stdio` runs worker only (no terminal rendering)
 
 Source checkout note:

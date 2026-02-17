@@ -338,7 +338,7 @@ class Config:
         return {k: v for k, v in section_dict.items() if v is not None}
 
     def _normalize_tools_section(self, section: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize tooling keys so legacy/bad values don't break startup."""
+        """Normalize tooling keys so old/bad values don't break startup."""
         data = dict(section)
 
         enabled = data.get("tools_enabled")

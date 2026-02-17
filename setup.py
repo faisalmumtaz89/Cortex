@@ -32,7 +32,7 @@ setup(
     description="GPU-Accelerated LLM Terminal for Apple Silicon",
     long_description=README,
     long_description_content_type="text/markdown",
-    url="https://github.com/faisalmumtaz/Cortex",
+    url="https://github.com/faisalmumtaz89/Cortex",
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",

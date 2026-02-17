@@ -25,7 +25,7 @@ def test_local_prompt_context_uses_sliding_window_only():
     profile = _DummyProfile()
     template_registry = _DummyTemplateRegistry(profile)
 
-    conversation_messages = [SimpleNamespace(role=MessageRole.SYSTEM, content="legacy system message")]
+    conversation_messages = [SimpleNamespace(role=MessageRole.SYSTEM, content="system message")]
     for idx in range(30):
         role = MessageRole.USER if idx % 2 == 0 else MessageRole.ASSISTANT
         conversation_messages.append(SimpleNamespace(role=role, content=f"m{idx}"))

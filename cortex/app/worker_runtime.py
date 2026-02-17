@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
 from io import TextIOBase
 from typing import Any, Callable, Dict, TypeVar
 
 from pydantic import BaseModel
-from rich.console import Console
 
 from cortex.app.command_service import CommandService
 from cortex.app.model_service import ModelService
@@ -44,6 +42,13 @@ logger = logging.getLogger(__name__)
 ParamsModelT = TypeVar("ParamsModelT", bound=BaseModel)
 
 
+class _SilentConsole:
+    """Suppress console output in worker mode."""
+
+    def print(self, *args: object, **kwargs: object) -> None:
+        return
+
+
 class WorkerRuntime:
     """Create and run the worker-side JSON-RPC runtime."""
 
@@ -73,10 +78,8 @@ class WorkerRuntime:
         permission_timeout = int(getattr(config.tools, "tools_idle_timeout_seconds", 45) or 45)
         self.permission_service = PermissionService(timeout_seconds=permission_timeout)
 
-        # Keep any template diagnostics off stdout channel used by JSON-RPC.
-        self._null_stream = open(os.devnull, "w", encoding="utf-8")
-        null_console = Console(file=self._null_stream)
-        self.template_registry = TemplateRegistry(console=null_console)
+        # Keep any optional template diagnostics away from worker transport output.
+        self.template_registry = TemplateRegistry(console=_SilentConsole())
 
         self.tooling_bridge = _WorkerToolingBridge(
             config=config,
@@ -411,9 +414,4 @@ class WorkerRuntime:
         self.rpc_server.run_forever()
 
     def __del__(self) -> None:
-        stream = getattr(self, "_null_stream", None)
-        if stream is not None:
-            try:
-                stream.close()
-            except Exception:
-                pass
+        return

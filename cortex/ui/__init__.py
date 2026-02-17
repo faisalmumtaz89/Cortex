@@ -116,5 +116,3 @@ class UIComponents:
         """Format model information for display."""
         context_percent = (context_used / context_total * 100) if context_total > 0 else 0
         return f"{model_name} [{quantization}] | Context: {context_used}/{context_total} ({context_percent:.0f}%)"
-
-# from cortex.ui.terminal_app import TerminalApp  # Commented out - only needed for TUI mode

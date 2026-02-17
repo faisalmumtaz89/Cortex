@@ -5,18 +5,26 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from rich.text import Text
-
 from cortex.cloud.types import CloudProvider
 from cortex.ui import version_check
 
 
 def _emit(cli, text: str = "", *, end: str = "\n") -> None:
-    """Render ANSI-colored legacy text through the shared Rich console."""
+    """Render ANSI-colored text through console/stdout."""
+    console = getattr(cli, "console", None)
+    if console is not None and hasattr(console, "print"):
+        try:
+            if text:
+                console.print(text, end=end)
+            else:
+                console.print(end=end)
+            return
+        except Exception:
+            pass
     if not text:
-        cli.console.print(end=end)
+        print(end=end)
         return
-    cli.console.print(Text.from_ansi(text), end=end)
+    print(text, end=end)
 
 
 def print_welcome(*, cli) -> None:
@@ -67,7 +75,7 @@ def print_welcome(*, cli) -> None:
             " \033[93m↑ Update available:\033[0m "
             f"\033[2m{update_status.current_version} → {update_status.latest_version}\033[0m"
         )
-        _emit(cli, " \033[2mRun:\033[0m \033[93mcurl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash\033[0m")
+        _emit(cli, " \033[2mRun:\033[0m \033[93mcurl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash\033[0m")
     _emit(cli)
 
 

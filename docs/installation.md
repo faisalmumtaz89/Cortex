@@ -23,10 +23,10 @@
 
 ```bash
 # Recommended one-line install
-curl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
 
 # Or clone and run locally
-git clone https://github.com/faisalmumtaz/Cortex.git
+git clone https://github.com/faisalmumtaz89/Cortex.git
 cd Cortex
 ./install.sh
 
@@ -116,17 +116,17 @@ python -c "import torch; print(f'MPS available: {torch.backends.mps.is_available
 
 **Recommended installer (no pipx required):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
 ```
 
 **Pin a specific version:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash -s -- 1.0.18
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash -s -- 1.0.18
 ```
 
 **From Source (development):**
 ```bash
-git clone https://github.com/faisalmumtaz/Cortex.git
+git clone https://github.com/faisalmumtaz89/Cortex.git
 cd Cortex
 pip install -e .
 ```
@@ -338,7 +338,7 @@ pip install dist/cortex_llm-*.whl
 
 ```bash
 # Clone the repository
-git clone https://github.com/faisalmumtaz/Cortex.git
+git clone https://github.com/faisalmumtaz89/Cortex.git
 
 # Install development dependencies
 pip install -e ".[dev]"

@@ -23,14 +23,8 @@ Runtime architecture:
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
 cortex
-```
-
-If you need temporary fallback to legacy CLI:
-
-```bash
-cortex --legacy-ui
 ```
 
 If OpenTUI sidecar is unavailable in a source checkout:
@@ -52,13 +46,13 @@ Inside Cortex:
 ### Option A: one-line installer (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
 ```
 
 ### Option B: from source
 
 ```bash
-git clone https://github.com/faisalmumtaz/Cortex.git
+git clone https://github.com/faisalmumtaz89/Cortex.git
 cd Cortex
 ./install.sh
 ```

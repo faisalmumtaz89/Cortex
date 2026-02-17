@@ -1,24 +1,44 @@
 """Interactive template setup for user-friendly configuration."""
 
+import re
 import sys
 import termios
-from typing import Any, List, Optional
-
-from rich.console import Console
-from rich.prompt import Prompt
-from rich.table import Table
+from typing import Any, List, Optional, Protocol
 
 from cortex.template_registry.auto_detector import TemplateDetector
 from cortex.template_registry.config_manager import ModelTemplateConfig
 from cortex.template_registry.template_profiles.base import BaseTemplateProfile, TemplateType
 
 
+class _Printer(Protocol):
+    def print(self, *args: object, **kwargs: object) -> object: ...
+
+
+_RICH_TAG_PATTERN = re.compile(r"\[/?[^\]]+\]")
+
+
+def _strip_rich_markup(text: str) -> str:
+    """Remove lightweight markup tags for plain terminal output."""
+    return _RICH_TAG_PATTERN.sub("", text)
+
+
+class _PlainConsole:
+    """Small console adapter with a console-style print API."""
+
+    def print(self, *args: object, **kwargs: object) -> None:
+        sep = str(kwargs.get("sep", " "))
+        end = str(kwargs.get("end", "\n"))
+        text = sep.join(str(arg) for arg in args)
+        text = _strip_rich_markup(text)
+        print(text, end=end)
+
+
 class InteractiveTemplateSetup:
     """Interactive template configuration wizard."""
 
-    def __init__(self, console: Optional[Console] = None):
+    def __init__(self, console: Optional[_Printer] = None):
         """Initialize the interactive setup."""
-        self.console = console or Console()
+        self.console: _Printer = console or _PlainConsole()
         self.detector = TemplateDetector()
 
     def _read_line_with_escape_cancel(self) -> tuple[str, bool]:
@@ -311,7 +331,7 @@ class InteractiveTemplateSetup:
                 confidence=confidence,
             )
         if configure_filters:
-            filters_input = Prompt.ask("Enter tokens to filter (comma-separated)")
+            filters_input = input("Enter tokens to filter (comma-separated): ")
             custom_filters = [f.strip() for f in filters_input.split(",") if f.strip()]
 
         # Show reasoning option
@@ -344,18 +364,16 @@ class InteractiveTemplateSetup:
 
     def show_current_config(self, model_name: str, config: ModelTemplateConfig) -> None:
         """Display current configuration for a model."""
-        table = Table(title=f"Template Configuration for {model_name}")
-        table.add_column("Setting", style="cyan")
-        table.add_column("Value", style="green")
-
-        table.add_row("Template Type", config.detected_type)
-        table.add_row("User Preference", config.user_preference)
-        table.add_row("Show Reasoning", str(config.show_reasoning))
-        table.add_row("Custom Filters", ", ".join(config.custom_filters) if config.custom_filters else "None")
-        table.add_row("Confidence", f"{config.confidence:.0%}")
-        table.add_row("Last Updated", config.last_updated)
-
-        self.console.print(table)
+        self.console.print(f"\nTemplate Configuration for {model_name}")
+        self.console.print("Setting           Value")
+        self.console.print("---------------  --------------------------------")
+        self.console.print(f"Template Type    {config.detected_type}")
+        self.console.print(f"User Preference  {config.user_preference}")
+        self.console.print(f"Show Reasoning   {config.show_reasoning}")
+        filters = ", ".join(config.custom_filters) if config.custom_filters else "None"
+        self.console.print(f"Custom Filters   {filters}")
+        self.console.print(f"Confidence       {config.confidence:.0%}")
+        self.console.print(f"Last Updated     {config.last_updated}")
 
     def quick_adjust_template(self, model_name: str, config: ModelTemplateConfig) -> ModelTemplateConfig:
         """Quick adjustment interface for template settings."""
@@ -381,7 +399,11 @@ class InteractiveTemplateSetup:
             return self._custom_setup(model_name, None)
 
         elif choice == "3":
-            filters_input = Prompt.ask("Enter tokens to filter (comma-separated)", default=",".join(config.custom_filters))
+            current_filters = ",".join(config.custom_filters)
+            prompt = "Enter tokens to filter (comma-separated)"
+            if current_filters:
+                prompt = f"{prompt} [{current_filters}]"
+            filters_input = input(f"{prompt}: ").strip() or current_filters
             config.custom_filters = [f.strip() for f in filters_input.split(",") if f.strip()]
             self.console.print("✓ Filters updated")
 

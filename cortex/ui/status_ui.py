@@ -4,15 +4,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from rich.text import Text
-
 
 def _emit(cli: Any, text: str = "") -> None:
-    """Render ANSI-formatted text through the shared Rich console."""
+    """Render ANSI-formatted text to the active console/stdout."""
+    console = getattr(cli, "console", None)
+    if console is not None and hasattr(console, "print"):
+        try:
+            if text:
+                console.print(text)
+            else:
+                console.print()
+            return
+        except Exception:
+            pass
     if not text:
-        cli.console.print()
+        print()
         return
-    cli.console.print(Text.from_ansi(text))
+    print(text)
 
 
 def show_status(*, cli: Any) -> None:

@@ -296,7 +296,7 @@ class CommandService:
             "ok": False,
             "message": (
                 "Interactive fine-tune flow is not yet ported to OpenTUI worker mode. "
-                "Run `/finetune status` for readiness checks or use `cortex --legacy-ui` for now."
+                "Run `/finetune status` for readiness checks."
             ),
         }
 

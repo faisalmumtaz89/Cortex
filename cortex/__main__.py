@@ -31,9 +31,9 @@ from cortex.app.worker_runtime import WorkerRuntime
 from cortex.config import Config
 from cortex.conversation_manager import ConversationManager
 from cortex.gpu_validator import GPUValidator
+from cortex.logging_config import configure_logging
 from cortex.model_manager import ModelManager
 from cortex.runtime_io import bound_redirected_stdio_files
-from cortex.ui.cli import CortexCLI, configure_logging
 from cortex.ui_runtime.launcher import launch_tui
 
 
@@ -144,46 +144,13 @@ def _run_worker_stdio() -> None:
         _cleanup_inference_engine(inference_engine)
 
 
-def _run_legacy_cli() -> None:
-    inference_engine = None
-    try:
-        bound_redirected_stdio_files()
-        (
-            config,
-            gpu_validator,
-            model_manager,
-            inference_engine,
-            conversation_manager,
-        ) = _build_components()
-
-        cli = CortexCLI(
-            config=config,
-            gpu_validator=gpu_validator,
-            model_manager=model_manager,
-            inference_engine=inference_engine,
-            conversation_manager=conversation_manager,
-        )
-        cli.run()
-    finally:
-        _cleanup_inference_engine(inference_engine)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(prog="cortex")
     parser.add_argument("--worker-stdio", action="store_true", help="Run backend worker over JSON-RPC stdio.")
-    parser.add_argument(
-        "--legacy-ui",
-        action="store_true",
-        help="Run legacy Rich CLI loop (temporary compatibility mode).",
-    )
     args = parser.parse_args()
 
     if args.worker_stdio:
         _run_worker_stdio()
-        return
-
-    if args.legacy_ui:
-        _run_legacy_cli()
         return
 
     exit_code = launch_tui()
@@ -193,16 +160,13 @@ def main() -> None:
     if exit_code == 127:
         print(
             "OpenTUI sidecar not available in this environment. "
-            "Install Bun, or run `npm install` in frontend/cortex-tui to provision local Bun. "
-            "Falling back to legacy CLI runtime.",
+            "Install Bun, or run `npm install` in frontend/cortex-tui to provision local Bun.",
             file=sys.stderr,
         )
-        _run_legacy_cli()
-        return
+        raise SystemExit(exit_code)
 
     print(
-        "Failed to start OpenTUI frontend runtime. "
-        "Use --legacy-ui as a temporary fallback while frontend dependencies are being prepared.",
+        "Failed to start OpenTUI frontend runtime.",
         file=sys.stderr,
     )
     raise SystemExit(exit_code)

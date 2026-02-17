@@ -6,7 +6,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/faisalmumtaz/Cortex.git
+git clone https://github.com/faisalmumtaz89/Cortex.git
 cd Cortex
 
 # Create a virtual environment
@@ -29,7 +29,7 @@ pip install -e ".[dev]"
 Cortex/
 ├── pyproject.toml                  # Build config, dependencies, tool settings
 ├── config.yaml                     # Default runtime configuration
-├── setup.py                        # Legacy setup script
+├── setup.py                        # Packaging/install shim
 ├── requirements.txt                # Pinned dependency list
 ├── install.sh                      # Shell-based installer
 ├── cortex/
@@ -60,11 +60,10 @@ Cortex/
 │   │   ├── mlx_compat.py           # MLX compatibility patches
 │   │   ├── mlx_converter.py        # Model conversion for MLX
 │   │   └── performance_profiler.py # GPU performance profiling
-│   ├── ui/                         # Legacy Rich CLI path (compatibility)
+│   ├── ui/                         # Terminal UI helpers
 │   │   ├── __init__.py
-│   │   ├── cli.py                  # Interactive CLI (CortexCLI)
-│   │   ├── markdown_render.py      # Markdown rendering helpers
-│   │   └── terminal_app.py         # Textual-based terminal UI
+│   │   ├── cli_commands.py         # Slash command dispatch helpers
+│   │   └── generation.py           # Streaming response helpers
 │   ├── ui_runtime/                 # OpenTUI launcher + bundled binary
 │   │   ├── launcher.py
 │   │   └── bin/cortex-tui
@@ -188,6 +187,6 @@ disallow_untyped_defs = false
 | `ModelDownloader` | `cortex.model_downloader` | Downloads models from HuggingFace Hub |
 | `InferenceEngine` | `cortex.inference_engine` | Runs text generation with `GenerationRequest` |
 | `ConversationManager` | `cortex.conversation_manager` | Manages chat history and persistence |
-| `CortexCLI` | `cortex.ui.cli` | Interactive command-line interface |
+| `WorkerRuntime` | `cortex.app.worker_runtime` | JSON-RPC session runtime for OpenTUI |
 | `TemplateRegistry` | `cortex.template_registry` | Chat template detection and management |
 | `FineTuneWizard` | `cortex.fine_tuning` | Interactive fine-tuning workflow |

@@ -2,9 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
-
-from rich.console import Console
+from typing import Any, Dict, List, Optional, Protocol, cast
 
 from cortex.template_registry.auto_detector import TemplateDetector
 from cortex.template_registry.config_manager import ModelTemplateConfig, TemplateConfigManager
@@ -22,20 +20,24 @@ from cortex.template_registry.template_profiles.standard import (
 logger = logging.getLogger(__name__)
 
 
+class _Printer(Protocol):
+    def print(self, *args: object, **kwargs: object) -> object: ...
+
+
 class TemplateRegistry:
     """Central registry for managing model templates."""
 
-    def __init__(self, config_path: Optional[Path] = None, console: Optional[Console] = None):
+    def __init__(self, config_path: Optional[Path] = None, console: Optional[_Printer] = None):
         """Initialize the template registry.
 
         Args:
             config_path: Optional path to configuration file
-            console: Optional Rich console for interactive output
+            console: Optional console-like printer for interactive output
         """
         self.config_manager = TemplateConfigManager(config_path)
         self.detector = TemplateDetector()
-        self.console = console or Console()
-        self.interactive = InteractiveTemplateSetup(self.console)
+        self.console = console
+        self._interactive_setup: Optional[InteractiveTemplateSetup] = None
 
         # Cache of loaded profiles
         self._profile_cache: Dict[str, BaseTemplateProfile] = {}
@@ -50,6 +52,13 @@ class TemplateRegistry:
             TemplateType.GEMMA: GemmaProfile,
             TemplateType.CUSTOM: GemmaProfile  # Use Gemma as default custom template
         }
+
+    @property
+    def interactive(self) -> InteractiveTemplateSetup:
+        """Lazily construct interactive setup helper only when needed."""
+        if self._interactive_setup is None:
+            self._interactive_setup = InteractiveTemplateSetup(self.console)
+        return self._interactive_setup
 
     def setup_model(
         self,

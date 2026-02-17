@@ -192,7 +192,7 @@ class CloudRouter:
                         tool_executor=tool_executor,
                     )
                 else:
-                    # Backward compatibility for legacy test doubles.
+                    # Backward compatibility for older test doubles.
                     client_events = (
                         TextDeltaEvent(delta=str(delta))
                         for delta in client.stream(

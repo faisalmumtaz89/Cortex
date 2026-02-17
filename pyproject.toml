@@ -43,7 +43,6 @@ dependencies = [
     # Configuration and CLI
     "pyyaml>=6.0",
     "pydantic>=2.5.0",
-    "rich>=13.0.0",
     
     # Performance and Utilities
     "psutil>=5.9.0",
@@ -82,9 +81,9 @@ optional = [
 cortex = "cortex.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/faisalmumtaz/Cortex"
-"Bug Tracker" = "https://github.com/faisalmumtaz/Cortex/issues"
-Documentation = "https://github.com/faisalmumtaz/Cortex/wiki"
+Homepage = "https://github.com/faisalmumtaz89/Cortex"
+"Bug Tracker" = "https://github.com/faisalmumtaz89/Cortex/issues"
+Documentation = "https://github.com/faisalmumtaz89/Cortex/wiki"
 
 [tool.setuptools]
 packages = ["cortex", "cortex.app", "cortex.protocol", "cortex.cloud", "cortex.cloud.clients", "cortex.metal", "cortex.ui", "cortex.ui_runtime", "cortex.fine_tuning", "cortex.quantization", "cortex.template_registry", "cortex.template_registry.template_profiles", "cortex.template_registry.template_profiles.complex", "cortex.template_registry.template_profiles.standard", "cortex.tooling", "cortex.tooling.builtin"]

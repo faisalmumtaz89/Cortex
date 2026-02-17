@@ -5,7 +5,7 @@ from cortex.ui.generation import _build_cloud_messages
 
 
 def test_cloud_message_builder_uses_sliding_window_only():
-    messages = [SimpleNamespace(role=MessageRole.SYSTEM, content="legacy system message")]
+    messages = [SimpleNamespace(role=MessageRole.SYSTEM, content="system message")]
     for idx in range(40):
         role = MessageRole.USER if idx % 2 == 0 else MessageRole.ASSISTANT
         messages.append(SimpleNamespace(role=role, content=f"m{idx}"))

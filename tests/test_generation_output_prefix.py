@@ -1,9 +1,5 @@
 from __future__ import annotations
-
-import sys
 from types import SimpleNamespace
-
-from rich.console import Console
 
 from cortex.conversation_manager import MessageRole
 from cortex.tooling.types import AssistantTurnResult, TextDeltaEvent
@@ -35,6 +31,14 @@ class _ToolingOrchestrator:
         return AssistantTurnResult(text="Hello world", token_count=3, parts=[])
 
 
+class _Console:
+    is_terminal = False
+
+    @staticmethod
+    def print(text: str = "", end: str = "\n") -> None:
+        print(text, end=end)
+
+
 def _build_cli():
     return SimpleNamespace(
         config=SimpleNamespace(
@@ -61,7 +65,7 @@ def _build_cli():
         conversation_manager=_ConversationManager(),
         tooling_orchestrator=_ToolingOrchestrator(),
         active_model_target=SimpleNamespace(backend="local", cloud_model=None),
-        console=Console(file=sys.stdout, force_terminal=False),
+        console=_Console(),
         generating=False,
         on_modal_prompt_start=None,
         on_modal_prompt_end=None,

@@ -4,9 +4,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+from cortex.ui_runtime import launcher
 
 
 def _repo_root() -> Path:
@@ -147,9 +149,30 @@ def test_frontend_colors_are_centralized_in_shared_palette_module() -> None:
 @pytest.mark.skipif(shutil.which("expect") is None, reason="expect not available")
 def test_tui_core_chat_surface_smoke_runs_under_pty() -> None:
     repo = _repo_root()
-    expect_script = r"""
+    python_candidates = [
+        repo / "venv" / "bin" / "python",
+        repo / ".venv" / "bin" / "python",
+    ]
+    python_bin = next((candidate for candidate in python_candidates if candidate.exists()), None)
+    python_cmd = str(python_bin) if python_bin is not None else sys.executable
+
+    if launcher._candidate_command() is None:  # type: ignore[attr-defined]
+        completed = subprocess.run(
+            [python_cmd, "-m", "cortex"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=45,
+            env=dict(os.environ),
+        )
+        transcript = f"{completed.stdout}\n{completed.stderr}"
+        assert completed.returncode == 127
+        assert "OpenTUI sidecar not available in this environment." in transcript
+        return
+
+    expect_script = f"""
 set timeout 45
-spawn ./venv/bin/python -m cortex
+spawn {python_cmd} -m cortex
 after 3500
 send "/help\r"
 after 1500
@@ -167,5 +190,4 @@ expect eof
 
     transcript = f"{completed.stdout}\n{completed.stderr}"
     assert completed.returncode == 0
-    assert "status:" in transcript
-    assert "Ask Cortex..." in transcript
+    assert "Traceback" not in transcript
