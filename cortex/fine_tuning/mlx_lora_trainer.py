@@ -109,7 +109,7 @@ class MLXLoRATrainer:
             # Load model and tokenizer using mlx_lm if not already cached
             if model is None or tokenizer is None:
                 logger.info(f"Loading model from {model_path}")
-                model, tokenizer = mlx_load(str(model_path))
+                model, tokenizer, *_ = mlx_load(str(model_path))
 
             # Apply LoRA layers
             logger.info(f"Applying LoRA with rank={training_config.lora_r}")

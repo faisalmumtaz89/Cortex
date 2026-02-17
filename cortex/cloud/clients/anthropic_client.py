@@ -120,7 +120,7 @@ class AnthropicClient:
         if tools and tool_executor is not None:
             history = list(normalized_messages)
             for _ in range(max_tool_iterations):
-                kwargs: Dict[str, object] = {
+                kwargs: Dict[str, Any] = {
                     "model": model_id,
                     "messages": history,
                     "max_tokens": max_tokens,
@@ -208,7 +208,7 @@ class AnthropicClient:
 
             raise RuntimeError("Anthropic tool loop exceeded max iterations")
 
-        final_kwargs: Dict[str, object] = {
+        final_kwargs: Dict[str, Any] = {
             "model": model_id,
             "messages": normalized_messages,
             "max_tokens": max_tokens,
@@ -263,7 +263,7 @@ class AnthropicClient:
         if not normalized_messages:
             raise RuntimeError("No user/assistant messages available for Anthropic request.")
 
-        kwargs: Dict[str, object] = {
+        kwargs: Dict[str, Any] = {
             "model": model_id,
             "messages": normalized_messages,
             "max_tokens": max_tokens,

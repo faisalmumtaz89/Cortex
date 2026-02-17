@@ -23,7 +23,7 @@ except Exception as exc:  # noqa: BLE001
     _MLX_IMPORT_ERROR = exc
 
 # Import MLX LM functions
-mlx_load: Optional[Callable[..., Tuple[Any, Any]]]
+mlx_load: Optional[Callable[..., Tuple[Any, Any] | Tuple[Any, Any, Dict[str, Any]]]]
 LoRALinear: Optional[type[Any]]
 TrainingArgs: Optional[type[Any]]
 mlx_train: Optional[Callable[..., Any]]

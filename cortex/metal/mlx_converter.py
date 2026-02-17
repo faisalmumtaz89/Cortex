@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Import MLX LM functions safely
-load: Optional[Callable[..., Tuple[nn.Module, Any]]]
+load: Optional[
+    Callable[..., Union[Tuple[nn.Module, Any], Tuple[nn.Module, Any, Dict[str, Any]]]]
+]
 mlx_utils: Optional[Any]
 try:
     from mlx_lm import load as mlx_load
@@ -221,7 +223,6 @@ class MLXConverter:
             snapshot_download(
                 repo_id=repo_id,
                 local_dir=download_dir,
-                local_dir_use_symlinks=False
             )
 
         return download_dir
@@ -657,7 +658,9 @@ class MLXConverter:
 
             logger.debug(f"Loading model for validation: {model_path}")
             # Try loading the model
-            model, tokenizer = load(str(model_path))
+            loaded = load(str(model_path))
+            model = loaded[0]
+            tokenizer = loaded[1]
 
             # Test a simple forward pass
             test_input = "Hello, world!"

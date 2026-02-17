@@ -32,7 +32,7 @@ from cortex.quantization.dynamic_quantizer import (
 )
 
 # Import MLX LM functions safely
-mlx_load: Optional[Callable[..., Tuple[Any, Any]]]
+mlx_load: Optional[Callable[..., Tuple[Any, Any] | Tuple[Any, Any, Dict[str, Any]]]]
 try:
     from mlx_lm import load as mlx_load
 except ImportError:
@@ -898,7 +898,7 @@ class ModelManager:
                 try:
                     # Try to load with adapter integration
                     # Load the model (should include merged weights)
-                    model, tokenizer = mlx_load(str(path))
+                    model, tokenizer, *_ = mlx_load(str(path))
 
                     # The model should already have adapters merged since we saved it that way
                     logger.info("Fine-tuned MLX model loaded with integrated LoRA weights")
@@ -906,10 +906,10 @@ class ModelManager:
                 except ImportError:
                     # Fallback to regular loading
                     logger.warning("MLX LoRA utilities not available, loading as regular MLX model")
-                    model, tokenizer = mlx_load(str(path))
+                    model, tokenizer, *_ = mlx_load(str(path))
             else:
                 # Regular MLX model loading
-                model, tokenizer = mlx_load(str(path))
+                model, tokenizer, *_ = mlx_load(str(path))
 
             # Apply MLX accelerator optimizations if available
             if self.mlx_accelerator:
@@ -961,7 +961,7 @@ class ModelManager:
     def _load_gguf(self, path: Path, model_name: str, format_info: Dict) -> Tuple[bool, str]:
         """Load GGUF format model using llama-cpp-python."""
         try:
-            from llama_cpp import Llama
+            from llama_cpp import Llama  # type: ignore[import-not-found]
 
             print("Loading GGUF model with llama.cpp...")
 
