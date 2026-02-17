@@ -4,6 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from rich.text import Text
+
+
+def _emit(cli: Any, text: str = "") -> None:
+    """Render ANSI-formatted legacy text through Rich console."""
+    if not text:
+        cli.console.print()
+        return
+    cli.console.print(Text.from_ansi(text))
+
 
 def download_model(*, cli: Any, args: str = "") -> None:
     """Download a model from HuggingFace."""
@@ -14,7 +24,7 @@ def download_model(*, cli: Any, args: str = "") -> None:
     else:
         width = min(cli.get_terminal_width() - 2, 70)
 
-        print()
+        _emit(cli)
         cli.print_box_header("Model Manager", width)
         cli.print_empty_line(width)
 
@@ -50,7 +60,7 @@ def download_model(*, cli: Any, args: str = "") -> None:
         cli.print_empty_line(width)
         cli.print_box_footer(width)
 
-        choice = cli.get_input_with_escape("Choice or repo ID")
+        choice = cli.get_input_with_escape()
 
         if choice is None:
             return
@@ -60,12 +70,14 @@ def download_model(*, cli: Any, args: str = "") -> None:
 
             if available and choice_num <= len(available[:5]):
                 model = available[choice_num - 1]
-                print(f"\n\033[96m⚡\033[0m Loading {model['name']}...")
+                _emit(cli, f"\n\033[96m⚡\033[0m Loading {model['name']}...")
                 success, msg = cli.model_manager.load_model(model["path"])
                 if success:
-                    print("\033[32m✓\033[0m Model loaded successfully!")
-
                     model_info = cli.model_manager.get_current_model()
+                    if model_info:
+                        cli.set_active_local_model(model_info.name)
+                    _emit(cli, "\033[32m✓\033[0m Model loaded successfully!")
+
                     if model_info:
                         tokenizer = cli.model_manager.tokenizers.get(model_info.name)
                         profile = cli.template_registry.setup_model(
@@ -75,17 +87,17 @@ def download_model(*, cli: Any, args: str = "") -> None:
                         )
                         if profile:
                             template_name = profile.config.name
-                            print(f"   \033[2m• Template: {template_name}\033[0m")
+                            _emit(cli, f"   \033[2m• Template: {template_name}\033[0m")
                 else:
-                    print(f"\033[31m✗\033[0m Failed to load: {msg}")
+                    _emit(cli, f"\033[31m✗\033[0m Failed to load: {msg}")
                 return
 
             if available and choice_num == len(available[:5]) + 1 and len(available) > 5:
-                print()
+                _emit(cli)
                 cli.manage_models()
                 return
 
-            print("\033[31m✗ Invalid choice\033[0m")
+            _emit(cli, "\033[31m✗ Invalid choice\033[0m")
             return
 
         except ValueError:
@@ -95,23 +107,23 @@ def download_model(*, cli: Any, args: str = "") -> None:
             filename = parts[1] if len(parts) > 1 else None
 
     if "/" not in repo_id:
-        print("\n\033[31m✗ Invalid format. Expected: username/model-name\033[0m")
+        _emit(cli, "\n\033[31m✗ Invalid format. Expected: username/model-name\033[0m")
         return
 
-    print(f"\n\033[96m⬇\033[0m Downloading: \033[93m{repo_id}\033[0m")
+    _emit(cli, f"\n\033[96m⬇\033[0m Downloading: \033[93m{repo_id}\033[0m")
     if filename:
-        print(f"   File: \033[93m{filename}\033[0m")
-    print()
+        _emit(cli, f"   File: \033[93m{filename}\033[0m")
+    _emit(cli)
 
     success, message, path = cli.model_downloader.download_model(repo_id, filename)
 
     if success:
         width = min(cli.get_terminal_width() - 2, 70)
-        print()
+        _emit(cli)
         title_with_color = " \033[32mDownload Complete\033[0m "
         visible_len = cli.get_visible_length(title_with_color)
         padding = width - visible_len - 3
-        print(f"╭─{title_with_color}" + "─" * padding + "╮")
+        _emit(cli, f"╭─{title_with_color}" + "─" * padding + "╮")
         cli.print_box_line("  \033[32m✓\033[0m Model downloaded successfully!", width)
 
         location_str = str(path)[: width - 13]
@@ -121,13 +133,16 @@ def download_model(*, cli: Any, args: str = "") -> None:
         cli.print_box_line("  \033[93m[Y]es\033[0m  \033[2m[N]o\033[0m", width)
         cli.print_box_footer(width)
 
-        choice = input("\n\033[96m▶\033[0m Choice (\033[93my\033[0m/\033[2mn\033[0m): ").strip().lower()
-        if choice in ["y", "yes"]:
-            print("\n\033[96m⚡\033[0m Loading model...")
+        choice = cli.get_input_with_escape()
+        if choice and choice.lower() in ["y", "yes"]:
+            _emit(cli, "\n\033[96m⚡\033[0m Loading model...")
             load_success, load_msg = cli.model_manager.load_model(str(path))
             if load_success:
-                print("\033[32m✓\033[0m Model loaded successfully!")
+                model_info = cli.model_manager.get_current_model()
+                if model_info:
+                    cli.set_active_local_model(model_info.name)
+                _emit(cli, "\033[32m✓\033[0m Model loaded successfully!")
             else:
-                print(f"\033[31m✗\033[0m Failed to load: {load_msg}")
+                _emit(cli, f"\033[31m✗\033[0m Failed to load: {load_msg}")
     else:
-        print(f"\n\033[31m✗\033[0m {message}")
+        _emit(cli, f"\n\033[31m✗\033[0m {message}")

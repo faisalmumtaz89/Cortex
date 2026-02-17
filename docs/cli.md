@@ -10,9 +10,18 @@ Cortex provides an interactive CLI for GPU-accelerated LLM inference on Apple Si
 cortex
 ```
 
-**Note**: Cortex currently operates in interactive mode only. All functionality is accessed through the interactive terminal interface.
+Default runtime:
+- Launches OpenTUI frontend sidecar (single terminal writer)
+- Starts backend in worker mode over JSON-RPC (`python -m cortex --worker-stdio`)
 
-### Interactive Mode (Default and Only Mode)
+Compatibility modes:
+- `cortex --legacy-ui` runs the old Rich UI path
+- `python -m cortex --worker-stdio` runs worker only (no terminal rendering)
+
+Source checkout note:
+- If OpenTUI sidecar is unavailable, run `npm install` in `frontend/cortex-tui` to provision local Bun runtime, or install global Bun.
+
+### Interactive Mode
 
 When you run `cortex`, it starts the interactive terminal UI with:
 
@@ -21,29 +30,11 @@ cortex
 ```
 
 **Features:**
-- Simple, clean interface
+- Event-driven rendering with sequence-id reconciliation
 - Real-time GPU-accelerated text generation 
 - Slash commands for model management
-- Keyboard shortcuts for quick actions
-- Command auto-completion via readline
-- Command history persisted in `~/.cortex_history`
-- Signal handling (Ctrl+C cancels generation or exits when idle)
-
-## Tooling (Experimental, Work in Progress)
-
-Cortex includes early tooling support to let the model read/search the current repo and propose file edits. This is **experimental** and **work in progress**.
-
-**What it can do (today):**
-- Read files and list directories in the current repo
-- Search for text/regex matches
-- Propose edits (create, write, replace, insert, delete) with explicit confirmation
-
-**Scope and safety:**
-- Tool paths are **repo-relative**. Cortex will not access files outside the repo root.
-- Any write/delete operation **requires explicit approval** before it is applied.
-- The tool system is evolving: behavior and output may change, tool calls may fail, and UI presentation may be adjusted.
-
-**Important (WIP):** Treat tooling as a preview. Use it on non-critical tasks first, and always review proposed changes before approving them.
+- Structured tool lifecycle states (`pending`, `running`, `completed`, `error`)
+- Permission prompts (`Allow once`, `Allow always`, `Reject`, `Esc => Reject`)
 
 ## Interactive Commands
 
@@ -81,17 +72,21 @@ Download models from HuggingFace Hub with an interactive interface.
 - **Auto-load Option**: Prompt to load downloaded model immediately
 - **Progress Output**: Uses HuggingFace download progress when available
 
-### `/model [model_path]` - Load Models
+### `/model [selector]` - Switch Local/Cloud Models
 
-Load a model for inference or show available models.
+Switch active model target for inference (local or cloud) or show interactive selection UI.
 
 **Usage:**
 ```bash
 # Interactive model selector and loader
 /model
 
-# Load specific model by path
+# Load specific local model by path
 /model ~/models/Mistral-7B-Instruct-v0.2-4bit
+
+# Select cloud models directly
+/model openai:gpt-5.1
+/model anthropic:claude-sonnet-4-5
 ```
 
 **Supported Formats:**
@@ -102,11 +97,12 @@ Load a model for inference or show available models.
 - **GPTQ / AWQ**: Quantized models (optional deps required)
 
 **Interactive Mode Features:**
-- Shows all available models with sizes
-- Numbered selection for easy loading  
-- Current model indicator
-- Delete models option
-- Download new models option
+- Shows both local and cloud models
+- Numbered selection for easy switching
+- Current active target indicator
+- Delete local models option
+- Download new local models option
+- Manual cloud selector input (`provider:model`)
 
 ### `/status` - System Status
 
@@ -142,6 +138,7 @@ Show detailed GPU status and memory usage.
 ### `/benchmark` - Performance Test
 
 Run a performance benchmark with the current model.
+Benchmarking currently applies to local models only.
 
 **Usage:**
 ```bash
@@ -290,19 +287,41 @@ Configure and manage chat templates for models.
 - **Toggle Options**: Show/hide internal reasoning for reasoning models (debugging)
 - **Persistent Settings**: Configurations saved across sessions
 
-### `/login` - Login to HuggingFace
+### `/login [provider]` - Manage Credentials
 
-Login to HuggingFace Hub to access gated models that require authentication.
+Manage API credentials for OpenAI/Anthropic cloud models and HuggingFace gated model access.
 
 **Usage:**
 ```bash
 /login
+/login openai
+/login anthropic
+/login huggingface
 ```
 
 **Features:**
-- Authenticate with HuggingFace Hub
-- Required for accessing gated models (e.g., Llama, Gemma)
-- Stores token for future sessions
+- OpenAI API key validation + keychain storage
+- Anthropic API key validation + keychain storage
+- HuggingFace token login/logout for gated model downloads
+- Environment variable fallback (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`)
+- Missing provider SDKs are auto-installed during login when possible
+
+### Tooling Permissions and Profiles
+
+Tool execution is controlled by config (`tools_enabled`, `tools_profile`) and is **off by default**.
+
+When tools are enabled and a model requests a tool call, Cortex prompts:
+
+- `Allow once`
+- `Allow always`
+- `Reject`
+
+Pressing `Esc` cancels the prompt and maps to `Reject`.
+
+Permission decisions:
+
+- Session-scoped approvals are kept in memory for the active session.
+- Persistent approvals are saved in `~/.cortex/tool_permissions.yaml`.
 
 ### `/quit` or `/exit` - Exit Cortex
 
@@ -371,14 +390,14 @@ Cortex provides a clean interface:
 │  /help       Show this help message               │
 │  /status     Show current setup and GPU info      │
 │  /download   Download a model from HuggingFace    │
-│  /model      Load a model                         │
+│  /model      Switch local/cloud model             │
 │  /finetune   Fine-tune models interactively       │
 │  /template   Manage model chat templates          │
 │  /clear      Clear conversation history           │
 │  /save       Save current conversation            │
 │  /gpu        Show GPU status                      │
 │  /benchmark  Run performance benchmark            │
-│  /login      Login to HuggingFace for gated models│
+│  /login      Manage OpenAI/Anthropic/HF auth      │
 │  /quit       Exit Cortex                          │
 │                                                   │
 ╰───────────────────────────────────────────────────╯

@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
+from rich.text import Text
+
+from cortex.cloud.types import CloudProvider
 from cortex.ui import version_check
+
+
+def _emit(cli, text: str = "", *, end: str = "\n") -> None:
+    """Render ANSI-colored legacy text through the shared Rich console."""
+    if not text:
+        cli.console.print(end=end)
+        return
+    cli.console.print(Text.from_ansi(text), end=end)
 
 
 def print_welcome(*, cli) -> None:
@@ -23,10 +33,23 @@ def print_welcome(*, cli) -> None:
         f"  \033[2mcwd:\033[0m {cwd}",
     ]
 
-    print(cli.create_box(welcome_lines, width))
-    print()
+    _emit(cli, cli.create_box(welcome_lines, width))
+    _emit(cli)
 
-    if cli.config.model.last_used_model:
+    last_backend = cli.config.get_state_value("last_used_backend", "local")
+    if last_backend == "cloud":
+        if not getattr(cli.config.cloud, "cloud_enabled", True):
+            _emit(cli, " \033[2m※ Last target was cloud, but cloud_enabled=false. Using local mode.\033[0m")
+        else:
+            last_provider = cli.config.get_state_value("last_used_cloud_provider", "")
+            last_cloud_model = cli.config.get_state_value("last_used_cloud_model", "")
+            if last_provider and last_cloud_model:
+                _emit(
+                    cli,
+                    " \033[2m※ Last model:\033[0m "
+                    f"\033[93m{last_provider}:{last_cloud_model}\033[0m \033[2m(cloud)\033[0m"
+                )
+    elif cli.config.model.last_used_model:
         display_name = cli.config.model.last_used_model
         if display_name.startswith("_Users_") and (
             "_4bit" in display_name or "_5bit" in display_name or "_8bit" in display_name
@@ -34,25 +57,59 @@ def print_welcome(*, cli) -> None:
             parts = display_name.replace("_4bit", "").replace("_5bit", "").replace("_8bit", "").split("_")
             if len(parts) > 3:
                 display_name = parts[-1]
-        print(f" \033[2m※ Last model:\033[0m \033[93m{display_name}\033[0m")
+        _emit(cli, f" \033[2m※ Last model:\033[0m \033[93m{display_name}\033[0m")
 
-    print(" \033[2m※ Tip: Use\033[0m \033[93m/download\033[0m \033[2mto get models from HuggingFace\033[0m")
+    _emit(cli, " \033[2m※ Tip: Use\033[0m \033[93m/download\033[0m \033[2mto get models from HuggingFace\033[0m")
     update_status = version_check.get_update_status(config=cli.config)
     if update_status:
-        print(
+        _emit(
+            cli,
             " \033[93m↑ Update available:\033[0m "
             f"\033[2m{update_status.current_version} → {update_status.latest_version}\033[0m"
         )
-        print(" \033[2mRun:\033[0m \033[93mpipx upgrade cortex-llm --force\033[0m")
-    print()
+        _emit(cli, " \033[2mRun:\033[0m \033[93mcurl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash\033[0m")
+    _emit(cli)
 
 
 def load_default_model(*, cli) -> None:
     """Load the last used model or default model if configured."""
+    last_backend = cli.config.get_state_value("last_used_backend", "local")
+    if last_backend == "cloud":
+        if not getattr(cli.config.cloud, "cloud_enabled", True):
+            _emit(cli, " \033[31m⚠\033[0m Cloud target ignored because cloud_enabled=false.")
+        else:
+            last_provider = cli.config.get_state_value("last_used_cloud_provider", "")
+            last_cloud_model = cli.config.get_state_value("last_used_cloud_model", "")
+            if last_provider and last_cloud_model:
+                try:
+                    provider = CloudProvider.from_value(last_provider)
+                    ok, message = cli.set_active_cloud_model(provider, last_cloud_model, persist=False)
+                    if ok:
+                        _emit(
+                            cli,
+                            " \033[96m☁\033[0m Restored cloud model: "
+                            f"\033[93m{provider.value}:{last_cloud_model}\033[0m"
+                        )
+                        is_auth, source = cli.cloud_router.get_auth_status(provider)
+                        if is_auth:
+                            source_label = f" via {source}" if source else ""
+                            _emit(cli, f"   \033[2m• Authenticated{source_label}\033[0m")
+                        else:
+                            _emit(
+                                cli,
+                                "   \033[2m• Not authenticated. Use "
+                                f"\033[93m/login {provider.value}\033[0m \033[2mto continue.\033[0m"
+                            )
+                        return
+                    _emit(cli, f" \033[31m⚠\033[0m Failed to restore cloud model: {message}")
+                except Exception as exc:
+                    _emit(cli, f" \033[31m⚠\033[0m Failed to restore cloud model: {exc}")
+
     model_to_load = cli.config.model.last_used_model or cli.config.model.default_model
 
     if not model_to_load:
-        print(" \033[96m⚡\033[0m No model loaded. Use \033[93m/model\033[0m to select a model.")
+        cli.set_active_local_model(None)
+        _emit(cli, " \033[96m⚡\033[0m No model loaded. Use \033[93m/model\033[0m to select a model.")
         return
 
     if "_4bit" in model_to_load or "_5bit" in model_to_load or "_8bit" in model_to_load:
@@ -62,12 +119,13 @@ def load_default_model(*, cli) -> None:
             if len(parts) > 3:
                 clean_name = parts[-1]
 
-        print(f" \033[96m⚡\033[0m Loading: \033[93m{clean_name}\033[0m \033[2m(MLX optimized)\033[0m...")
+        _emit(cli, f" \033[96m⚡\033[0m Loading: \033[93m{clean_name}\033[0m \033[2m(MLX optimized)\033[0m...")
         success, message = cli.model_manager.load_model(model_to_load)
 
         if success:
             model_info = cli.model_manager.get_current_model()
             if model_info:
+                cli.set_active_local_model(model_info.name)
                 if "_4bit" in model_to_load:
                     quant_type = "4-bit"
                 elif "_8bit" in model_to_load:
@@ -77,13 +135,13 @@ def load_default_model(*, cli) -> None:
                 else:
                     quant_type = ""
 
-                print(f" \033[32m✓\033[0m Model ready: \033[93m{clean_name}\033[0m")
+                _emit(cli, f" \033[32m✓\033[0m Model ready: \033[93m{clean_name}\033[0m")
                 if quant_type:
-                    print(f"   \033[2m• Size: {model_info.size_gb:.1f}GB ({quant_type} quantized)\033[0m")
+                    _emit(cli, f"   \033[2m• Size: {model_info.size_gb:.1f}GB ({quant_type} quantized)\033[0m")
                 else:
-                    print(f"   \033[2m• Size: {model_info.size_gb:.1f}GB (quantized)\033[0m")
-                print("   \033[2m• Optimizations: AMX acceleration, operation fusion\033[0m")
-                print("   \033[2m• Format: MLX (Apple Silicon optimized)\033[0m")
+                    _emit(cli, f"   \033[2m• Size: {model_info.size_gb:.1f}GB (quantized)\033[0m")
+                _emit(cli, "   \033[2m• Optimizations: AMX acceleration, operation fusion\033[0m")
+                _emit(cli, "   \033[2m• Format: MLX (Apple Silicon optimized)\033[0m")
 
                 tokenizer = cli.model_manager.tokenizers.get(model_info.name)
                 profile = cli.template_registry.setup_model(
@@ -93,25 +151,27 @@ def load_default_model(*, cli) -> None:
                 )
                 if profile:
                     template_name = profile.config.name
-                    print(f"   \033[2m• Template: {template_name}\033[0m")
+                    _emit(cli, f"   \033[2m• Template: {template_name}\033[0m")
         else:
             base_name = model_to_load.replace("_4bit", "").replace("_5bit", "").replace("_8bit", "")
             if base_name.startswith("_Users_"):
                 original_path = "/" + base_name[1:].replace("_", "/")
                 if Path(original_path).exists():
-                    print(" \033[2m※ Cached model not found, reconverting from original...\033[0m")
+                    _emit(cli, " \033[2m※ Cached model not found, reconverting from original...\033[0m")
                     success, message = cli.model_manager.load_model(original_path)
                     if success:
                         model_info = cli.model_manager.get_current_model()
                         if model_info:
-                            print(
+                            cli.set_active_local_model(model_info.name)
+                            _emit(
+                                cli,
                                 f" \033[32m✓\033[0m Model loaded: \033[93m{model_info.name}\033[0m "
                                 f"\033[2m({model_info.size_gb:.1f}GB, {model_info.format.value})\033[0m"
                             )
                         return
 
-            print(f" \033[31m⚠\033[0m Previously used model not found: \033[93m{model_to_load}\033[0m")
-            print(" Use \033[93m/model\033[0m to select a different model or \033[93m/download\033[0m to get new models.")
+            _emit(cli, f" \033[31m⚠\033[0m Previously used model not found: \033[93m{model_to_load}\033[0m")
+            _emit(cli, " Use \033[93m/model\033[0m to select a different model or \033[93m/download\033[0m to get new models.")
         return
 
     model_path = None
@@ -131,17 +191,19 @@ def load_default_model(*, cli) -> None:
                     break
 
     if not model_path:
-        print(f" \033[31m⚠\033[0m Previously used model not found: \033[93m{model_to_load}\033[0m")
-        print(" Use \033[93m/model\033[0m to select a different model or \033[93m/download\033[0m to get new models.")
+        _emit(cli, f" \033[31m⚠\033[0m Previously used model not found: \033[93m{model_to_load}\033[0m")
+        _emit(cli, " Use \033[93m/model\033[0m to select a different model or \033[93m/download\033[0m to get new models.")
         return
 
-    print(f" \033[96m⚡\033[0m Loading: \033[93m{model_to_load}\033[0m...")
+    _emit(cli, f" \033[96m⚡\033[0m Loading: \033[93m{model_to_load}\033[0m...")
     success, message = cli.model_manager.load_model(str(model_path))
 
     if success:
         model_info = cli.model_manager.get_current_model()
         if model_info:
-            print(
+            cli.set_active_local_model(model_info.name)
+            _emit(
+                cli,
                 f" \033[32m✓\033[0m Model loaded: \033[93m{model_info.name}\033[0m "
                 f"\033[2m({model_info.size_gb:.1f}GB, {model_info.format.value})\033[0m"
             )
@@ -154,7 +216,7 @@ def load_default_model(*, cli) -> None:
             )
             if profile:
                 template_name = profile.config.name
-                print(f"   \033[2m• Template: {template_name}\033[0m")
+                _emit(cli, f"   \033[2m• Template: {template_name}\033[0m")
     else:
-        print(f" \033[31m✗\033[0m Failed to load model: {message}", file=sys.stderr)
-        print(" Use \033[93m/model\033[0m to select a different model.")
+        _emit(cli, f" \033[31m✗\033[0m Failed to load model: {message}")
+        _emit(cli, " Use \033[93m/model\033[0m to select a different model.")

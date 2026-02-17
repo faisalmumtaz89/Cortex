@@ -4,7 +4,11 @@
 
 Cortex reads configuration from `config.yaml` in the project root. The file uses a flat key structure (no nested sections). If `config.yaml` is missing, defaults from `cortex/config.py` are used.
 
-**Runtime state:** Ephemeral values like `last_used_model` are stored in `~/.cortex/state.yaml`, not in `config.yaml`. This avoids polluting git diffs when you change models.
+**Runtime state:** Ephemeral values like `last_used_model`, `last_used_backend`, and `last_used_cloud_*` are stored in `~/.cortex/state.yaml`, not in `config.yaml`. This avoids polluting git diffs when you change models.
+
+**Permission state:** Tool permission rules are stored in `~/.cortex/tool_permissions.yaml`.
+
+**Runtime split:** The default CLI launches an OpenTUI frontend sidecar and talks to Python backend worker mode over JSON-RPC (`python -m cortex --worker-stdio`).
 
 **Note on wiring:** Cortex accepts a broad set of configuration keys. The CLI currently **reads** these keys directly:
 
@@ -13,6 +17,10 @@ Cortex reads configuration from `config.yaml` in the project root. The file uses
 - `temperature`, `top_p`, `top_k`, `repetition_penalty`, `max_tokens`, `stream_output`, `seed`
 - `model_path`, `default_model`, `model_cache_dir`, `quantization_cache`
 - `max_loaded_models`, `auto_quantize`, `default_quantization`, `supported_quantizations`
+- `cloud_enabled`, `cloud_timeout_seconds`, `cloud_max_retries`
+- `cloud_default_openai_model`, `cloud_default_anthropic_model`
+- `tools_enabled`, `tools_profile`, `tools_local_mode`
+- `tools_max_iterations`, `tools_idle_timeout_seconds`, `tools_continue_on_reject`
 - `markdown_rendering`, `syntax_highlighting`
 - `save_directory`, `auto_save`, `max_conversation_history`
 
@@ -63,6 +71,21 @@ model_cache_dir: ~/.cortex/models
 quantization_cache: ~/.cortex/quantized_models
 max_loaded_models: 3
 verify_gpu_compatibility: true
+
+# Cloud
+cloud_enabled: true
+cloud_timeout_seconds: 60
+cloud_max_retries: 2
+cloud_default_openai_model: gpt-5.1
+cloud_default_anthropic_model: claude-sonnet-4-5
+
+# Tooling
+tools_enabled: false
+tools_profile: off
+tools_local_mode: disabled
+tools_max_iterations: 4
+tools_idle_timeout_seconds: 45
+tools_continue_on_reject: false
 
 # UI
 markdown_rendering: true
@@ -143,6 +166,27 @@ max_conversation_history: 100
 - `quantization_cache` (default: `~/.cortex/quantized_models`)
   - Cache directory for dynamic-quantized PyTorch/SafeTensors models
 
+### Cloud
+- `cloud_enabled` (default: `true`)
+- `cloud_timeout_seconds` (default: `60`)
+- `cloud_max_retries` (default: `2`)
+- `cloud_default_openai_model` (default: `gpt-5.1`)
+- `cloud_default_anthropic_model` (default: `claude-sonnet-4-5`)
+
+### Tooling
+- `tools_enabled` (default: `false`)
+  - Master toggle for tool execution.
+- `tools_profile` (default: `off`)
+  - One of `off`, `read_only`, `patch`, `full`.
+- `tools_local_mode` (default: `disabled`)
+  - `disabled` or `experimental` for local-model tool loops.
+- `tools_max_iterations` (default: `4`)
+  - Maximum tool loop iterations per turn.
+- `tools_idle_timeout_seconds` (default: `45`)
+  - Idle timeout used by cloud event streaming watchdog.
+- `tools_continue_on_reject` (default: `false`)
+  - Reserved behavior toggle for reject handling (conservative default).
+
 ### UI
 - **Wired today:** `markdown_rendering`, `syntax_highlighting` (CLI)  
   Other UI keys are used only by the Textual UI (not the default CLI).
@@ -172,7 +216,7 @@ max_conversation_history: 100
 - `enable_branching` (default: `true`)
 
 ### System
-- **Wired today:** `auto_update_check` is honored at startup for pipx installs; other keys below remain advisory.
+- **Wired today:** `auto_update_check` is honored at startup for installer/package installs; other keys below remain advisory.
 - `startup_checks` (default: `verify_metal_support`, `check_gpu_memory`, `validate_models`, `compile_shaders`)
 - `shutdown_timeout` (default: `5`)
 - `crash_recovery` (default: `true`)

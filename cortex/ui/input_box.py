@@ -7,8 +7,6 @@ import sys
 import termios
 from typing import Optional
 
-from rich.console import Console
-
 INPUT_BG = "\033[48;5;236m"  # Dark gray background (256-color)
 INPUT_FG = "\033[30m"        # Black text
 RESET = "\033[0m"
@@ -19,9 +17,9 @@ INPUT_LINE_OFFSET = BOX_HEIGHT // 2
 
 def prompt_input_box(
     *,
-    console: Console,
     terminal_width: int,
     current_model_path: Optional[str],
+    bottom_gutter_lines: int = 3,
 ) -> str:
     """Render the solid input box, read user input, and clean up the UI."""
     width = terminal_width
@@ -38,6 +36,8 @@ def prompt_input_box(
     if current_model_path:
         model_name = os.path.basename(current_model_path)
         current_model = f"{dim}Model:{RESET} {yellow}{model_name}{RESET}"
+
+    _reserve_bottom_gutter(bottom_gutter_lines)
 
     # Draw the input box with a solid background (no borders)
     print()
@@ -84,6 +84,17 @@ def prompt_input_box(
         raise
 
 
+def _reserve_bottom_gutter(lines: int) -> None:
+    """Reserve a blank gutter at the bottom of the terminal."""
+    gutter = max(0, int(lines))
+    if gutter <= 0:
+        return
+
+    sys.stdout.write("\n" * gutter)
+    sys.stdout.write(f"\033[{gutter}A")
+    sys.stdout.flush()
+
+
 def _get_protected_input(box_width: int) -> str:
     """Read input in raw mode and prevent deleting the prompt."""
     # Calculate usable width for text (leave one trailing space to avoid wrap)
@@ -106,11 +117,11 @@ def _get_protected_input(box_width: int) -> str:
         new_settings[6][termios.VTIME] = 0
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new_settings)
 
-        input_buffer = []
+        input_buffer: list[str] = []
         cursor_pos = 0
         view_offset = 0
 
-        def redraw_line():
+        def redraw_line() -> None:
             nonlocal view_offset
 
             if len(input_buffer) <= max_display_width:

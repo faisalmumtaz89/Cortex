@@ -1,39 +1,46 @@
 """Model management for GPU-accelerated inference."""
 
-import os
-import sys
-import logging
-from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
-from dataclasses import dataclass
-from enum import Enum
-import hashlib
 import json
-import shutil
+import logging
+import multiprocessing
+import os
 import struct
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
-# Configure logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-import torch
 import mlx.core as mx
-import mlx.nn as nn
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from cortex.config import Config
+from cortex.gpu_validator import GPUValidator
+from cortex.metal.memory_pool import AllocationStrategy, MemoryPool
+from cortex.metal.mlx_accelerator import MLXAccelerator, MLXConfig
+from cortex.metal.mlx_converter import (
+    ConversionConfig,
+    ConversionFormat,
+    MLXConverter,
+    QuantizationRecipe,
+)
+from cortex.quantization.dynamic_quantizer import (
+    DynamicQuantizer,
+    QuantizationConfig,
+    QuantizationMode,
+)
 
 # Import MLX LM functions safely
+mlx_load: Optional[Callable[..., Tuple[Any, Any]]]
 try:
     from mlx_lm import load as mlx_load
 except ImportError:
     mlx_load = None
 
-from cortex.config import Config
-from cortex.gpu_validator import GPUValidator
-from cortex.metal.memory_pool import MemoryPool, AllocationStrategy
-from cortex.metal.mlx_converter import MLXConverter, ConversionConfig, QuantizationRecipe, ConversionFormat
-from cortex.metal.mlx_accelerator import MLXAccelerator, MLXConfig
-from cortex.quantization.dynamic_quantizer import DynamicQuantizer, QuantizationConfig, QuantizationMode
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # Configure tokenizer parallelism for optimal performance
 # Enable parallelism for better tokenization speed
@@ -46,7 +53,6 @@ if os.environ.get('TOKENIZERS_PARALLELISM') is None:
 # Set optimal number of threads for tokenizer
 if os.environ.get('RAYON_NUM_THREADS') is None:
     # Use half of available CPU cores for tokenizer threads
-    import multiprocessing
     num_cores = multiprocessing.cpu_count()
     os.environ['RAYON_NUM_THREADS'] = str(max(1, num_cores // 2))
 
@@ -90,12 +96,12 @@ class ModelInfo:
     gpu_memory_used: int
     tokenizer_path: Optional[Path]
     config: Dict[str, Any]
-    
+
     @property
     def size_gb(self) -> float:
         """Get model size in GB."""
         return self.size_bytes / (1024 ** 3)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -113,7 +119,7 @@ class ModelInfo:
 
 class ModelManager:
     """Manage model loading and GPU memory allocation."""
-    
+
     def __init__(
         self,
         config: Config,
@@ -128,7 +134,7 @@ class ModelManager:
         self.current_model: Optional[str] = None
         self.model_cache: Dict[str, Any] = {}
         self.tokenizers: Dict[str, Any] = {}
-        
+
         # Initialize quantizer for memory-efficient loading
         self.quantizer = DynamicQuantizer(QuantizationConfig(
             mode=QuantizationMode.DYNAMIC,
@@ -136,14 +142,14 @@ class ModelManager:
             cache_quantized=True,
             cache_dir=self.config.model.quantization_cache
         ))
-        
+
         # Initialize MLX converter for native conversion
         # Use a consistent cache directory
         mlx_cache_dir = Path.home() / ".cortex" / "mlx_models"
         self.mlx_converter = MLXConverter(
             cache_dir=mlx_cache_dir
         )
-        
+
         # Initialize MLX accelerator for optimizations
         self.mlx_accelerator = None
         self._mlx_init_error: Optional[str] = None
@@ -158,31 +164,31 @@ class ModelManager:
         except Exception as e:
             self._mlx_init_error = str(e)
             logger.warning("MLX accelerator initialization failed: %s", e, exc_info=True)
-        
+
         self._setup_directories()
         self._initialize_memory_pool()
-    
+
     def __del__(self):
         """Clean up resources on deletion."""
         try:
             # Unload all models properly
             for model_name in list(self.loaded_models.keys()):
                 self.unload_model(model_name)
-        except:
+        except Exception:
             pass  # Ignore errors during cleanup
-    
+
     def _setup_directories(self) -> None:
         """Create necessary directories."""
         self.config.model.model_path.expanduser().mkdir(parents=True, exist_ok=True)
         self.config.model.model_cache_dir.expanduser().mkdir(parents=True, exist_ok=True)
         self.config.model.quantization_cache.expanduser().mkdir(parents=True, exist_ok=True)
-    
+
     def _initialize_memory_pool(self) -> None:
         """Initialize memory pool if needed."""
         # Skip if already provided by InferenceEngine to avoid duplication
         if self.memory_pool is not None:
             return
-            
+
         if self.config.gpu.force_gpu:
             try:
                 # Only create if not already provided
@@ -235,7 +241,7 @@ class ModelManager:
                 return None
 
         return recipe
-    
+
     def load_model(
         self,
         model_path: str,
@@ -246,26 +252,26 @@ class ModelManager:
     ) -> Tuple[bool, str]:
         """
         Load a model to GPU memory with optional MLX conversion.
-        
+
         Args:
             model_path: Path to model file or directory (or HF repo ID)
             model_name: Optional name for the model
             force_reload: Force reload even if already loaded
             convert_to_mlx: Convert to MLX format for better performance
             quantization: Quantization recipe ('4bit', '5bit', '8bit', 'mixed')
-            
+
         Returns:
             Tuple of (success, message)
         """
         # Check if it's a HuggingFace repo ID
         is_hf_repo = "/" in model_path and not Path(model_path).exists()
-        
+
         # Auto-enable MLX conversion if MLX backend is enabled in config
         if hasattr(self.config, 'gpu') and hasattr(self.config.gpu, 'mlx_backend'):
             if self.config.gpu.mlx_backend:
                 logger.info("MLX backend enabled in config, auto-converting models to MLX format")
                 convert_to_mlx = True
-        
+
         # Handle MLX conversion for HF models or local models
         if convert_to_mlx or is_hf_repo:
             # Check if this is a cached MLX model name
@@ -273,7 +279,7 @@ class ModelManager:
                 # This might be a cached MLX model, check if it exists
                 mlx_cache_dir = Path.home() / ".cortex" / "mlx_models"
                 cache_path = mlx_cache_dir / Path(model_path).name
-                
+
                 if cache_path.exists() and cache_path.is_dir():
                     logger.info(f"Loading cached MLX model from {cache_path}")
                     success, result = self._load_mlx(cache_path, model_name or Path(model_path).name, {
@@ -281,7 +287,7 @@ class ModelManager:
                         'quantization': QuantizationType.INT4 if "_4bit" in model_path else QuantizationType.INT8,
                         'reason': 'Cached MLX model'
                     })
-                    
+
                     if success:
                         self.current_model = model_name or Path(model_path).name
                         # When loading from cache, don't update the config - it already has the right path
@@ -292,13 +298,13 @@ class ModelManager:
                     # Cached model not found, need to reconvert from original
                     # Try to extract original path from the cached name
                     base_name = model_path.replace("_4bit", "").replace("_5bit", "").replace("_8bit", "").replace("_none", "")
-                    
+
                     # Try to find the original model
                     if base_name.startswith("_Users_"):
                         # This is a local model path encoded in the name
-                        original_path = "/" + base_name[1:].replace("_", "/")
-                        original_path = Path(original_path).expanduser()
-                        
+                        original_path_str = "/" + base_name[1:].replace("_", "/")
+                        original_path = Path(original_path_str).expanduser()
+
                         if original_path.exists():
                             logger.info(f"Found original model at {original_path}, will convert")
                             model_path = str(original_path)
@@ -307,7 +313,7 @@ class ModelManager:
                             return False, f"Cached MLX model not found and original model not found at {original_path}"
                     else:
                         return False, f"Cached MLX model not found at {cache_path}"
-            
+
             # Check if model is already in MLX format by looking ahead
             test_path = Path(model_path).expanduser().resolve()
             if test_path.exists() and test_path.is_dir():
@@ -319,29 +325,29 @@ class ModelManager:
                 except (ValueError, AttributeError):
                     # Fallback for older Python versions
                     is_in_mlx_dir = str(mlx_models_dir.resolve()) in str(test_path.resolve())
-                
+
                 # Check for MLX format markers - include adapter files for fine-tuned models
                 has_mlx_weights = (test_path / 'weights.npz').exists() or (test_path / 'model.safetensors').exists()
                 has_config = (test_path / 'config.json').exists()
                 has_adapter = (test_path / 'adapter.safetensors').exists()
                 has_fine_tuned_marker = (test_path / 'fine_tuned.marker').exists()
-                
+
                 # A model is MLX format if:
                 # 1. It's in the mlx_models directory, OR
-                # 2. It has MLX weights and config, OR  
+                # 2. It has MLX weights and config, OR
                 # 3. It's a fine-tuned model with adapters
                 if is_in_mlx_dir or (has_mlx_weights and has_config) or has_fine_tuned_marker or has_adapter:
                     # Already MLX format, skip conversion
                     logger.info(f"Model at {model_path} is already in MLX format, skipping conversion")
                     path = test_path
-                    
+
                     # Check if it's a fine-tuned model
                     format_info = {
                         'format': ModelFormat.MLX,
                         'quantization': QuantizationType.NONE,  # Will be detected from model
                         'reason': 'Existing MLX model'
                     }
-                    
+
                     # Check config for fine-tuning markers
                     config_path = path / "config.json"
                     if config_path.exists():
@@ -354,15 +360,15 @@ class ModelManager:
                                     logger.info("Detected fine-tuned model with LoRA adapters")
                         except Exception as e:
                             logger.warning(f"Could not read config to check fine-tuning status: {e}")
-                    
+
                     # Check for adapter files
                     if (path / "adapter.safetensors").exists() or (path / "adapter_config.json").exists():
                         format_info['has_lora_adapter'] = True
                         logger.info("Found LoRA adapter files")
-                    
+
                     # Load the existing MLX model directly
                     success, result = self._load_mlx(path, model_name or path.name, format_info)
-                    
+
                     if success:
                         self.current_model = model_name or path.name
                         # Store the original model path
@@ -387,13 +393,13 @@ class ModelManager:
                         # Use smart parameter detection for quantization decisions
                         try:
                             model_size_gb = self._get_model_size(test_path) / (1024**3)
-                            
+
                             # Use accurate parameter detection (returns billions)
                             actual_params_b = self.get_model_parameters_smart(test_path)
                             params_billions = float(actual_params_b) if actual_params_b is not None else (model_size_gb / 2.2)
-                            
+
                             logger.info(f"Model size: {model_size_gb:.2f}GB, parameters: {params_billions:.2f}B")
-                            
+
                             # For very small models like Gemma-270M, avoid quantization
                             if params_billions < 0.5:
                                 quant_recipe = QuantizationRecipe.NONE
@@ -412,7 +418,7 @@ class ModelManager:
                     default_recipe = self._get_default_quant_recipe()
                     if default_recipe is not None:
                         quant_recipe = default_recipe
-                    
+
                     if quantization:
                         quant_map = {
                             "4bit": QuantizationRecipe.SPEED_4BIT,
@@ -427,16 +433,16 @@ class ModelManager:
                             logger.info("Max optimization enabled, using 4-bit quantization for best tokens/sec")
                             print("Note: Max optimization enabled, using 4-bit quantization for best tokens/sec")
                         quant_recipe = QuantizationRecipe.SPEED_4BIT
-                    
+
                     # Determine source format
                     source_format = ConversionFormat.HUGGINGFACE if is_hf_repo else ConversionFormat.SAFETENSORS
-                    
+
                     # For local SafeTensors models, ensure correct format detection
                     if not is_hf_repo and test_path.exists():
                         if any(f.suffix == '.safetensors' for f in test_path.glob('*.safetensors')):
                             source_format = ConversionFormat.SAFETENSORS
                             logger.info("Detected SafeTensors format for conversion to MLX")
-                    
+
                     # Convert to MLX
                     conversion_config = ConversionConfig(
                         source_format=source_format,
@@ -444,31 +450,33 @@ class ModelManager:
                         use_amx=True,
                         compile_model=True
                     )
-                    
+
                     logger.info(f"Converting model to MLX format with {quant_recipe.name} quantization...")
-                    print(f"Converting model to MLX format for optimal performance...")
-                    
+                    print("Converting model to MLX format for optimal performance...")
+
                     success, msg, mlx_path = self.mlx_converter.convert_model(
                         model_path,
                         output_name=model_name,
                         config=conversion_config
                     )
-                    
+
                     if not success:
                         return False, f"MLX conversion failed: {msg}"
-                    
+                    if mlx_path is None:
+                        return False, "MLX conversion did not return an output path"
+
                     # Update path to converted model
                     path = mlx_path
                     print(f"✓ Model converted to MLX format at {mlx_path}")
                     logger.info(f"Successfully converted model to MLX format at {mlx_path}")
-                    
+
                     # Now load the converted MLX model directly
                     success, result = self._load_mlx(path, model_name or path.name, {
                         'format': ModelFormat.MLX,
                         'quantization': self._get_quantization_type_from_recipe(quant_recipe),
                         'reason': 'MLX converted model'
                     })
-                    
+
                     if success:
                         self.current_model = model_name or path.name
                         # Store the original model path
@@ -489,11 +497,11 @@ class ModelManager:
                     logger.info(f"Small model detected from name ({model_path}), using 8-bit quantization")
                 else:
                     quant_recipe = QuantizationRecipe.SPEED_4BIT  # Default for larger models
-                
+
                 default_recipe = self._get_default_quant_recipe()
                 if default_recipe is not None:
                     quant_recipe = default_recipe
-                
+
                 if quantization:
                     quant_map = {
                         "4bit": QuantizationRecipe.SPEED_4BIT,
@@ -508,7 +516,7 @@ class ModelManager:
                         logger.info("Max optimization enabled, using 4-bit quantization for best tokens/sec")
                         print("Note: Max optimization enabled, using 4-bit quantization for best tokens/sec")
                     quant_recipe = QuantizationRecipe.SPEED_4BIT
-                
+
                 # Convert to MLX
                 conversion_config = ConversionConfig(
                     source_format=ConversionFormat.HUGGINGFACE if is_hf_repo else ConversionFormat.SAFETENSORS,
@@ -516,31 +524,33 @@ class ModelManager:
                     use_amx=True,
                     compile_model=True
                 )
-                
+
                 logger.info(f"Converting HF model to MLX format with {quant_recipe.name} quantization...")
-                print(f"Downloading and converting model to MLX format...")
-                
+                print("Downloading and converting model to MLX format...")
+
                 success, msg, mlx_path = self.mlx_converter.convert_model(
                     model_path,
                     output_name=model_name,
                     config=conversion_config
                 )
-                
+
                 if not success:
                     return False, f"MLX conversion failed: {msg}"
-                
+                if mlx_path is None:
+                    return False, "MLX conversion did not return an output path"
+
                 # Update path to converted model
                 path = mlx_path
                 print(f"✓ Model converted to MLX format at {mlx_path}")
                 logger.info(f"Successfully converted model to MLX format at {mlx_path}")
-                
+
                 # Now load the converted MLX model directly
                 success, result = self._load_mlx(path, model_name or path.name, {
                     'format': ModelFormat.MLX,
                     'quantization': self._get_quantization_type_from_recipe(quant_recipe),
                     'reason': 'MLX converted model'
                 })
-                
+
                 if success:
                     self.current_model = model_name or path.name
                     # Store the original model path
@@ -561,67 +571,69 @@ class ModelManager:
                         config=ConversionConfig(quantization=QuantizationRecipe.NONE)
                     )
                     if success:
+                        if mlx_path is None:
+                            return False, "MLX model download succeeded without output path"
                         path = mlx_path
                     else:
                         return False, f"Failed to download MLX model: {msg}"
                 else:
                     return False, f"Model path does not exist: {model_path}"
-        
+
         # Use the full name for directories, stem for files
         if path.is_dir():
             model_name = model_name or path.name
         else:
             model_name = model_name or path.stem
-        
+
         # Check if already loaded
         if model_name in self.loaded_models and not force_reload:
             self.current_model = model_name
             # Still update last used model even if already loaded
             self.config.update_last_used_model(model_name)
             return True, f"Model '{model_name}' already loaded"
-        
+
         # Check memory constraints
         if len(self.loaded_models) >= self.config.model.max_loaded_models:
             oldest = min(self.loaded_models.items(), key=lambda x: x[1].loaded_at)[0]
             self.unload_model(oldest)
-        
+
         # Detect format and load
         format_info = self._detect_format(path)
         if format_info['format'] == ModelFormat.UNKNOWN:
             return False, f"Unknown model format: {format_info['reason']}"
-        
+
         # Check GPU compatibility and determine if quantization is needed
         model_size_gb = self._get_model_size(path) / (1024**3)
         can_load, message = self.gpu_validator.verify_model_compatibility(model_size_gb)
-        
+
         # Determine if we need quantization (only for non-quantized models)
         needs_quantization = False
         quantization_mode = None
-        
+
         # Only apply dynamic quantization to non-quantized SafeTensors/PyTorch models
         can_apply_quantization = (
             format_info['format'] in [ModelFormat.SAFETENSORS, ModelFormat.PYTORCH] and
             format_info['quantization'] == QuantizationType.NONE
         )
-        
+
         if not can_load and can_apply_quantization:
             if not getattr(self.config.model, "auto_quantize", True):
                 return False, f"GPU incompatible: {message} (auto_quantize disabled)"
             # Check if quantization would help
             gpu_status = self.gpu_validator.get_gpu_memory_status()
             available_gb = gpu_status['available_gb']
-            
+
             # DEBUG: Uncomment to see memory calculations for quantization decisions
             # print(f"DEBUG: Model size on disk: {model_size_gb:.1f}GB, Available memory: {available_gb:.1f}GB")
-            
+
             # Estimate if INT8 quantization would fit
             # Use same 3.5x multiplier as gpu_validator for consistency
             # INT8 is more stable than INT4, so prefer it when possible
             estimated_int8_size = model_size_gb * 0.5 * 2.5  # 50% reduction + 150% overhead (less conservative for INT8)
-            
+
             # DEBUG: Uncomment to see quantization size estimates
             # print(f"DEBUG: INT8 estimated size: {estimated_int8_size:.1f}GB")
-            
+
             if estimated_int8_size <= available_gb:
                 needs_quantization = True
                 quantization_mode = 'int8'
@@ -631,10 +643,10 @@ class ModelManager:
             else:
                 # Try INT4 as last resort
                 estimated_int4_size = model_size_gb * 0.25 * 3.5  # 75% reduction + 250% overhead
-                
+
                 # DEBUG: Uncomment to see INT4 quantization estimates
                 # print(f"DEBUG: INT4 estimated size: {estimated_int4_size:.1f}GB")
-                
+
                 if estimated_int4_size <= available_gb:
                     needs_quantization = True
                     quantization_mode = 'int4'
@@ -646,27 +658,32 @@ class ModelManager:
         elif not can_load:
             # Can't apply quantization to this format
             return False, f"GPU incompatible: {message}"
-        
+
         # Load based on format
-        loader_map = {
-            ModelFormat.MLX: self._load_mlx,
-            ModelFormat.GGUF: self._load_gguf,
-            ModelFormat.SAFETENSORS: self._load_safetensors,
-            ModelFormat.PYTORCH: self._load_pytorch,
-            ModelFormat.QUANTIZED: self._load_quantized
-        }
-        
-        loader = loader_map.get(format_info['format'])
-        if not loader:
-            return False, f"No loader for format: {format_info['format'].value}"
-        
+        format_value = format_info.get('format')
+        if not isinstance(format_value, ModelFormat):
+            return False, f"Unsupported format metadata: {format_value}"
+
         try:
             # Pass quantization info to loaders that support it
-            if format_info['format'] in [ModelFormat.SAFETENSORS, ModelFormat.PYTORCH]:
-                success, result = loader(path, model_name, format_info, needs_quantization, quantization_mode)
+            if format_value in [ModelFormat.SAFETENSORS, ModelFormat.PYTORCH]:
+                if format_value == ModelFormat.SAFETENSORS:
+                    success, result = self._load_safetensors(
+                        path, model_name, format_info, needs_quantization, quantization_mode
+                    )
+                else:
+                    success, result = self._load_pytorch(
+                        path, model_name, format_info, needs_quantization, quantization_mode
+                    )
+            elif format_value == ModelFormat.MLX:
+                success, result = self._load_mlx(path, model_name, format_info)
+            elif format_value == ModelFormat.GGUF:
+                success, result = self._load_gguf(path, model_name, format_info)
+            elif format_value == ModelFormat.QUANTIZED:
+                success, result = self._load_quantized(path, model_name, format_info)
             else:
-                success, result = loader(path, model_name, format_info)
-            
+                return False, f"No loader for format: {format_value.value}"
+
             if success:
                 self.current_model = model_name
                 # Save the last used model to config
@@ -676,11 +693,11 @@ class ModelManager:
                 return False, result
         except Exception as e:
             return False, f"Error loading model: {str(e)}"
-    
+
     def _detect_format(self, path: Path) -> Dict[str, Any]:
         """
         Detect model format from path.
-        
+
         Returns:
             Dict with 'format', 'quantization', and 'reason'
         """
@@ -692,7 +709,7 @@ class ModelManager:
                     'quantization': QuantizationType.Q4_K_M,
                     'reason': 'GGUF file'
                 }
-        
+
         # Check for directory-based formats
         if path.is_dir():
             # Check for MLX format - support both regular MLX and fine-tuned MLX models
@@ -700,11 +717,11 @@ class ModelManager:
             has_weights_npz = (path / 'weights.npz').exists()
             has_safetensors = any(path.glob('*.safetensors'))
             has_fine_tuned_marker = (path / 'fine_tuned.marker').exists()
-            
+
             if has_config and (has_weights_npz or has_safetensors):
                 # Detect if it's a fine-tuned model with LoRA adapters
                 has_adapter = (path / 'adapter.safetensors').exists()
-                
+
                 return {
                     'format': ModelFormat.MLX,
                     'quantization': QuantizationType.NONE,
@@ -712,7 +729,7 @@ class ModelManager:
                     'has_lora_adapter': has_adapter,
                     'is_fine_tuned': has_fine_tuned_marker
                 }
-            
+
             # Check for SafeTensors format
             safetensor_files = list(path.glob('*.safetensors'))
             if safetensor_files and (path / 'config.json').exists():
@@ -730,7 +747,7 @@ class ModelManager:
                         'quantization': quantization,
                         'reason': 'SafeTensors model'
                     }
-            
+
             # Check for PyTorch format
             if (path / 'pytorch_model.bin').exists() or list(path.glob('pytorch_model*.bin')):
                 return {
@@ -738,13 +755,13 @@ class ModelManager:
                     'quantization': QuantizationType.NONE,
                     'reason': 'PyTorch model'
                 }
-        
+
         return {
             'format': ModelFormat.UNKNOWN,
             'quantization': QuantizationType.NONE,
             'reason': 'No recognized model files found'
         }
-    
+
     def _detect_quantization(self, path: Path) -> QuantizationType:
         """Detect quantization type from model files."""
         # Check config.json for quantization info
@@ -753,7 +770,7 @@ class ModelManager:
             try:
                 with open(config_path) as f:
                     config = json.load(f)
-                
+
                 # Check for quantization config
                 if 'quantization_config' in config:
                     quant_config = config['quantization_config']
@@ -769,7 +786,7 @@ class ModelManager:
                             return QuantizationType.INT4
                         elif bits == 8:
                             return QuantizationType.INT8
-                
+
                 # Check model name for hints (be careful with model size indicators like 4B = 4 billion)
                 model_name = str(path.name).upper()
                 # Only detect as quantized if explicitly mentioned
@@ -781,9 +798,9 @@ class ModelManager:
                     return QuantizationType.GPTQ
                 elif 'AWQ' in model_name:
                     return QuantizationType.AWQ
-            except:
+            except Exception:
                 pass
-        
+
         # Check for quantization-specific files
         safetensor_files = list(path.glob('*.safetensors'))
         if safetensor_files:
@@ -794,14 +811,14 @@ class ModelManager:
                 # Check for GPTQ/AWQ specific tensors
                 has_scales = any('.scales' in k for k in sample.keys())
                 has_qweight = any('.qweight' in k for k in sample.keys())
-                
+
                 if has_scales or has_qweight:
                     return QuantizationType.GPTQ
-            except:
+            except Exception:
                 pass
-        
+
         return QuantizationType.NONE
-    
+
     def _get_quantization_type_from_recipe(self, recipe: QuantizationRecipe) -> QuantizationType:
         """Convert MLX quantization recipe to QuantizationType."""
         recipe_to_type = {
@@ -837,10 +854,11 @@ class ModelManager:
         except Exception:
             # Fallback formatting
             try:
-                return f"{float(params_b):.2f}B"
+                fallback_value = 0.0 if params_b is None else float(params_b)
+                return f"{fallback_value:.2f}B"
             except Exception:
                 return "unknown"
-    
+
     def _get_model_size(self, path: Path) -> int:
         """Get total size of model files in bytes."""
         if path.is_file():
@@ -849,7 +867,7 @@ class ModelManager:
             total = 0
             # Check if this is a fine-tuned model with LoRA adapters
             is_finetuned = (path / 'fine_tuned.marker').exists() or (path / 'adapter.safetensors').exists()
-            
+
             for file in path.rglob('*'):
                 if file.is_file():
                     # Skip training checkpoint files for fine-tuned models
@@ -862,31 +880,29 @@ class ModelManager:
                     total += file.stat().st_size
             return total
         return 0
-    
+
     def _load_mlx(self, path: Path, model_name: str, format_info: Dict) -> Tuple[bool, str]:
         """Load MLX format model with optimizations and LoRA adapter support."""
         try:
             if mlx_load is None:
                 return False, "MLX LM library not available. Install with: pip install mlx-lm"
-            
+
             # Check if this is a fine-tuned model with LoRA adapters
             has_adapter = format_info.get('has_lora_adapter', False)
             is_fine_tuned = format_info.get('is_fine_tuned', False)
-            
+
             if has_adapter or is_fine_tuned:
                 logger.info(f"Loading fine-tuned MLX model with LoRA adapters: {model_name}")
-                
+
                 # For fine-tuned models, we need to load the base model and apply adapters
                 try:
                     # Try to load with adapter integration
-                    from mlx_lm.tuner.utils import apply_lora_layers
-                    
                     # Load the model (should include merged weights)
                     model, tokenizer = mlx_load(str(path))
-                    
+
                     # The model should already have adapters merged since we saved it that way
                     logger.info("Fine-tuned MLX model loaded with integrated LoRA weights")
-                    
+
                 except ImportError:
                     # Fallback to regular loading
                     logger.warning("MLX LoRA utilities not available, loading as regular MLX model")
@@ -894,34 +910,34 @@ class ModelManager:
             else:
                 # Regular MLX model loading
                 model, tokenizer = mlx_load(str(path))
-            
+
             # Apply MLX accelerator optimizations if available
             if self.mlx_accelerator:
                 # Silently apply optimizations - details shown in CLI
                 logger.info("Applying MLX optimizations (AMX, operation fusion)...")
                 model = self.mlx_accelerator.optimize_model(model)
-                
+
                 # MLX LM models are already quantized during conversion
                 # No need to apply additional quantization
                 logger.info("MLX model already optimized with quantization")
-            
+
             # Evaluate parameters if they exist
             if hasattr(model, 'parameters'):
                 mx.eval(model.parameters())
-            
+
             self.model_cache[model_name] = model
             self.tokenizers[model_name] = tokenizer
-            
+
             # Load config
             config = {}
             config_path = path / 'config.json'
             if config_path.exists():
                 with open(config_path) as f:
                     config = json.load(f)
-            
+
             # Create model info with accurate parameter detection
-            parameters = self.get_model_parameters_smart(path)
-            
+            parameters = int(self.get_model_parameters_smart(path) * 1e9)
+
             model_info = ModelInfo(
                 name=model_name,
                 path=path,
@@ -935,25 +951,25 @@ class ModelManager:
                 tokenizer_path=path / 'tokenizer.json',
                 config=config
             )
-            
+
             self.loaded_models[model_name] = model_info
             return True, "MLX model loaded successfully"
-            
+
         except Exception as e:
             return False, f"Failed to load MLX model: {str(e)}"
-    
+
     def _load_gguf(self, path: Path, model_name: str, format_info: Dict) -> Tuple[bool, str]:
         """Load GGUF format model using llama-cpp-python."""
         try:
             from llama_cpp import Llama
-            
+
             print("Loading GGUF model with llama.cpp...")
-            
+
             # Determine optimal parameters for Apple Silicon
             n_gpu_layers = -1  # Use all layers on GPU
             n_ctx = 4096  # Context size
             n_batch = 512  # Batch size for prompt processing
-            
+
             # Load the model
             model = Llama(
                 model_path=str(path),
@@ -964,25 +980,25 @@ class ModelManager:
                 use_mlock=True,  # Lock model in RAM
                 verbose=False
             )
-            
+
             # Create a simple tokenizer wrapper for compatibility
             class GGUFTokenizer:
                 def __init__(self, model):
                     self.model = model
                     self.pad_token = None
                     self.eos_token = None
-                
+
                 def encode(self, text):
                     return self.model.tokenize(text.encode('utf-8'))
-                
+
                 def decode(self, tokens):
                     return self.model.detokenize(tokens).decode('utf-8')
-            
+
             tokenizer = GGUFTokenizer(model)
-            
+
             self.model_cache[model_name] = model
             self.tokenizers[model_name] = tokenizer
-            
+
             # Create model info
             # Get model parameters from the model object if available
             try:
@@ -991,9 +1007,9 @@ class ModelManager:
                 if n_params == 0:
                     # Estimate based on model size
                     n_params = self._get_model_size(path) // 2  # Rough estimate
-            except:
+            except Exception:
                 n_params = self._get_model_size(path) // 2
-            
+
             model_info = ModelInfo(
                 name=model_name,
                 path=path,
@@ -1007,19 +1023,19 @@ class ModelManager:
                 tokenizer_path=None,
                 config={'n_ctx': n_ctx, 'n_gpu_layers': n_gpu_layers}
             )
-            
+
             self.loaded_models[model_name] = model_info
             return True, "GGUF model loaded successfully"
-            
+
         except ImportError:
             return False, "llama-cpp-python not installed. Install with: pip install llama-cpp-python"
         except Exception as e:
             return False, f"Failed to load GGUF model: {str(e)}"
-    
+
     def _load_safetensors(
-        self, 
-        path: Path, 
-        model_name: str, 
+        self,
+        path: Path,
+        model_name: str,
         format_info: Dict,
         needs_quantization: bool = False,
         quantization_mode: Optional[str] = None
@@ -1027,14 +1043,14 @@ class ModelManager:
         """Load standard SafeTensors model with optional quantization."""
         try:
             device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-            
+
             # Check for cached quantized model first BEFORE loading anything
             if needs_quantization and self.quantizer.config.cache_quantized:
                 cached = self.quantizer.load_cached_model(path, self.quantizer.config)
                 if cached:
-                    print(f"Loading cached quantized model...")
+                    print("Loading cached quantized model...")
                     # Load to CPU first with minimal memory usage
-                    print(f"Creating model structure...")
+                    print("Creating model structure...")
                     with torch.device('cpu'):
                         model = AutoModelForCausalLM.from_pretrained(
                             str(path),
@@ -1043,42 +1059,43 @@ class ModelManager:
                             trust_remote_code=True,
                             device_map={'': 'cpu'}  # Force CPU loading
                         )
-                    
-                    print(f"Applying cached quantized weights...")
+
+                    print("Applying cached quantized weights...")
                     model.load_state_dict(cached[0])
-                    
+
                     # Now move to target device
                     print(f"Moving to {device}...")
-                    model = model.to(device)
+                    model = cast(Any, model).to(device)
                     quantization_info = cached[1]
-                    print(f"Quantized model loaded from cache")
+                    print("Quantized model loaded from cache")
                 else:
                     # Load and quantize
-                    print(f"Loading model for quantization...")
+                    print("Loading model for quantization...")
                     model = AutoModelForCausalLM.from_pretrained(
                         str(path),
                         torch_dtype=torch.float16,
                         low_cpu_mem_usage=True,
                         trust_remote_code=True
                     )
-                    
+
                     if needs_quantization:
                         print(f"Applying {quantization_mode} quantization...")
                         gpu_status = self.gpu_validator.get_gpu_memory_status()
-                        model, quantization_info = self.quantizer.quantize_model(
+                        quantized_model, quantization_info = self.quantizer.quantize_model(
                             model,
                             target_dtype=quantization_mode,
                             available_memory_gb=gpu_status['available_gb'],
                             model_size_gb=self._get_model_size(path) / (1024**3),
                             target_device=device  # Pass the target device (MPS)
                         )
-                        
+                        model = cast(Any, quantized_model)
+
                         # Cache the quantized model
                         if self.quantizer.config.cache_quantized:
-                            cache_path = self.quantizer.cache_quantized_model(model, path, quantization_info)
-                            print(f"Cached quantized model for faster future loads")
-                    
-                    model = model.to(device)
+                            self.quantizer.cache_quantized_model(model, path, quantization_info)
+                            print("Cached quantized model for faster future loads")
+
+                    model = cast(Any, model).to(device)
             else:
                 # Normal loading without quantization
                 model = AutoModelForCausalLM.from_pretrained(
@@ -1087,24 +1104,24 @@ class ModelManager:
                     low_cpu_mem_usage=True,
                     trust_remote_code=True
                 )
-                model = model.to(device)
+                model = cast(Any, model).to(device)
                 model.eval()  # Set model to evaluation mode
-            
+
             # Load tokenizer
             tokenizer = AutoTokenizer.from_pretrained(str(path), use_fast=True)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-            
+
             self.model_cache[model_name] = model
             self.tokenizers[model_name] = tokenizer
-            
+
             # Load config
             config = {}
             config_path = path / 'config.json'
             if config_path.exists():
                 with open(config_path) as f:
                     config = json.load(f)
-            
+
             # Create model info with quantization details if applicable
             if needs_quantization:
                 # Update quantization type based on what was applied
@@ -1117,10 +1134,10 @@ class ModelManager:
             else:
                 actual_quantization = format_info['quantization']
                 memory_used = sum(p.element_size() * p.numel() for p in model.parameters())
-            
+
             # Use smart parameter detection instead of counting loaded model parameters
-            parameters = self.get_model_parameters_smart(path)
-            
+            parameters = int(self.get_model_parameters_smart(path) * 1e9)
+
             model_info = ModelInfo(
                 name=model_name,
                 path=path,
@@ -1134,13 +1151,13 @@ class ModelManager:
                 tokenizer_path=path / 'tokenizer.json',
                 config=config
             )
-            
+
             self.loaded_models[model_name] = model_info
             return True, "SafeTensors model loaded successfully"
-            
+
         except Exception as e:
             return False, f"Failed to load SafeTensors model: {str(e)}"
-    
+
     def _load_pytorch(
         self,
         path: Path,
@@ -1152,12 +1169,12 @@ class ModelManager:
         """Load PyTorch format model with optional quantization."""
         try:
             device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-            
+
             # Check for cached quantized model first
             if needs_quantization and self.quantizer.config.cache_quantized:
                 cached = self.quantizer.load_cached_model(path, self.quantizer.config)
                 if cached:
-                    print(f"Loading cached quantized model...")
+                    print("Loading cached quantized model...")
                     model = AutoModelForCausalLM.from_pretrained(
                         str(path),
                         torch_dtype=torch.float16,
@@ -1165,35 +1182,36 @@ class ModelManager:
                         trust_remote_code=True
                     )
                     model.load_state_dict(cached[0])
-                    model = model.to(device)
+                    model = cast(Any, model).to(device)
                     quantization_info = cached[1]
                 else:
                     # Load and quantize
-                    print(f"Loading model for quantization...")
+                    print("Loading model for quantization...")
                     model = AutoModelForCausalLM.from_pretrained(
                         str(path),
                         torch_dtype=torch.float16,
                         low_cpu_mem_usage=True,
                         trust_remote_code=True
                     )
-                    
+
                     if needs_quantization:
                         print(f"Applying {quantization_mode} quantization...")
                         gpu_status = self.gpu_validator.get_gpu_memory_status()
-                        model, quantization_info = self.quantizer.quantize_model(
+                        quantized_model, quantization_info = self.quantizer.quantize_model(
                             model,
                             target_dtype=quantization_mode,
                             available_memory_gb=gpu_status['available_gb'],
                             model_size_gb=self._get_model_size(path) / (1024**3),
                             target_device=device  # Pass the target device (MPS)
                         )
-                        
+                        model = cast(Any, quantized_model)
+
                         # Cache the quantized model
                         if self.quantizer.config.cache_quantized:
-                            cache_path = self.quantizer.cache_quantized_model(model, path, quantization_info)
-                            print(f"Cached quantized model for faster future loads")
-                    
-                    model = model.to(device)
+                            self.quantizer.cache_quantized_model(model, path, quantization_info)
+                            print("Cached quantized model for faster future loads")
+
+                    model = cast(Any, model).to(device)
             else:
                 # Normal loading without quantization
                 model = AutoModelForCausalLM.from_pretrained(
@@ -1202,20 +1220,20 @@ class ModelManager:
                     low_cpu_mem_usage=True,
                     trust_remote_code=True
                 )
-                model = model.to(device)
+                model = cast(Any, model).to(device)
                 model.eval()  # Set model to evaluation mode
-            
+
             # Load tokenizer
             tokenizer = AutoTokenizer.from_pretrained(str(path), use_fast=True)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-            
+
             self.model_cache[model_name] = model
             self.tokenizers[model_name] = tokenizer
-            
+
             # Get config
             config = model.config.to_dict() if hasattr(model, 'config') else {}
-            
+
             # Create model info with quantization details if applicable
             if needs_quantization:
                 # Update quantization type based on what was applied
@@ -1228,10 +1246,10 @@ class ModelManager:
             else:
                 actual_quantization = format_info['quantization']
                 memory_used = sum(p.element_size() * p.numel() for p in model.parameters())
-            
+
             # Use smart parameter detection instead of counting loaded model parameters
-            parameters = self.get_model_parameters_smart(path)
-            
+            parameters = int(self.get_model_parameters_smart(path) * 1e9)
+
             model_info = ModelInfo(
                 name=model_name,
                 path=path,
@@ -1245,26 +1263,26 @@ class ModelManager:
                 tokenizer_path=None,
                 config=config
             )
-            
+
             self.loaded_models[model_name] = model_info
             return True, "PyTorch model loaded successfully"
-            
+
         except Exception as e:
             return False, f"Failed to load PyTorch model: {str(e)}"
-    
+
     def _load_quantized(self, path: Path, model_name: str, format_info: Dict) -> Tuple[bool, str]:
         """Load quantized model (GPTQ/AWQ/etc) using appropriate libraries."""
         quant_type = format_info['quantization']
         device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-        
+
         print(f"Loading {quant_type.value} quantized model...")
-        
+
         # Try different quantization libraries based on detected type
         if quant_type in [QuantizationType.GPTQ, QuantizationType.INT4]:
             # Try GPTQ loader first
             try:
                 from auto_gptq import AutoGPTQForCausalLM
-                
+
                 model = AutoGPTQForCausalLM.from_quantized(
                     str(path),
                     device="cuda:0" if torch.cuda.is_available() else "cpu",  # GPTQ doesn't support MPS directly
@@ -1273,75 +1291,75 @@ class ModelManager:
                     inject_fused_attention=False,  # Disable for compatibility
                     inject_fused_mlp=False
                 )
-                
+
                 # Move to MPS if needed
                 if device.type == "mps" and not torch.cuda.is_available():
                     model = model.cpu()  # GPTQ models may need CPU fallback on Mac
                     print("Note: GPTQ model loaded on CPU (MPS not fully supported)")
-                
+
                 tokenizer = AutoTokenizer.from_pretrained(str(path), use_fast=True)
                 if tokenizer.pad_token is None:
                     tokenizer.pad_token = tokenizer.eos_token
-                
+
                 self.model_cache[model_name] = model
                 self.tokenizers[model_name] = tokenizer
-                
+
                 config = self._load_config(path)
                 model_info = self._create_model_info(
                     model_name, path, ModelFormat.QUANTIZED, quant_type,
                     model, config
                 )
-                
+
                 self.loaded_models[model_name] = model_info
-                return True, f"GPTQ quantized model loaded successfully"
-                
+                return True, "GPTQ quantized model loaded successfully"
+
             except ImportError:
                 print("GPTQ library not available, trying alternative methods...")
             except Exception as e:
                 print(f"GPTQ loading failed: {str(e)[:100]}")
-        
+
         if quant_type == QuantizationType.AWQ:
             # Try AWQ loader
             try:
                 from awq import AutoAWQForCausalLM
-                
+
                 model = AutoAWQForCausalLM.from_quantized(
                     str(path),
                     fuse_layers=False,  # Disable for compatibility
                     trust_remote_code=True
                 )
-                
+
                 tokenizer = AutoTokenizer.from_pretrained(str(path), use_fast=True)
                 if tokenizer.pad_token is None:
                     tokenizer.pad_token = tokenizer.eos_token
-                
+
                 self.model_cache[model_name] = model
                 self.tokenizers[model_name] = tokenizer
-                
+
                 config = self._load_config(path)
                 model_info = self._create_model_info(
                     model_name, path, ModelFormat.QUANTIZED, quant_type,
                     model, config
                 )
-                
+
                 self.loaded_models[model_name] = model_info
-                return True, f"AWQ quantized model loaded successfully"
-                
+                return True, "AWQ quantized model loaded successfully"
+
             except ImportError:
                 print("AWQ library not available, trying alternative methods...")
             except Exception as e:
                 print(f"AWQ loading failed: {str(e)[:100]}")
-        
+
         # Try using accelerate for general quantized models
         try:
             from accelerate import init_empty_weights, load_checkpoint_and_dispatch
             from transformers import AutoConfig
-            
+
             print("Attempting to load with accelerate library...")
-            
+
             # Load config first
             config = AutoConfig.from_pretrained(str(path), trust_remote_code=True)
-            
+
             # Initialize model with empty weights
             with init_empty_weights():
                 model = AutoModelForCausalLM.from_config(
@@ -1349,21 +1367,22 @@ class ModelManager:
                     torch_dtype=torch.float16,
                     trust_remote_code=True
                 )
-            
+
             # Determine the checkpoint files
             checkpoint_files = list(path.glob("*.safetensors"))
             if not checkpoint_files:
                 checkpoint_files = list(path.glob("pytorch_model*.bin"))
-            
+
             if not checkpoint_files:
                 raise ValueError("No model files found")
-            
+
             # Create proper device map for MPS
+            device_map: Any
             if device.type == "mps":
                 device_map = {"": "cpu"}  # Load to CPU first for MPS compatibility
             else:
                 device_map = "auto"
-            
+
             # Load and dispatch to device
             model = load_checkpoint_and_dispatch(
                 model,
@@ -1372,36 +1391,36 @@ class ModelManager:
                 dtype=torch.float16,
                 offload_folder=str(self.config.model.model_cache_dir / "offload")
             )
-            
+
             # Move to MPS if needed
             if device.type == "mps" and device_map == {"": "cpu"}:
-                model = model.to(device)
-            
+                model = cast(Any, model).to(device)
+
             tokenizer = AutoTokenizer.from_pretrained(str(path))
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-            
+
             self.model_cache[model_name] = model
             self.tokenizers[model_name] = tokenizer
-            
+
             config_dict = self._load_config(path)
             model_info = self._create_model_info(
                 model_name, path, ModelFormat.QUANTIZED, quant_type,
                 model, config_dict
             )
-            
+
             self.loaded_models[model_name] = model_info
-            return True, f"Quantized model loaded with accelerate"
-            
+            return True, "Quantized model loaded with accelerate"
+
         except Exception as e:
             print(f"Accelerate loading failed: {str(e)[:100]}")
-        
+
         # Try bitsandbytes for 4-bit/8-bit models
         try:
             from transformers import BitsAndBytesConfig
-            
+
             print("Attempting to load with bitsandbytes quantization...")
-            
+
             bnb_config = BitsAndBytesConfig(
                 load_in_4bit=True if quant_type == QuantizationType.INT4 else False,
                 load_in_8bit=True if quant_type == QuantizationType.INT8 else False,
@@ -1409,7 +1428,7 @@ class ModelManager:
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_quant_type="nf4"
             )
-            
+
             model = AutoModelForCausalLM.from_pretrained(
                 str(path),
                 quantization_config=bnb_config,
@@ -1417,37 +1436,37 @@ class ModelManager:
                 trust_remote_code=True,
                 device_map="auto" if torch.cuda.is_available() else {"": device}
             )
-            
+
             tokenizer = AutoTokenizer.from_pretrained(str(path))
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-            
+
             self.model_cache[model_name] = model
             self.tokenizers[model_name] = tokenizer
-            
+
             config = self._load_config(path)
             model_info = self._create_model_info(
                 model_name, path, ModelFormat.QUANTIZED, quant_type,
                 model, config
             )
-            
+
             self.loaded_models[model_name] = model_info
-            return True, f"Quantized model loaded with bitsandbytes"
-            
+            return True, "Quantized model loaded with bitsandbytes"
+
         except Exception as e:
             print(f"Bitsandbytes loading failed: {str(e)[:100]}")
-        
+
         # If all methods fail, provide guidance
         return False, f"Failed to load {quant_type.value} quantized model. The model format may not be compatible with Apple Silicon."
-    
+
     def _load_config(self, path: Path) -> Dict[str, Any]:
         """Load config.json from model path."""
         config_path = path / 'config.json'
         if config_path.exists():
             with open(config_path) as f:
-                return json.load(f)
+                return cast(Dict[str, Any], json.load(f))
         return {}
-    
+
     def _create_model_info(
         self,
         model_name: str,
@@ -1459,17 +1478,17 @@ class ModelManager:
     ) -> ModelInfo:
         """Create ModelInfo object for a loaded model."""
         # Use smart parameter detection instead of loading model parameters
-        parameters = self.get_model_parameters_smart(path)
-        
+        parameters = int(self.get_model_parameters_smart(path) * 1e9)
+
         # Calculate memory usage
         if hasattr(model, 'parameters'):
             try:
                 memory_used = sum(p.element_size() * p.numel() for p in model.parameters())
-            except:
+            except Exception:
                 memory_used = self._get_model_size(path)
         else:
             memory_used = self._get_model_size(path)
-        
+
         return ModelInfo(
             name=model_name,
             path=path,
@@ -1483,20 +1502,20 @@ class ModelManager:
             tokenizer_path=path / 'tokenizer.json' if (path / 'tokenizer.json').exists() else None,
             config=config
         )
-    
+
     def _count_mlx_parameters(self, model: Any) -> int:
         """Count parameters in MLX model."""
         try:
             if hasattr(model, 'num_parameters'):
-                return model.num_parameters()
+                return int(cast(Any, model.num_parameters()))
             elif hasattr(model, 'parameters'):
                 params = model.parameters()
                 if isinstance(params, dict):
                     return sum(p.size for p in params.values())
             return 0
-        except:
+        except Exception:
             return 0
-    
+
     def _estimate_mlx_memory(self, model: Any) -> int:
         """Estimate memory usage of MLX model."""
         try:
@@ -1505,20 +1524,20 @@ class ModelManager:
                 if isinstance(params, dict):
                     return sum(p.nbytes if hasattr(p, 'nbytes') else 0 for p in params.values())
             return 0
-        except:
+        except Exception:
             return 0
-    
+
     def unload_model(self, model_name: str) -> Tuple[bool, str]:
         """Unload a model from memory."""
         if model_name not in self.loaded_models:
             return False, f"Model '{model_name}' not loaded"
-        
+
         try:
             # Special cleanup for GGUF models (llama-cpp-python)
             if model_name in self.model_cache:
                 model = self.model_cache[model_name]
                 model_info = self.loaded_models.get(model_name)
-                
+
                 # Clean up GGUF models properly to avoid memory leaks
                 if model_info and model_info.format == ModelFormat.GGUF:
                     try:
@@ -1529,21 +1548,21 @@ class ModelManager:
                         del model
                     except Exception as e:
                         print(f"Warning: Error closing GGUF model: {e}")
-                
+
                 # Remove from cache
                 del self.model_cache[model_name]
-            
+
             # Remove tokenizer
             if model_name in self.tokenizers:
                 del self.tokenizers[model_name]
-            
+
             # Remove model info
             del self.loaded_models[model_name]
-            
+
             # Update current model
             if self.current_model == model_name:
                 self.current_model = None
-            
+
             # Clear GPU cache
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1551,37 +1570,37 @@ class ModelManager:
                 # Clear MPS cache on Apple Silicon
                 try:
                     torch.mps.empty_cache()
-                except:
+                except Exception:
                     pass  # MPS cache clearing might not be available in all versions
-            
+
             # Force garbage collection for thorough cleanup
             import gc
             gc.collect()
-            
+
             return True, f"Model '{model_name}' unloaded"
-            
+
         except Exception as e:
             return False, f"Error unloading model: {str(e)}"
-    
+
     def list_models(self) -> List[Dict[str, Any]]:
         """List all loaded models."""
         return [model.to_dict() for model in self.loaded_models.values()]
-    
+
     def discover_available_models(self) -> List[Dict[str, Any]]:
         """Discover all available models including MLX converted ones."""
-        available = []
+        available: List[Dict[str, Any]] = []
         model_path = self.config.model.model_path.expanduser().resolve()
-        
+
         if not model_path.exists():
             return available
-        
+
         # Also check MLX models directory for fine-tuned models
         mlx_path = Path.home() / ".cortex" / "mlx_models"
-        
+
         # First, get all MLX converted models to check for optimized versions
         mlx_models = self.mlx_converter.list_converted_models()
         mlx_cache_map = {}  # Map original paths to MLX versions
-        
+
         # Build a map of original model paths to their MLX versions
         for name, info in mlx_models.items():
             # Extract original path from MLX model name
@@ -1594,7 +1613,7 @@ class ModelManager:
                     'quantization': info.get('quantization', 4),
                     'size_gb': info.get('size_gb', 0)
                 }
-        
+
         # Search for models in the models directory
         for item in model_path.iterdir():
             if item.is_file() and item.suffix == '.gguf':
@@ -1616,7 +1635,7 @@ class ModelManager:
                     # Check if this model has an MLX optimized version
                     full_path = str(item.resolve())
                     has_mlx = full_path in mlx_cache_map
-                    
+
                     if has_mlx:
                         # Use the MLX version's info
                         mlx_info = mlx_cache_map[full_path]
@@ -1638,7 +1657,7 @@ class ModelManager:
                         format_str = format_info['format'].value.upper()
                         if format_info['quantization'] != QuantizationType.NONE:
                             format_str = f"{format_str} ({format_info['quantization'].value})"
-                        
+
                         available.append({
                             'name': item.name,
                             'path': str(item),
@@ -1651,7 +1670,7 @@ class ModelManager:
                                 ModelFormat.PYTORCH
                             ]
                         })
-        
+
         # Add fine-tuned models from MLX directory that aren't already included
         if mlx_path.exists():
             for item in mlx_path.iterdir():
@@ -1662,7 +1681,7 @@ class ModelManager:
                         already_added = any(model['name'] == item.name for model in available)
                         if not already_added:
                             size_gb = self._get_model_size(item) / (1024**3)
-                            
+
                             # Read metadata from marker file
                             base_model = "Unknown"
                             try:
@@ -1672,9 +1691,9 @@ class ModelManager:
                                         if 'LoRA fine-tuned version of' in line:
                                             base_model = line.split('LoRA fine-tuned version of ')[-1].strip()
                                             break
-                            except:
+                            except Exception:
                                 pass
-                            
+
                             available.append({
                                 'name': item.name,
                                 'path': str(item),
@@ -1686,43 +1705,43 @@ class ModelManager:
                                 'base_model': base_model,
                                 'fine_tuning_method': 'LoRA'
                             })
-        
+
         # Sort by name
-        available.sort(key=lambda x: x['name'].lower())
+        available.sort(key=lambda x: str(x.get('name', '')).lower())
         return available
-    
+
     def get_current_model(self) -> Optional[ModelInfo]:
         """Get currently active model."""
         if self.current_model:
             return self.loaded_models.get(self.current_model)
         return None
-    
+
     def switch_model(self, model_name: str) -> Tuple[bool, str]:
         """Switch to a different loaded model."""
         if model_name not in self.loaded_models:
             return False, f"Model '{model_name}' not loaded"
-        
+
         self.current_model = model_name
         return True, f"Switched to model '{model_name}'"
-    
+
     def get_memory_status(self) -> Dict[str, Any]:
         """Get GPU memory status with MLX details."""
         status = self.gpu_validator.get_gpu_memory_status()
-        
+
         total_model_memory = sum(
             model.gpu_memory_used for model in self.loaded_models.values()
         )
-        
+
         status['models_loaded'] = len(self.loaded_models)
         status['model_memory_gb'] = total_model_memory / (1024**3)
         status['current_model'] = self.current_model
-        
+
         # Add MLX-specific info
         mlx_models = [m for m in self.loaded_models.values() if m.format == ModelFormat.MLX]
         if mlx_models:
             status['mlx_models'] = len(mlx_models)
             status['mlx_memory_gb'] = sum(m.gpu_memory_used for m in mlx_models) / (1024**3)
-        
+
         if self.memory_pool:
             pool_stats = self.memory_pool.get_stats()
             status['memory_pool'] = {
@@ -1732,7 +1751,7 @@ class ModelManager:
                 'total_blocks': pool_stats['total_blocks'],
                 'zero_copy_enabled': pool_stats.get('zero_copy', False)
             }
-        
+
         # Add MLX accelerator status
         if self.mlx_accelerator:
             status['mlx_acceleration'] = {
@@ -1741,16 +1760,16 @@ class ModelManager:
                 'kv_cache_size': self.mlx_accelerator.config.kv_cache_size,
                 'quantization_bits': self.mlx_accelerator.config.quantization_bits
             }
-        
+
         return status
-    
+
     def detect_model_parameters(self, model_path: Path) -> Optional[int]:
         """
         Detect the actual number of parameters in a model.
-        
+
         Uses proper parameter counting that handles quantization, LoRA adapters,
         and non-weight files correctly.
-        
+
         Returns:
             Number of parameters, or None if detection fails
         """
@@ -1761,69 +1780,70 @@ class ModelManager:
             if cached_result is not None:
                 logger.debug(f"Using cached parameter count: {cached_result:,}")
                 return cached_result
-            
+
             # Detect model format and apply appropriate detection method
             format_info = self._detect_format(model_path)
             param_count = None
-            
+
             if format_info['format'] == ModelFormat.SAFETENSORS:
                 param_count = self._detect_safetensors_parameters(model_path)
             elif format_info['format'] == ModelFormat.MLX:
                 param_count = self._detect_mlx_parameters(model_path)
             elif format_info['format'] == ModelFormat.PYTORCH:
                 param_count = self._detect_pytorch_parameters(model_path)
-            
+
             # Fallback to config.json analysis
             if param_count is None:
                 param_count = self._detect_config_parameters(model_path)
-            
+
             # Cache the result if successful
             if param_count is not None:
                 self._cache_parameter_count(cache_key, param_count)
                 logger.info(f"Detected {param_count:,} parameters in {model_path.name}")
             else:
                 logger.warning(f"Could not detect parameters for {model_path.name}")
-            
+
             return param_count
-            
+
         except Exception as e:
             logger.warning(f"Parameter detection failed for {model_path}: {e}")
             return None
-    
+
     def _get_cached_parameter_count(self, cache_key: str) -> Optional[int]:
         """Get cached parameter count."""
         cache_file = self.config.model.model_cache_dir / "parameter_counts.json"
         if not cache_file.exists():
             return None
-        
+
         try:
             with open(cache_file, 'r') as f:
-                cache = json.load(f)
-            return cache.get(cache_key)
-        except:
+                cache = cast(Dict[str, Any], json.load(f))
+            cached_value = cache.get(cache_key)
+            return int(cached_value) if isinstance(cached_value, (int, float)) else None
+        except Exception:
             return None
-    
+
     def _cache_parameter_count(self, cache_key: str, param_count: int) -> None:
         """Cache parameter count for faster future lookups."""
         cache_file = self.config.model.model_cache_dir / "parameter_counts.json"
-        
+
         # Load existing cache
         cache = {}
         if cache_file.exists():
             try:
                 with open(cache_file, 'r') as f:
                     cache = json.load(f)
-            except:
+            except Exception:
                 pass
-        
+
         # Update cache
         cache[cache_key] = param_count
-        
+
         # Keep only recent entries (last 100)
         if len(cache) > 100:
             sorted_items = sorted(cache.items(), key=lambda x: x[0])[-100:]
             cache = dict(sorted_items)
-        
+
         # Save cache
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1831,21 +1851,21 @@ class ModelManager:
                 json.dump(cache, f)
         except Exception as e:
             logger.warning(f"Failed to cache parameter count: {e}")
-    
+
     def _detect_safetensors_parameters(self, model_path: Path) -> Optional[int]:
         """Detect parameters by reading SafeTensors headers."""
         try:
             safetensor_files = list(model_path.glob("*.safetensors"))
             if not safetensor_files:
                 return None
-            
+
             total_params = 0
-            
+
             for st_file in safetensor_files:
                 # Skip adapter files for base model parameter counting
                 if "adapter" in st_file.name.lower():
                     continue
-                    
+
                 # Read SafeTensors header to get tensor shapes without loading weights
                 params = self._read_safetensors_header(st_file)
                 if params is not None:
@@ -1853,13 +1873,13 @@ class ModelManager:
                 else:
                     logger.warning(f"Could not read SafeTensors header from {st_file.name}")
                     return None
-            
+
             return total_params if total_params > 0 else None
-            
+
         except Exception as e:
             logger.warning(f"SafeTensors parameter detection failed: {e}")
             return None
-    
+
     def _read_safetensors_header(self, file_path: Path) -> Optional[int]:
         """Read parameter count from SafeTensors file header without loading the full file."""
         try:
@@ -1868,19 +1888,19 @@ class ModelManager:
                 header_size_bytes = f.read(8)
                 if len(header_size_bytes) < 8:
                     return None
-                
+
                 header_size = struct.unpack('<Q', header_size_bytes)[0]
-                
+
                 # Read the header JSON
                 header_json = f.read(header_size).decode('utf-8')
                 header = json.loads(header_json)
-                
+
                 # Count parameters from tensor shapes
                 total_params = 0
                 for tensor_name, tensor_info in header.items():
                     if tensor_name == "__metadata__":
                         continue
-                    
+
                     # Skip non-parameter tensors (buffers, etc.)
                     if self._is_parameter_tensor(tensor_name):
                         shape = tensor_info.get('shape', [])
@@ -1889,13 +1909,13 @@ class ModelManager:
                             for dim in shape:
                                 tensor_params *= dim
                             total_params += tensor_params
-                
+
                 return total_params
-                
+
         except Exception as e:
             logger.debug(f"Failed to read SafeTensors header from {file_path}: {e}")
             return None
-    
+
     def _is_parameter_tensor(self, tensor_name: str) -> bool:
         """Check if a tensor name represents a model parameter (not a buffer)."""
         # Common parameter patterns
@@ -1905,28 +1925,28 @@ class ModelManager:
             'gate_proj', 'up_proj', 'down_proj',
             'fc1', 'fc2', 'mlp', 'attention'
         ]
-        
+
         # Common non-parameter patterns (buffers)
         non_param_patterns = [
             'position_ids', 'attention_mask', 'token_type_ids',
             'freqs_cos', 'freqs_sin', 'inv_freq'
         ]
-        
+
         tensor_lower = tensor_name.lower()
-        
+
         # Check non-parameter patterns first
         for pattern in non_param_patterns:
             if pattern in tensor_lower:
                 return False
-        
+
         # Check parameter patterns
         for pattern in param_patterns:
             if pattern in tensor_lower:
                 return True
-        
+
         # Default: assume it's a parameter if it contains common layer indicators
         return any(indicator in tensor_lower for indicator in ['layer', 'block', 'transformer'])
-    
+
     def _detect_mlx_parameters(self, model_path: Path) -> Optional[int]:
         """Detect parameters in MLX models by inspecting weights.npz or using config."""
         try:
@@ -1934,57 +1954,57 @@ class ModelManager:
             weights_file = model_path / "weights.npz"
             if weights_file.exists():
                 import numpy as np
-                
+
                 # Load the weights file
                 weights = np.load(weights_file)
                 total_params = 0
-                
+
                 for array_name in weights.files:
                     if self._is_parameter_tensor(array_name):
                         array = weights[array_name]
                         total_params += array.size
-                
+
                 return total_params if total_params > 0 else None
-            
+
             # Fallback to checking for SafeTensors in MLX directory
             safetensor_files = list(model_path.glob("*.safetensors"))
             if safetensor_files:
                 return self._detect_safetensors_parameters(model_path)
-            
+
             return None
-            
+
         except Exception as e:
             logger.warning(f"MLX parameter detection failed: {e}")
             return None
-    
+
     def _detect_pytorch_parameters(self, model_path: Path) -> Optional[int]:
         """Detect parameters in PyTorch models."""
         try:
             # For PyTorch models, we need to load the config to get architecture info
             # as loading the full model would be too expensive
             return self._detect_config_parameters(model_path)
-            
+
         except Exception as e:
             logger.warning(f"PyTorch parameter detection failed: {e}")
             return None
-    
+
     def _detect_config_parameters(self, model_path: Path) -> Optional[int]:
         """Detect parameters by analyzing config.json and calculating from architecture."""
         try:
             config_path = model_path / "config.json"
             if not config_path.exists():
                 return None
-            
+
             with open(config_path, 'r') as f:
                 config = json.load(f)
-            
+
             # Check for directly specified parameter count
             if 'num_parameters' in config:
                 return int(config['num_parameters'])
-            
+
             # Calculate from architecture parameters
             model_type = config.get('model_type', '').lower()
-            
+
             if model_type in ['llama', 'gemma', 'mistral', 'qwen']:
                 return self._calculate_llama_parameters(config)
             elif model_type in ['gpt', 'gpt2', 'gpt_neo', 'gpt_neox']:
@@ -1994,238 +2014,239 @@ class ModelManager:
             else:
                 # Generic calculation for transformer models
                 return self._calculate_generic_transformer_parameters(config)
-                
+
         except Exception as e:
             logger.warning(f"Config parameter detection failed: {e}")
             return None
-    
-    def _calculate_llama_parameters(self, config: Dict) -> Optional[int]:
+
+    def _calculate_llama_parameters(self, config: Dict[str, Any]) -> Optional[int]:
         """Calculate parameters for Llama-style models (including Gemma)."""
         try:
-            vocab_size = config.get('vocab_size', 32000)
-            hidden_size = config.get('hidden_size', 4096)
-            intermediate_size = config.get('intermediate_size', 11008)
-            num_layers = config.get('num_hidden_layers', 32)
-            num_attention_heads = config.get('num_attention_heads', 32)
-            
+            vocab_size = int(config.get('vocab_size', 32000))
+            hidden_size = int(config.get('hidden_size', 4096))
+            intermediate_size = int(config.get('intermediate_size', 11008))
+            num_layers = int(config.get('num_hidden_layers', 32))
+            num_attention_heads = int(config.get('num_attention_heads', 32))
+
             # Check if this is a Gemma model for special handling
             is_gemma = config.get('model_type', '').lower() == 'gemma'
-            
+
             # Embedding layer
             embedding_params = vocab_size * hidden_size
-            
+
             # Each transformer layer:
             if is_gemma:
                 # Gemma uses grouped query attention with fewer k/v heads
-                num_key_value_heads = config.get('num_key_value_heads', num_attention_heads // 4)
+                num_key_value_heads = int(config.get('num_key_value_heads', num_attention_heads // 4))
                 head_dim = hidden_size // num_attention_heads
-                
+
                 # Attention projections
                 q_proj_params = hidden_size * hidden_size  # Full size
                 k_proj_params = hidden_size * (num_key_value_heads * head_dim)  # Reduced
                 v_proj_params = hidden_size * (num_key_value_heads * head_dim)  # Reduced
                 o_proj_params = hidden_size * hidden_size  # Full size
-                
+
                 attention_params = q_proj_params + k_proj_params + v_proj_params + o_proj_params
             else:
                 # Standard Llama: q, k, v, o projections all full size
                 attention_params = 4 * (hidden_size * hidden_size)
-            
+
             # Feed-forward: gate_proj, up_proj, down_proj
             ff_params = 2 * (hidden_size * intermediate_size) + (intermediate_size * hidden_size)
-            
+
             # Layer norms (2 per layer)
             ln_params = 2 * hidden_size
-            
+
             layer_params = attention_params + ff_params + ln_params
             transformer_params = num_layers * layer_params
-            
+
             # Final layer norm
             final_ln_params = hidden_size
-            
+
             # LM head - check if tied to embeddings (common in smaller models)
             tie_word_embeddings = config.get('tie_word_embeddings', True)  # Default True for most models
             if tie_word_embeddings:
                 lm_head_params = 0  # Tied to embeddings, don't double count
             else:
                 lm_head_params = vocab_size * hidden_size
-            
+
             total = embedding_params + transformer_params + final_ln_params + lm_head_params
-            
-            return total
-            
+
+            return int(total)
+
         except Exception as e:
             logger.warning(f"Llama parameter calculation failed: {e}")
             return None
-    
-    def _calculate_gpt_parameters(self, config: Dict) -> Optional[int]:
+
+    def _calculate_gpt_parameters(self, config: Dict[str, Any]) -> Optional[int]:
         """Calculate parameters for GPT-style models."""
         try:
-            vocab_size = config.get('vocab_size', 50257)
-            n_embd = config.get('n_embd', config.get('hidden_size', 768))
-            n_layer = config.get('n_layer', config.get('num_hidden_layers', 12))
-            n_head = config.get('n_head', config.get('num_attention_heads', 12))
-            
+            vocab_size = int(config.get('vocab_size', 50257))
+            n_embd = int(config.get('n_embd', config.get('hidden_size', 768)))
+            n_layer = int(config.get('n_layer', config.get('num_hidden_layers', 12)))
+
             # Token + position embeddings
-            max_position_embeddings = config.get('n_positions', config.get('max_position_embeddings', 1024))
+            max_position_embeddings = int(config.get('n_positions', config.get('max_position_embeddings', 1024)))
             embedding_params = vocab_size * n_embd + max_position_embeddings * n_embd
-            
+
             # Each transformer block
             # - Attention: qkv projection + output projection
             attention_params = 4 * (n_embd * n_embd)
-            
+
             # - MLP: typically 4x expansion
-            mlp_size = config.get('n_inner', 4 * n_embd)
+            mlp_size = int(config.get('n_inner', 4 * n_embd))
             mlp_params = n_embd * mlp_size + mlp_size * n_embd
-            
+
             # - Layer norms
             ln_params = 2 * n_embd
-            
+
             block_params = attention_params + mlp_params + ln_params
             transformer_params = n_layer * block_params
-            
+
             # Final layer norm + LM head
             final_ln_params = n_embd
             lm_head_params = vocab_size * n_embd
-            
+
             total = embedding_params + transformer_params + final_ln_params + lm_head_params
-            
-            return total
-            
+
+            return int(total)
+
         except Exception as e:
             logger.warning(f"GPT parameter calculation failed: {e}")
             return None
-    
-    def _calculate_bert_parameters(self, config: Dict) -> Optional[int]:
+
+    def _calculate_bert_parameters(self, config: Dict[str, Any]) -> Optional[int]:
         """Calculate parameters for BERT-style models."""
         try:
-            vocab_size = config.get('vocab_size', 30522)
-            hidden_size = config.get('hidden_size', 768)
-            num_hidden_layers = config.get('num_hidden_layers', 12)
-            intermediate_size = config.get('intermediate_size', 3072)
-            max_position_embeddings = config.get('max_position_embeddings', 512)
-            type_vocab_size = config.get('type_vocab_size', 2)
-            
+            vocab_size = int(config.get('vocab_size', 30522))
+            hidden_size = int(config.get('hidden_size', 768))
+            num_hidden_layers = int(config.get('num_hidden_layers', 12))
+            intermediate_size = int(config.get('intermediate_size', 3072))
+            max_position_embeddings = int(config.get('max_position_embeddings', 512))
+            type_vocab_size = int(config.get('type_vocab_size', 2))
+
             # Embeddings: token + position + token_type
-            embedding_params = (vocab_size * hidden_size + 
-                              max_position_embeddings * hidden_size + 
+            embedding_params = (vocab_size * hidden_size +
+                              max_position_embeddings * hidden_size +
                               type_vocab_size * hidden_size)
-            
+
             # Each encoder layer
             # - Self-attention
             attention_params = 4 * (hidden_size * hidden_size)
-            
+
             # - Feed-forward
             ff_params = hidden_size * intermediate_size + intermediate_size * hidden_size
-            
+
             # - Layer norms
             ln_params = 2 * hidden_size
-            
+
             layer_params = attention_params + ff_params + ln_params
             encoder_params = num_hidden_layers * layer_params
-            
+
             # Pooler (optional)
             pooler_params = hidden_size * hidden_size
-            
+
             total = embedding_params + encoder_params + pooler_params
-            
-            return total
-            
+
+            return int(total)
+
         except Exception as e:
             logger.warning(f"BERT parameter calculation failed: {e}")
             return None
-    
-    def _calculate_generic_transformer_parameters(self, config: Dict) -> Optional[int]:
+
+    def _calculate_generic_transformer_parameters(self, config: Dict[str, Any]) -> Optional[int]:
         """Generic parameter calculation for transformer models."""
         try:
             # Try to extract common parameters
-            vocab_size = config.get('vocab_size', 32000)
+            vocab_size = int(config.get('vocab_size', 32000))
             hidden_size = config.get('hidden_size', config.get('n_embd', config.get('d_model', 512)))
             num_layers = config.get('num_hidden_layers', config.get('n_layer', config.get('num_layers', 6)))
-            
+
             if hidden_size is None or num_layers is None:
                 return None
-            
+            hidden_size = int(hidden_size)
+            num_layers = int(num_layers)
+
             # Very rough estimation for generic transformers
             # Embeddings + layers + head
             embedding_params = vocab_size * hidden_size
-            
+
             # Each layer: attention + ffn + norms (rough 6x hidden_size^2 per layer)
             layer_params = 6 * (hidden_size * hidden_size)
             transformer_params = num_layers * layer_params
-            
+
             # Output head
             head_params = vocab_size * hidden_size
-            
+
             total = embedding_params + transformer_params + head_params
-            
+
             logger.info(f"Generic parameter estimation: {total:,} parameters")
-            return total
-            
+            return int(total)
+
         except Exception as e:
             logger.warning(f"Generic parameter calculation failed: {e}")
             return None
-    
+
     def get_model_parameters_smart(self, model_path: Path) -> float:
         """Get model parameters in billions with smart detection, fallback to size estimation."""
         # Try accurate parameter detection first
         param_count = self.detect_model_parameters(model_path)
-        
+
         if param_count is not None:
             return param_count / 1e9  # Convert to billions
-        
+
         # Fallback to improved size-based estimation
         logger.warning(f"Falling back to size-based parameter estimation for {model_path.name}")
-        
+
         size_bytes = self._get_model_size(model_path)
         size_gb = size_bytes / (1024**3)
-        
+
         # Improved estimation that considers file overhead
         # Only count actual weight files, not tokenizer configs etc.
         weight_size = self._estimate_weight_file_size(model_path)
         weight_size_gb = weight_size / (1024**3)
-        
+
         # Use weight size if significantly different from total size
         if weight_size_gb < size_gb * 0.8:  # If weight files are <80% of total
             size_gb = weight_size_gb
             logger.info(f"Using weight-only size: {size_gb:.2f}GB (total: {size_bytes / (1024**3):.2f}GB)")
-        
+
         # Better default estimation: 2.2 bytes per parameter (accounts for some overhead)
         estimated_params_b = size_gb / 2.2  # Already in billions
-        
+
         logger.info(f"Estimated {estimated_params_b:.2f}B parameters from {size_gb:.2f}GB model size")
         return estimated_params_b
-    
+
     def _estimate_weight_file_size(self, model_path: Path) -> int:
         """Estimate size of actual weight files, excluding configs and tokenizers."""
         if model_path.is_file():
             return model_path.stat().st_size
-        
+
         weight_patterns = [
             '*.safetensors', '*.bin', '*.npz',
             'pytorch_model*.bin', 'model*.safetensors'
         ]
-        
+
         non_weight_patterns = [
             'tokenizer*', 'vocab*', 'merges.txt', 'config.json',
             'generation_config.json', 'special_tokens_map.json',
             'tokenizer_config.json', 'added_tokens.json'
         ]
-        
+
         total_weight_size = 0
-        
+
         for file_path in model_path.rglob('*'):
             if file_path.is_file():
                 # Check if it matches weight patterns
                 is_weight = any(file_path.match(pattern) for pattern in weight_patterns)
-                
+
                 # Exclude non-weight files
                 is_non_weight = any(file_path.match(pattern) for pattern in non_weight_patterns)
-                
+
                 if is_weight and not is_non_weight:
                     total_weight_size += file_path.stat().st_size
                 elif not is_non_weight and file_path.suffix in ['.safetensors', '.bin', '.npz']:
                     # Include other tensor files that don't match specific patterns
                     total_weight_size += file_path.stat().st_size
-        
+
         return total_weight_size

@@ -5,10 +5,10 @@ This script validates that Cortex runs computations on GPU
 using MLX and MPS backends.
 """
 
-import sys
-import time
 import platform
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 # Add parent directory to path
@@ -33,7 +33,7 @@ def verify_mps_gpu_acceleration():
         cpu_tensor = torch.randn(size)
         mps_tensor = torch.randn(size, device="mps")
 
-        print(f"✅ Created tensor on MPS device")
+        print("✅ Created tensor on MPS device")
         print(f"   Tensor device: {mps_tensor.device}")
         print(f"   Tensor shape: {mps_tensor.shape}")
 
@@ -52,7 +52,7 @@ def verify_mps_gpu_acceleration():
 
         speedup = cpu_time / mps_time
 
-        print(f"\n📊 Performance Comparison:")
+        print("\n📊 Performance Comparison:")
         print(f"   CPU time: {cpu_time:.3f}s")
         print(f"   MPS time: {mps_time:.3f}s")
         print(f"   Speedup: {speedup:.2f}x")
@@ -94,7 +94,7 @@ def verify_mlx_gpu_acceleration():
         a = mx.random.normal(size)
         b = mx.random.normal(size)
 
-        print(f"✅ Created arrays on MLX device")
+        print("✅ Created arrays on MLX device")
         print(f"   Array shape: {a.shape}")
         print(f"   Array dtype: {a.dtype}")
 
@@ -114,7 +114,7 @@ def verify_mlx_gpu_acceleration():
         ops = 2 * size[0] * size[1] * size[1] * 100  # 2*M*N*K for matmul
         gflops = ops / mlx_time / 1e9
 
-        print(f"\n📊 MLX Performance:")
+        print("\n📊 MLX Performance:")
         print(f"   Time for 100 matmuls: {mlx_time:.3f}s")
         print(f"   Performance: {gflops:.2f} GFLOPS")
 
@@ -141,7 +141,7 @@ def verify_metal_optimizer():
     print("="*60)
 
     try:
-        from cortex.metal.optimizer import MetalOptimizer, OptimizationConfig, Backend
+        from cortex.metal.optimizer import Backend, MetalOptimizer, OptimizationConfig
 
         # Create optimizer
         config = OptimizationConfig(
@@ -152,13 +152,12 @@ def verify_metal_optimizer():
 
         optimizer = MetalOptimizer(config)
 
-        print(f"✅ MetalOptimizer initialized")
+        print("✅ MetalOptimizer initialized")
         print(f"   Backend: {optimizer.backend.value}")
         print(f"   Device: {optimizer.device}")
         print(f"   GPU Family: {optimizer.gpu_validator.get_gpu_family()}")
 
         # Create and optimize a model
-        import torch
         import torch.nn as nn
 
         class TestModel(nn.Module):
@@ -176,7 +175,7 @@ def verify_metal_optimizer():
         model = TestModel()
         optimized_model, info = optimizer.optimize_model(model)
 
-        print(f"\n✅ Model optimized")
+        print("\n✅ Model optimized")
         print(f"   Optimizations: {', '.join(info['optimizations_applied'])}")
 
         # Profile performance
@@ -187,7 +186,7 @@ def verify_metal_optimizer():
             num_iterations=50
         )
 
-        print(f"\n📊 Performance Profile:")
+        print("\n📊 Performance Profile:")
         print(f"   Backend: {profile['backend']}")
         print(f"   Avg inference time: {profile['avg_inference_time']*1000:.2f}ms")
         print(f"   Throughput: {profile['throughput']:.2f} samples/sec")
@@ -238,7 +237,7 @@ def check_gpu_activity():
                 if "GPUConfigurationVariable" in line:
                     print(f"   {line.strip()}")
                 elif "MetalPlugin" in line:
-                    print(f"   Metal Plugin: Active")
+                    print("   Metal Plugin: Active")
 
         # Check if Metal compiler is available
         result = subprocess.run(

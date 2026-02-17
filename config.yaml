@@ -44,6 +44,17 @@ supported_quantizations:
 - Q8_0
 auto_quantize: true
 quantization_cache: ~/.cortex/quantized_models
+cloud_enabled: true
+cloud_timeout_seconds: 60
+cloud_max_retries: 2
+cloud_default_openai_model: gpt-5.1
+cloud_default_anthropic_model: claude-sonnet-4-5
+tools_enabled: false
+tools_profile: off
+tools_local_mode: disabled
+tools_max_iterations: 4
+tools_idle_timeout_seconds: 45
+tools_continue_on_reject: false
 ui_theme: default
 syntax_highlighting: true
 markdown_rendering: true

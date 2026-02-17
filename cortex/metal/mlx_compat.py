@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import contextlib
-from typing import Optional, List, Any
+from typing import Any, List, Optional
 
 
-def _get_device_info(mx) -> dict:
+def _get_device_info(mx: Any) -> dict[str, Any]:
     try:
-        return mx.device_info()
+        info = mx.device_info()
+        return info if isinstance(info, dict) else {}
     except Exception:
         return {}
 
@@ -39,13 +40,17 @@ def patch_mlx_lm_device_info() -> None:
 
     patch_mlx_device_info()
 
+    mlx_generate: Any | None
     try:
-        import mlx_lm.generate as mlx_generate
+        import mlx_lm.generate as _mlx_generate
+        mlx_generate = _mlx_generate
     except Exception:
         mlx_generate = None
 
+    mlx_server: Any | None
     try:
-        import mlx_lm.server as mlx_server
+        import mlx_lm.server as _mlx_server
+        mlx_server = _mlx_server
     except Exception:
         mlx_server = None
 
@@ -90,8 +95,8 @@ def patch_mlx_lm_device_info() -> None:
                 if old_limit is not None:
                     mx.set_wired_limit(old_limit)
 
-        mlx_generate.wired_limit = wired_limit
-        mlx_generate.__cortex_patched__ = True
+        setattr(mlx_generate, "wired_limit", wired_limit)
+        setattr(mlx_generate, "__cortex_patched__", True)
 
     if mlx_server is not None and getattr(mlx_server, "__cortex_patched__", False) is False:
         def get_system_fingerprint():
@@ -99,7 +104,9 @@ def patch_mlx_lm_device_info() -> None:
             if mx.metal.is_available():
                 info = _get_device_info(mx)
                 gpu_arch = info.get("architecture", "") if isinstance(info, dict) else ""
-            return f"{mlx_server.__version__}-{mx.__version__}-{mlx_server.platform.platform()}-{gpu_arch}"
+            mlx_server_version = getattr(mlx_server, "__version__", "unknown")
+            mx_version = getattr(mx, "__version__", "unknown")
+            return f"{mlx_server_version}-{mx_version}-{mlx_server.platform.platform()}-{gpu_arch}"
 
-        mlx_server.get_system_fingerprint = get_system_fingerprint
-        mlx_server.__cortex_patched__ = True
+        setattr(mlx_server, "get_system_fingerprint", get_system_fingerprint)
+        setattr(mlx_server, "__cortex_patched__", True)

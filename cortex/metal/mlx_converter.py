@@ -1,27 +1,32 @@
 """MLX model converter for optimal Apple Silicon performance."""
 
+import hashlib
 import json
 import logging
-from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, Callable, Union
+import time
 from dataclasses import dataclass
 from enum import Enum
-import hashlib
-import time
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Tuple, Union, cast
 
 import mlx.core as mx
 import mlx.nn as nn
-from mlx.utils import tree_map_with_path
 from huggingface_hub import snapshot_download
+from mlx.utils import tree_map_with_path
 
 # Configure logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Import MLX LM functions safely
+load: Optional[Callable[..., Tuple[nn.Module, Any]]]
+mlx_utils: Optional[Any]
 try:
-    from mlx_lm import load
-    from mlx_lm import utils as mlx_utils
+    from mlx_lm import load as mlx_load
+    from mlx_lm import utils as mlx_utils_module
+
+    load = mlx_load
+    mlx_utils = mlx_utils_module
 except ImportError:
     load = None
     mlx_utils = None
@@ -59,7 +64,7 @@ class ConversionConfig:
 
 class MLXConverter:
     """Convert models to MLX format with optimal quantization."""
-    
+
     def __init__(self, cache_dir: Optional[Path] = None):
         """Initialize MLX converter."""
         self.cache_dir = cache_dir or Path.home() / ".cortex" / "mlx_models"
@@ -67,7 +72,7 @@ class MLXConverter:
         self.conversion_cache = self.cache_dir / "conversion_cache.json"
         self._load_conversion_cache()
         self._warned_mlx_lm_compat = False
-        
+
         logger.info(f"MLX Converter initialized with cache dir: {self.cache_dir}")
         logger.info(f"MLX LM available: {mlx_utils is not None and load is not None}")
 
@@ -82,7 +87,7 @@ class MLXConverter:
         )
         logger.warning(message)
         print(message)
-    
+
     def _load_conversion_cache(self) -> None:
         """Load conversion cache metadata."""
         if self.conversion_cache.exists():
@@ -90,12 +95,12 @@ class MLXConverter:
                 self.cache_metadata = json.load(f)
         else:
             self.cache_metadata = {}
-    
+
     def _save_conversion_cache(self) -> None:
         """Save conversion cache metadata."""
         with open(self.conversion_cache, 'w') as f:
             json.dump(self.cache_metadata, f, indent=2)
-    
+
     def convert_model(
         self,
         source_path: str,
@@ -104,17 +109,17 @@ class MLXConverter:
     ) -> Tuple[bool, str, Optional[Path]]:
         """
         Convert a model to MLX format with optimal settings.
-        
+
         Args:
             source_path: Path to source model (HF repo ID or local path)
             output_name: Name for converted model
             config: Conversion configuration
-            
+
         Returns:
             Tuple of (success, message, output_path)
         """
         config = config or ConversionConfig()
-        
+
         # Generate output name if not provided
         if not output_name:
             if "/" in source_path and not source_path.startswith("/"):
@@ -123,11 +128,11 @@ class MLXConverter:
             else:
                 # Local path - use just the model directory name
                 output_name = Path(source_path).name
-        
+
         # Add quantization suffix
         if config.quantization != QuantizationRecipe.NONE:
             output_name = f"{output_name}_{config.quantization.value}"
-        
+
         output_path = self.cache_dir / output_name
         source_ref = self._get_source_ref(source_path)
 
@@ -159,10 +164,10 @@ class MLXConverter:
                 f"Output path already exists but does not match requested conversion: {reason}. "
                 f"Please delete {output_path} or choose a different output name."
             ), None
-        
+
         logger.info(f"Starting MLX conversion for {source_path}")
         logger.info(f"Config: quantization={config.quantization.value}, AMX={config.use_amx}, compile={config.compile_model}")
-        
+
         try:
             # Download if HuggingFace repo
             if "/" in source_path and not Path(source_path).exists():
@@ -173,7 +178,7 @@ class MLXConverter:
             else:
                 local_path = Path(source_path)
                 logger.info(f"Using local model at: {local_path}")
-            
+
             # Detect format and convert
             if config.source_format == ConversionFormat.GGUF:
                 success, msg, converted_path = self._convert_gguf(
@@ -183,8 +188,10 @@ class MLXConverter:
                 success, msg, converted_path = self._convert_transformers(
                     local_path, output_path, config
                 )
-            
+
             if success:
+                if converted_path is None:
+                    return False, "Conversion reported success without an output path", None
                 # Update cache
                 self.cache_metadata[cache_key] = {
                     "output_path": str(converted_path),
@@ -199,30 +206,30 @@ class MLXConverter:
                 logger.info(f"Conversion successful, cached at: {converted_path}")
             else:
                 logger.error(f"Conversion failed: {msg}")
-            
+
             return success, msg, converted_path
-            
+
         except Exception as e:
             logger.error(f"Conversion failed with exception: {str(e)}")
             return False, f"Conversion failed: {str(e)}", None
-    
+
     def _download_from_hub(self, repo_id: str) -> Path:
         """Download model from HuggingFace Hub."""
         download_dir = self.cache_dir / "downloads" / repo_id.replace("/", "_")
-        
+
         if not download_dir.exists():
             snapshot_download(
                 repo_id=repo_id,
                 local_dir=download_dir,
                 local_dir_use_symlinks=False
             )
-        
+
         return download_dir
 
     def _mlx_get_model_path(self, source_path: Path) -> Tuple[Path, Optional[str]]:
         """Resolve model path with MLX LM compatibility fallbacks."""
         if mlx_utils is not None and hasattr(mlx_utils, "get_model_path"):
-            return mlx_utils.get_model_path(str(source_path))
+            return cast(Tuple[Path, Optional[str]], mlx_utils.get_model_path(str(source_path)))
         self._warn_mlx_lm_compat("get_model_path")
 
         # Fallback: local path or direct HF download.
@@ -269,11 +276,12 @@ class MLXConverter:
     ) -> Tuple[Any, Dict[str, Any], Any]:
         """Fetch model/config/tokenizer with MLX LM compatibility fallbacks."""
         if mlx_utils is not None and hasattr(mlx_utils, "fetch_from_hub"):
-            return mlx_utils.fetch_from_hub(
+            fetched = mlx_utils.fetch_from_hub(
                 model_path,
                 lazy=True,
                 trust_remote_code=trust_remote_code
             )
+            return cast(Tuple[Any, Dict[str, Any], Any], fetched)
         self._warn_mlx_lm_compat("fetch_from_hub")
 
         if mlx_utils is not None and hasattr(mlx_utils, "load_model") and hasattr(mlx_utils, "load_tokenizer"):
@@ -444,19 +452,19 @@ class MLXConverter:
             return False, "invalid quantization config format"
 
         return True, "valid quantized model"
-    
+
     def _convert_transformers(
         self,
         source_path: Path,
         output_path: Path,
         config: ConversionConfig
-    ) -> Tuple[bool, str, Path]:
+    ) -> Tuple[bool, str, Optional[Path]]:
         """Convert Transformers/SafeTensors model to MLX."""
         try:
             if mlx_utils is None:
                 logger.warning("MLX LM library not available for conversion")
                 return False, "MLX LM library not available for conversion", None
-                
+
             logger.info(f"Converting {source_path} to MLX format")
             logger.info(f"Quantization: {config.quantization.value}, bits: {self._get_quantization_bits(config.quantization)}")
             print(f"Converting {source_path} to MLX format...")
@@ -465,7 +473,7 @@ class MLXConverter:
             if missing_dep:
                 logger.error(missing_dep)
                 return False, missing_dep, None
-            
+
             # Build quantization configuration
             quantize_config = self._build_quantization_config(config)
 
@@ -514,12 +522,12 @@ class MLXConverter:
                 return False, "MLX LM save() not available; upgrade mlx-lm.", None
             mlx_utils.save(output_path, model_path, model, tokenizer, model_config, hf_repo=normalized_hf_repo)
             logger.info("MLX conversion completed")
-            
+
             # Apply AMX optimizations if enabled
             if config.use_amx:
                 logger.info("Applying AMX optimizations")
                 self._apply_amx_optimizations(output_path)
-            
+
             # Validate conversion if requested
             if config.validate_conversion:
                 logger.info("Validating converted model")
@@ -527,20 +535,20 @@ class MLXConverter:
                     logger.error("Model validation failed")
                     return False, "Validation failed", None
                 logger.info("Model validation successful")
-            
+
             logger.info(f"Successfully converted model to {output_path}")
             return True, f"Successfully converted to {output_path}", output_path
-            
+
         except Exception as e:
             logger.error(f"Transformers conversion failed: {str(e)}")
             return False, f"Transformers conversion failed: {str(e)}", None
-    
+
     def _convert_gguf(
         self,
         source_path: Path,
         output_path: Path,
         config: ConversionConfig
-    ) -> Tuple[bool, str, Path]:
+    ) -> Tuple[bool, str, Optional[Path]]:
         """Convert GGUF model to MLX (via HuggingFace intermediate)."""
         try:
             # GGUF -> HF conversion requires llama.cpp tools
@@ -550,62 +558,62 @@ class MLXConverter:
                 "Please use 'convert_hf_to_gguf.py' in reverse or download "
                 "the HuggingFace version of this model."
             ), None
-            
+
         except Exception as e:
             return False, f"GGUF conversion failed: {str(e)}", None
-    
+
     def _build_quantization_config(
         self,
         config: ConversionConfig
     ) -> Dict[str, Any]:
         """Build quantization configuration for MLX quantization."""
         quant_config = {}
-        
+
         if config.quantization == QuantizationRecipe.MIXED_PRECISION:
             # Build mixed precision predicate
             quant_config["quant_predicate"] = self._build_mixed_precision_predicate(
                 config.mixed_precision_config
             )
-        
+
         return quant_config
-    
+
     def _build_mixed_precision_predicate(
         self,
         mixed_config: Optional[Dict[str, Any]]
     ) -> Callable:
         """Build mixed precision quantization predicate."""
         mixed_config = mixed_config or {}
-        
+
         # Default: higher precision for critical layers
         critical_layers = mixed_config.get("critical_layers", [
             "lm_head", "embed_tokens", "wte", "wpe"
         ])
         critical_bits = mixed_config.get("critical_bits", 6)
         standard_bits = mixed_config.get("standard_bits", 4)
-        
+
         logger.info(f"Mixed precision config: critical={critical_bits}bit, standard={standard_bits}bit")
         logger.info(f"Critical layers: {critical_layers}")
-        
+
         def predicate(layer_path: str, layer: nn.Module, model_config: Dict) -> Union[bool, Dict]:
             """Determine quantization for each layer."""
             # Critical layers get higher precision
             for critical in critical_layers:
                 if critical in layer_path:
                     return {"bits": critical_bits, "group_size": 64}
-            
+
             # Attention layers can use standard quantization
             if any(x in layer_path for x in ["q_proj", "k_proj", "v_proj", "o_proj"]):
                 return {"bits": standard_bits, "group_size": 64}
-            
+
             # FFN layers
             if any(x in layer_path for x in ["gate_proj", "up_proj", "down_proj"]):
                 return {"bits": standard_bits, "group_size": 64}
-            
+
             # Skip quantization for other layers
             return False
-        
+
         return predicate
-    
+
     def _get_quantization_bits(self, recipe: QuantizationRecipe) -> int:
         """Get quantization bits for recipe."""
         mapping = {
@@ -616,7 +624,7 @@ class MLXConverter:
             QuantizationRecipe.NONE: 16
         }
         return mapping.get(recipe, 16)
-    
+
     def _apply_amx_optimizations(self, model_path: Path) -> None:
         """Apply AMX-specific optimizations to converted model."""
         try:
@@ -625,46 +633,46 @@ class MLXConverter:
             if config_path.exists():
                 with open(config_path) as f:
                     config = json.load(f)
-                
+
                 # Add AMX optimization flags
                 config["amx_optimized"] = True
                 config["use_fused_attention"] = True
                 config["operation_fusion"] = True
-                
+
                 logger.info("AMX optimization flags added to model config")
-                
+
                 # Save updated config
                 with open(config_path, 'w') as f:
                     json.dump(config, f, indent=2)
         except Exception as e:
             logger.warning(f"Could not apply AMX optimizations: {e}")
             print(f"Warning: Could not apply AMX optimizations: {e}")
-    
+
     def _validate_model(self, model_path: Path) -> bool:
         """Validate converted model loads correctly."""
         try:
             if load is None:
                 logger.warning("Can't validate model without mlx_lm, assuming success")
                 return True
-                
+
             logger.debug(f"Loading model for validation: {model_path}")
             # Try loading the model
             model, tokenizer = load(str(model_path))
-            
+
             # Test a simple forward pass
             test_input = "Hello, world!"
-            tokens = tokenizer.encode(test_input)
-            
+            tokenizer.encode(test_input)
+
             # Just verify model can process tokens
             mx.eval(model.parameters())
-            
+
             logger.debug("Model validation passed")
             return True
         except Exception as e:
             logger.error(f"Model validation failed: {e}")
             print(f"Validation failed: {e}")
             return False
-    
+
     def _get_cache_key(self, source_path: str, config: ConversionConfig) -> str:
         """Generate cache key for conversion."""
         key_parts = [
@@ -674,31 +682,31 @@ class MLXConverter:
         ]
         key_string = "_".join(key_parts)
         return hashlib.md5(key_string.encode()).hexdigest()
-    
+
     def list_converted_models(self) -> Dict[str, Any]:
         """List all converted models in cache."""
         models = {}
-        
+
         for model_dir in self.cache_dir.iterdir():
             if model_dir.is_dir() and (model_dir / "config.json").exists():
                 config_path = model_dir / "config.json"
                 with open(config_path) as f:
                     config = json.load(f)
-                
+
                 # Calculate model size
                 total_size = sum(
                     f.stat().st_size for f in model_dir.rglob("*") if f.is_file()
                 )
-                
+
                 models[model_dir.name] = {
                     "path": str(model_dir),
                     "size_gb": total_size / (1024**3),
                     "quantization": config.get("quantization_config", {}).get("bits", "none"),
                     "amx_optimized": config.get("amx_optimized", False)
                 }
-        
+
         return models
-    
+
     def optimize_for_chip(self, model_path: Path, chip: str) -> None:
         """Optimize model for specific Apple Silicon chip."""
         chip_configs = {
@@ -717,23 +725,23 @@ class MLXConverter:
             "m4_pro": {"batch_size": 16, "prefetch": 8},
             "m4_max": {"batch_size": 24, "prefetch": 12}
         }
-        
+
         if chip.lower() in chip_configs:
             config = chip_configs[chip.lower()]
-            
+
             # Update model config with chip-specific settings
             config_path = model_path / "config.json"
             if config_path.exists():
                 with open(config_path) as f:
                     model_config = json.load(f)
-                
+
                 model_config["chip_optimization"] = {
                     "chip": chip,
                     "batch_size": config["batch_size"],
                     "prefetch_size": config["prefetch"]
                 }
-                
+
                 logger.info(f"Optimized model for {chip.upper()} chip: batch_size={config['batch_size']}, prefetch={config['prefetch']}")
-                
+
                 with open(config_path, 'w') as f:
                     json.dump(model_config, f, indent=2)

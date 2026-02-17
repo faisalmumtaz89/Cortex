@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# OpenTUI bundled sidecar is a compiled binary (never text-normalize)
+cortex/ui_runtime/bin/cortex-tui -text

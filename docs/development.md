@@ -21,6 +21,7 @@ pip install -e ".[dev]"
 
 - macOS on Apple Silicon (ARM64)
 - Python 3.11 or later
+- Bun runtime (global `bun` or local runtime from `frontend/cortex-tui/npm install`)
 
 ## Project Structure
 
@@ -30,7 +31,6 @@ Cortex/
 ├── config.yaml                     # Default runtime configuration
 ├── setup.py                        # Legacy setup script
 ├── requirements.txt                # Pinned dependency list
-├── install.py                      # Installation helper script
 ├── install.sh                      # Shell-based installer
 ├── cortex/
 │   ├── __init__.py                 # Package init, system requirement checks
@@ -41,6 +41,15 @@ Cortex/
 │   ├── model_downloader.py         # HuggingFace model downloads (ModelDownloader)
 │   ├── inference_engine.py         # Text generation (InferenceEngine)
 │   ├── conversation_manager.py     # Chat history and persistence (ConversationManager)
+│   ├── app/                        # Worker application service layer
+│   │   ├── worker_runtime.py       # JSON-RPC runtime assembly
+│   │   ├── session_service.py      # Session orchestration
+│   │   ├── model_service.py        # Model/auth operations
+│   │   └── permission_service.py   # Permission ask/reply bridge
+│   ├── protocol/                   # JSON-RPC protocol contracts/server
+│   │   ├── rpc_server.py
+│   │   ├── schema.py
+│   │   └── types.py
 │   ├── metal/                      # GPU acceleration layer
 │   │   ├── __init__.py
 │   │   ├── gpu_validator.py        # Metal-level GPU validation
@@ -51,11 +60,14 @@ Cortex/
 │   │   ├── mlx_compat.py           # MLX compatibility patches
 │   │   ├── mlx_converter.py        # Model conversion for MLX
 │   │   └── performance_profiler.py # GPU performance profiling
-│   ├── ui/                         # User interface
+│   ├── ui/                         # Legacy Rich CLI path (compatibility)
 │   │   ├── __init__.py
 │   │   ├── cli.py                  # Interactive CLI (CortexCLI)
 │   │   ├── markdown_render.py      # Markdown rendering helpers
 │   │   └── terminal_app.py         # Textual-based terminal UI
+│   ├── ui_runtime/                 # OpenTUI launcher + bundled binary
+│   │   ├── launcher.py
+│   │   └── bin/cortex-tui
 │   ├── fine_tuning/                # Fine-tuning support
 │   │   ├── __init__.py
 │   │   ├── wizard.py               # Interactive fine-tuning wizard
@@ -74,6 +86,7 @@ Cortex/
 │   │   └── template_profiles/      # Built-in template profiles
 │   └── utils/
 │       └── param_utils.py          # Parameter utilities
+├── frontend/cortex-tui/            # OpenTUI + Solid frontend source
 ├── tests/
 │   ├── test_apple_silicon.py       # Apple Silicon GPU tests
 │   ├── test_metal_optimization.py  # Metal optimization tests
@@ -85,26 +98,27 @@ Cortex/
 
 ## Application Architecture
 
-The entry point is `cortex/__main__.py`. The `main()` function constructs all components directly -- there is no application class or factory pattern:
+Runtime split:
+- Frontend: OpenTUI sidecar (`frontend/cortex-tui`)
+- Backend: Python worker (`python -m cortex --worker-stdio`)
+
+The entry point is `cortex/__main__.py`. By default it launches the OpenTUI sidecar. Worker mode constructs backend services and starts JSON-RPC stdio server:
 
 ```python
-config = Config()
-gpu_validator = GPUValidator()
-model_manager = ModelManager(config, gpu_validator)
-inference_engine = InferenceEngine(config, model_manager)
-conversation_manager = ConversationManager(config)
-
-cli = CortexCLI(
-    config=config,
-    gpu_validator=gpu_validator,
-    model_manager=model_manager,
-    inference_engine=inference_engine,
-    conversation_manager=conversation_manager,
-)
-cli.run()
+python -m cortex --worker-stdio
 ```
 
 GPU validation runs first. If it fails, the process exits before any other components are created. On shutdown, the inference engine's memory pool is cleaned up and PyTorch MPS caches are flushed.
+
+Frontend source commands:
+
+```bash
+cd frontend/cortex-tui
+npm install
+npm run typecheck
+npm run dev        # Runs OpenTUI from source
+npm run build      # Builds darwin-arm64 bundled sidecar binary
+```
 
 ## Running Tests
 

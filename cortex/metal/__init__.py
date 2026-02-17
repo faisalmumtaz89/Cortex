@@ -4,9 +4,12 @@ This package provides unified GPU acceleration for LLM inference on Apple Silico
 The recommended approach is to use MetalOptimizer for automatic backend selection.
 """
 
-from typing import Dict, Any, Optional
+from __future__ import annotations
+
+import importlib
 import platform
 import subprocess
+from typing import Any, Dict, Optional
 
 # Primary exports
 __all__ = [
@@ -15,27 +18,27 @@ __all__ = [
     "OptimizationConfig",
     "Backend",
     "InferenceSession",
-    
+
     # Core functionality
     "MetalCapabilities",
     "check_metal_support",
     "get_metal_version",
     "initialize_metal_optimizations",
-    
+
     # Memory management
     "MemoryPool",
-    
+
     # Backend-specific (use MetalOptimizer instead for most cases)
     "MPSOptimizer",
     "MLXAccelerator",
-    
+
     # Performance monitoring
     "PerformanceProfiler"
 ]
 
 class MetalCapabilities:
     """Metal capabilities detection and management."""
-    
+
     METAL_FEATURES = {
         "metal3": {
             "min_macos": "14.0",
@@ -56,7 +59,7 @@ class MetalCapabilities:
             ]
         }
     }
-    
+
     APPLE_SILICON_OPTIMIZATION_FLAGS = {
         "compiler_flags": [
             "-O3",
@@ -76,32 +79,32 @@ class MetalCapabilities:
             "-framework", "MetalPerformanceShadersGraph"
         ]
     }
-    
+
     @classmethod
     def detect_capabilities(cls) -> Dict[str, Any]:
         """Detect Metal capabilities on the system."""
         if platform.system() != "Darwin":
             return {"supported": False, "error": "Not running on macOS"}
-        
-        capabilities = {
+
+        capabilities: Dict[str, Any] = {
             "supported": True,
             "version": get_metal_version(),
             "features": [],
             "optimizations": {},
             "gpu_family": cls._detect_gpu_family()
         }
-        
+
         metal_version = capabilities["version"]
         if metal_version and "Metal 3" in metal_version:
             capabilities["features"] = cls.METAL_FEATURES["metal3"]["features"]
         elif metal_version and "Metal 2" in metal_version:
             capabilities["features"] = cls.METAL_FEATURES["metal2"]["features"]
-        
+
         # Always assign optimization profile based on detected GPU family
         capabilities["optimizations"] = cls.get_optimization_profile(capabilities["gpu_family"])
-        
+
         return capabilities
-    
+
     @classmethod
     def _detect_gpu_family(cls) -> str:
         """Detect GPU family (apple5, apple6, apple7, apple8 for M1, M2, M3, M4)."""
@@ -112,7 +115,7 @@ class MetalCapabilities:
                 text=True,
                 check=True
             )
-            
+
             output = result.stdout.lower()
             if "apple m4" in output:
                 return "apple8"
@@ -124,9 +127,9 @@ class MetalCapabilities:
                 return "apple5"
             else:
                 return "unknown"
-        except:
+        except Exception:
             return "unknown"
-    
+
     @classmethod
     def get_optimization_profile(cls, gpu_family: str) -> Dict[str, Any]:
         """Get optimization profile for specific GPU family."""
@@ -187,14 +190,14 @@ class MetalCapabilities:
                 "prefer_bfloat16": False,
             }
         }
-        
+
         return profiles.get(gpu_family, profiles["default"])
 
 def check_metal_support() -> bool:
     """Check if Metal is supported on this system."""
     if platform.system() != "Darwin":
         return False
-    
+
     try:
         result = subprocess.run(
             ["system_profiler", "SPDisplaysDataType"],
@@ -203,7 +206,7 @@ def check_metal_support() -> bool:
             check=True
         )
         return "Metal" in result.stdout
-    except:
+    except Exception:
         return False
 
 def get_metal_version() -> Optional[str]:
@@ -216,7 +219,7 @@ def get_metal_version() -> Optional[str]:
             check=True
         )
         sdk_version = result.stdout.strip()
-        
+
         major_version = int(sdk_version.split('.')[0])
         if major_version >= 14:
             return "Metal 3"
@@ -224,22 +227,22 @@ def get_metal_version() -> Optional[str]:
             return "Metal 2"
         else:
             return "Metal 1"
-    except:
+    except Exception:
         return None
 
 def initialize_metal_optimizations() -> Dict[str, Any]:
     """Initialize Metal optimizations for the current system."""
     if not check_metal_support():
         raise RuntimeError("Metal is not supported on this system")
-    
+
     capabilities = MetalCapabilities.detect_capabilities()
-    
+
     if not capabilities["supported"]:
         raise RuntimeError(f"Metal not supported: {capabilities.get('error', 'Unknown error')}")
-    
+
     gpu_family = capabilities["gpu_family"]
     optimization_profile = MetalCapabilities.get_optimization_profile(gpu_family)
-    
+
     return {
         "capabilities": capabilities,
         "optimization_profile": optimization_profile,
@@ -247,29 +250,23 @@ def initialize_metal_optimizations() -> Dict[str, Any]:
         "metal_version": capabilities["version"]
     }
 
-# Import new unified optimizer (RECOMMENDED)
-try:
-    from cortex.metal.optimizer import (
-        MetalOptimizer,
-        OptimizationConfig,
-        Backend,
-        InferenceSession
-    )
-except ImportError as e:
-    # If optimizer fails to import, provide a helpful message
-    import warnings
-    warnings.warn(
-        f"Failed to import MetalOptimizer: {e}. "
-        "Some dependencies may be missing.",
-        ImportWarning
-    )
-    MetalOptimizer = None
-    OptimizationConfig = None
-    Backend = None
-    InferenceSession = None
+_LAZY_EXPORTS = {
+    "MetalOptimizer": ("cortex.metal.optimizer", "MetalOptimizer"),
+    "OptimizationConfig": ("cortex.metal.optimizer", "OptimizationConfig"),
+    "Backend": ("cortex.metal.optimizer", "Backend"),
+    "InferenceSession": ("cortex.metal.optimizer", "InferenceSession"),
+    "MemoryPool": ("cortex.metal.memory_pool", "MemoryPool"),
+    "MPSOptimizer": ("cortex.metal.mps_optimizer", "MPSOptimizer"),
+    "MLXAccelerator": ("cortex.metal.mlx_accelerator", "MLXAccelerator"),
+    "PerformanceProfiler": ("cortex.metal.performance_profiler", "PerformanceProfiler"),
+}
 
-# Import existing components
-from cortex.metal.memory_pool import MemoryPool
-from cortex.metal.mps_optimizer import MPSOptimizer
-from cortex.metal.mlx_accelerator import MLXAccelerator
-from cortex.metal.performance_profiler import PerformanceProfiler
+
+def __getattr__(name: str):
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr_name = _LAZY_EXPORTS[name]
+    module = importlib.import_module(module_name)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value

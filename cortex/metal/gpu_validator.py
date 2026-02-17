@@ -1,9 +1,10 @@
 """GPU validation and capability detection for Metal."""
 
-import subprocess
 import platform
+import subprocess
 from dataclasses import dataclass
 from typing import Optional
+
 
 @dataclass
 class GPUInfo:
@@ -18,35 +19,35 @@ class GPUInfo:
 
 class GPUValidator:
     """Validates GPU capabilities for Metal optimization."""
-    
+
     def __init__(self):
         """Initialize GPU validator."""
-        self.gpu_info = None
-        self.validation_passed = False
-    
+        self.gpu_info: Optional[GPUInfo] = None
+        self.validation_passed: bool = False
+
     def validate(self) -> bool:
         """
         Validate GPU and detect capabilities.
-        
+
         Returns:
             True if GPU is validated and ready
         """
         self.gpu_info = self._detect_gpu()
         self.validation_passed = self.gpu_info is not None
         return self.validation_passed
-    
+
     def _detect_gpu(self) -> Optional[GPUInfo]:
         """
         Detect GPU model and capabilities.
-        
+
         Returns:
             GPUInfo object with detected capabilities
         """
         info = GPUInfo()
-        
+
         if platform.system() != "Darwin":
             return None
-        
+
         try:
             # Use system_profiler to detect GPU
             result = subprocess.run(
@@ -55,14 +56,14 @@ class GPUValidator:
                 text=True,
                 timeout=5
             )
-            
+
             if result.returncode == 0:
                 output = result.stdout.lower()
-                
+
                 # Detect Apple Silicon
                 if "apple m" in output or "apple silicon" in output:
                     info.is_apple_silicon = True
-                    
+
                     # Detect specific chip
                     if "m4" in output:
                         info.gpu_family = "apple8"
@@ -82,14 +83,14 @@ class GPUValidator:
                         info.gpu_family = "apple5"
                         info.supports_bfloat16 = False
                         info.metal_version = "3.0"
-                    
+
                     # All Apple Silicon supports SIMD operations
                     info.supports_simdgroup_matrix = False  # Not in public API
                     info.supports_mpp = True
-                
+
                 return info
-                
-        except (subprocess.TimeoutExpired, Exception) as e:
+
+        except (subprocess.TimeoutExpired, Exception):
             # Fallback detection
             try:
                 # Try sysctl for chip detection
@@ -102,57 +103,57 @@ class GPUValidator:
                     info.is_apple_silicon = True
                     info.gpu_family = "apple5"  # Conservative default
                     return info
-            except:
+            except Exception:
                 pass
-        
+
         return info if info.is_apple_silicon else None
-    
+
     def check_bfloat16_support(self) -> bool:
         """
         Check if current GPU supports bfloat16.
-        
+
         Returns:
             True if bfloat16 is supported
         """
         if not self.gpu_info:
             self.validate()
-        
+
         return self.gpu_info.supports_bfloat16 if self.gpu_info else False
-    
+
     def get_gpu_family(self) -> str:
         """
         Get GPU family identifier.
-        
+
         Returns:
             GPU family string (apple5, apple6, etc.)
         """
         if not self.gpu_info:
             self.validate()
-        
+
         return self.gpu_info.gpu_family if self.gpu_info else "unknown"
-    
+
     def get_metal_version(self) -> str:
         """
         Get recommended Metal version for this GPU.
-        
+
         Returns:
             Metal version string
         """
         if not self.gpu_info:
             self.validate()
-        
+
         return self.gpu_info.metal_version if self.gpu_info else "3.0"
-    
+
     def get_capabilities_summary(self) -> dict:
         """
         Get summary of GPU capabilities.
-        
+
         Returns:
             Dictionary with capability flags
         """
         if not self.gpu_info:
             self.validate()
-        
+
         if self.gpu_info:
             return {
                 "gpu_family": self.gpu_info.gpu_family,
@@ -161,7 +162,7 @@ class GPUValidator:
                 "metal_version": self.gpu_info.metal_version,
                 "validation_passed": self.validation_passed
             }
-        
+
         return {
             "gpu_family": "unknown",
             "is_apple_silicon": False,

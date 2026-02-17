@@ -6,9 +6,15 @@ GPU-accelerated local LLMs on Apple Silicon, built for the terminal.
 
 Cortex is a fast, native CLI for running and fine-tuning LLMs on Apple Silicon using MLX and Metal. It automatically detects chat templates, supports multiple model formats, and keeps your workflow inside the terminal.
 
+Runtime architecture:
+- OpenTUI frontend sidecar for terminal rendering
+- Python worker for inference/tools over JSON-RPC (`python -m cortex --worker-stdio`)
+
 ## Highlights
 
 - Apple Silicon GPU acceleration via MLX (primary) and PyTorch MPS
+- Cloud API models via OpenAI and Anthropic (API key auth)
+- Event-driven tool runtime with explicit permission prompts (opt-in)
 - Multi-format model support: MLX, GGUF, SafeTensors, PyTorch, GPTQ, AWQ
 - Built-in LoRA fine-tuning wizard
 - Chat template auto-detection (ChatML, Llama, Alpaca, Gemma, Reasoning)
@@ -17,22 +23,36 @@ Cortex is a fast, native CLI for running and fine-tuning LLMs on Apple Silicon u
 ## Quick Start
 
 ```bash
-pipx install cortex-llm
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash
 cortex
+```
+
+If you need temporary fallback to legacy CLI:
+
+```bash
+cortex --legacy-ui
+```
+
+If OpenTUI sidecar is unavailable in a source checkout:
+
+```bash
+cd frontend/cortex-tui
+npm install
 ```
 
 Inside Cortex:
 
 - `/download` to fetch a model from HuggingFace
-- `/model` to load or manage models
+- `/login openai` or `/login anthropic` to add cloud API credentials
+- `/model` to switch between local and cloud models
 - `/status` to confirm GPU acceleration and current settings
 
 ## Installation
 
-### Option A: pipx (recommended)
+### Option A: one-line installer (recommended)
 
 ```bash
-pipx install cortex-llm
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash
 ```
 
 ### Option B: from source
@@ -43,7 +63,7 @@ cd Cortex
 ./install.sh
 ```
 
-The installer checks Apple Silicon compatibility, creates a venv, installs dependencies from `pyproject.toml`, and sets up the `cortex` command.
+The installer checks Apple Silicon compatibility, provisions an isolated runtime under `~/.cortex/install`, installs Cortex, and sets up the `cortex` command launcher.
 
 ## Requirements
 
@@ -75,16 +95,41 @@ Cortex supports:
   - `docs/template-registry.md`
 - **Inference engine details** and backend behavior
   - `docs/inference-engine.md`
-- **Tooling (experimental, WIP)** for repo-scoped read/search and optional file edits with explicit confirmation
+- **CLI workflow and command reference**
   - `docs/cli.md`
-
-**Important (Work in Progress):** Tooling is actively evolving and should be considered experimental. Behavior, output format, and available actions may change; tool calls can fail; and UI presentation may be adjusted. Use tooling on non-critical work first, and always review any proposed file changes before approving them.
 
 ## Configuration
 
 Cortex reads `config.yaml` from the current working directory. For tuning GPU memory limits, quantization defaults, and inference parameters, see:
 
 - `docs/configuration.md`
+
+### Tooling Runtime (Opt-In)
+
+Tools are disabled by default for conservative rollout:
+
+```yaml
+tools_enabled: false
+tools_profile: off
+tools_local_mode: disabled
+```
+
+To enable read-only cloud tools:
+
+```yaml
+tools_enabled: true
+tools_profile: read_only
+```
+
+Profiles:
+
+- `off`: no tools exposed to models.
+- `read_only`: `list_dir`, `read_file`, `search`.
+- `patch`: read-only + `apply_patch`.
+- `full`: patch profile + `bash`.
+
+Permissions are prompted at runtime with `Allow once`, `Allow always`, or `Reject`.
+Persistent approvals are stored in `~/.cortex/tool_permissions.yaml`.
 
 ## Documentation
 
@@ -103,6 +148,7 @@ Advanced topics:
 - `docs/template-registry.md`
 - `docs/fine-tuning.md`
 - `docs/development.md`
+- `docs/architecture-runtime.md`
 
 ## Contributing
 

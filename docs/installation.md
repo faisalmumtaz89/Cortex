@@ -13,6 +13,7 @@
 - Python 3.11+ (3.12 recommended)
 - Xcode Command Line Tools
 - Git
+- Bun runtime for frontend source builds (global `bun` or local runtime via `npm install` in `frontend/cortex-tui`)
 
 **Not Supported:**
 - Intel Macs
@@ -21,11 +22,12 @@
 ### Basic Installation
 
 ```bash
-# Clone the repository
+# Recommended one-line install
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash
+
+# Or clone and run locally
 git clone https://github.com/faisalmumtaz/Cortex.git
 cd Cortex
-
-# Run the installer (recommended)
 ./install.sh
 
 # OR manually install dependencies
@@ -44,6 +46,15 @@ pip install -e ".[dev]"
 
 # Run tests to verify installation
 python -m pytest tests/
+```
+
+### OpenTUI Frontend Build (Maintainers)
+
+```bash
+cd frontend/cortex-tui
+npm install
+npm run typecheck
+npm run build
 ```
 
 ## Detailed Installation
@@ -103,14 +114,14 @@ python -c "import torch; print(f'MPS available: {torch.backends.mps.is_available
 
 ### 4. Install Cortex
 
-**From PyPI (recommended):**
+**Recommended installer (no pipx required):**
 ```bash
-pip install cortex-llm
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash
 ```
 
-**From PyPI with pipx (isolated install):**
+**Pin a specific version:**
 ```bash
-pipx install cortex-llm
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz/Cortex/main/install.sh | bash -s -- 1.0.18
 ```
 
 **From Source (development):**

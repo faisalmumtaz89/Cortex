@@ -193,3 +193,9 @@ models/
 .cortex_history
 # Local release helper script
 publish_and_verify_update.sh
+
+# Frontend sidecar build artifacts
+frontend/cortex-tui/node_modules/
+frontend/cortex-tui/dist/
+frontend/cortex-tui/dist-node/
+cortex/ui_runtime/bin/cortex-tui

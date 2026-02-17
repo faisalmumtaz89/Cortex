@@ -1,27 +1,36 @@
 """MLX framework GPU acceleration for Apple Silicon with AMX and advanced quantization."""
 
+import functools
 import logging
+import time
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+
 import mlx.core as mx
 import mlx.nn as nn
-from mlx.utils import tree_map, tree_flatten
-from typing import Dict, Any, Optional, List, Tuple, Callable, Generator
-from dataclasses import dataclass
-import functools
-import time
 import numpy as np
+from mlx.utils import tree_flatten
+
+from cortex.metal.mlx_compat import patch_mlx_lm_device_info
 
 # Configure logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Import MLX LM functions safely
+generate: Optional[Callable[..., str]]
+stream_generate: Optional[Callable[..., Generator[Any, None, None]]]
 try:
-    from mlx_lm import generate, stream_generate
+    from mlx_lm import generate as mlx_generate
+    from mlx_lm import stream_generate as mlx_stream_generate
+
+    generate = mlx_generate
+    stream_generate = mlx_stream_generate
 except ImportError:
     # Fallback if mlx_lm is not available
     generate = None
     stream_generate = None
-from cortex.metal.mlx_compat import patch_mlx_lm_device_info
+
 patch_mlx_lm_device_info()
 
 @dataclass
@@ -45,7 +54,7 @@ class MLXConfig:
 
 class MLXAccelerator:
     """Accelerate models using MLX framework with Metal optimization."""
-    
+
     OPTIMIZATION_PRESETS = {
         "speed": {
             "compile_model": True,
@@ -66,26 +75,26 @@ class MLXAccelerator:
             "dtype": mx.float32
         }
     }
-    
+
     def __init__(self, config: Optional[MLXConfig] = None):
         """Initialize MLX accelerator."""
         self.config = config or MLXConfig()
         self.device = mx.default_device()
-        
+
         logger.info(f"Initializing MLX Accelerator with device: {self.device}")
         logger.info(f"Config: AMX={self.config.use_amx}, fuse_ops={self.config.fuse_operations}, ")
         logger.info(f"        lazy_eval={self.config.lazy_evaluation}, kv_cache={self.config.rotating_kv_cache}")
         logger.info(f"        quantization={self.config.quantization_bits}bit, dtype={self.config.dtype}")
-        
+
         # Check if device is GPU - MLX returns Device(gpu, 0) format
         device_str = str(self.device).lower()
         if "gpu" not in device_str:
             logger.error(f"MLX not using GPU: {self.device}")
             raise RuntimeError(f"MLX not using GPU: {self.device}")
-        
-        mx.set_default_device(mx.gpu)
+
+        mx.set_default_device(self.device)
         logger.info("MLX device set to GPU")
-    
+
     def optimize_model(
         self,
         model: nn.Module,
@@ -93,123 +102,123 @@ class MLXAccelerator:
     ) -> nn.Module:
         """
         Optimize an MLX model for GPU execution with AMX support.
-        
+
         Args:
             model: MLX model to optimize
             example_input: Example input for shape inference
-            
+
         Returns:
             Optimized model
         """
         logger.info("Starting model optimization")
-        
+
         # Check if this is an mlx_lm model (already optimized)
         is_mlx_lm_model = not hasattr(model, 'apply_to_parameters')
-        
+
         if is_mlx_lm_model:
             logger.info("Detected mlx_lm model - applying compatible optimizations")
-            
+
             # MLX LM models are already quantized and optimized
             # We can still enable some runtime optimizations
-            
+
             if self.config.use_amx:
                 logger.info("AMX acceleration will be used automatically")
-                mx.set_default_device(mx.gpu)
-            
+                mx.set_default_device(self.device)
+
             if self.config.compile_model:
                 logger.info("Enabling JIT compilation")
                 model = self._compile_model(model)
-            
+
             if self.config.rotating_kv_cache:
                 logger.info(f"Setting up rotating KV cache (size: {self.config.kv_cache_size})")
                 model = self._setup_rotating_kv_cache(model)
-                
+
         else:
             # Standard MLX nn.Module optimization path
             model = self._optimize_dtype(model)
-            
+
             if self.config.use_amx:
                 logger.info("Enabling AMX acceleration")
                 model = self._enable_amx_acceleration(model)
-            
+
             if self.config.fuse_operations:
                 logger.info("Enabling operation fusion")
                 model = self._fuse_operations(model)
-            
+
             if self.config.compile_model:
                 logger.info("Compiling model with JIT")
                 model = self._compile_model(model)
-            
+
             if self.config.use_graph and example_input is not None:
                 logger.info("Enabling graph optimization")
                 model = self._enable_graph_optimization(model, example_input)
-            
+
             if self.config.stream_parallel:
                 logger.info("Enabling stream parallelism")
                 model = self._enable_stream_parallelism(model)
-            
+
             if self.config.rotating_kv_cache:
                 logger.info(f"Setting up rotating KV cache (size: {self.config.kv_cache_size})")
                 model = self._setup_rotating_kv_cache(model)
-        
+
         # Evaluate parameters if they exist
         if hasattr(model, 'parameters'):
             mx.eval(model.parameters())
-        
+
         logger.info("Model optimization completed")
-        
+
         return model
-    
+
     def _optimize_dtype(self, model: nn.Module) -> nn.Module:
         """Optimize model data types for performance."""
         target_dtype = self.config.dtype
-        
+
         # Try bfloat16 first, fall back to float16 if not supported
         if target_dtype == mx.bfloat16:
             try:
                 test = mx.array([1.0], dtype=mx.bfloat16)
                 mx.eval(test)
                 logger.info("Using bfloat16 precision")
-            except:
+            except Exception:
                 target_dtype = mx.float16
                 logger.info("bfloat16 not supported, falling back to float16")
-        
+
         # Check if model has apply_to_parameters method
         if hasattr(model, 'apply_to_parameters'):
             def convert_param(x):
                 if x.dtype == mx.float32:
                     return x.astype(target_dtype)
                 return x
-            
+
             model.apply_to_parameters(convert_param)
             logger.debug(f"Model dtype optimized to {target_dtype}")
         else:
             # For models without apply_to_parameters (like mlx_lm models)
             # They typically already have optimized dtype from loading
             logger.debug(f"Model already optimized, target dtype: {target_dtype}")
-        
+
         return model
-    
+
     def _compile_model(self, model: nn.Module) -> nn.Module:
         """Compile model with JIT for faster execution."""
         logger.debug("Compiling model with mx.compile decorator")
-        
+
         # Use advanced compilation with operation fusion
         @mx.compile
         def compiled_forward(x, cache=None):
             if cache is not None:
                 return model(x, cache=cache)
             return model(x)
-        
+
         # Store original for fallback
         original_forward = model.__call__
         model.__call__ = compiled_forward
         model._original_forward = original_forward
         model._compiled = True
-        
+
         logger.debug("Model compilation completed")
         return model
-    
+
     def _enable_graph_optimization(
         self,
         model: nn.Module,
@@ -217,33 +226,22 @@ class MLXAccelerator:
     ) -> nn.Module:
         """Enable graph-level optimizations."""
         try:
-            with mx.stream(mx.gpu):
+            with mx.stream(self.device):
                 _ = model(example_input)
             mx.eval(model.parameters())
             logger.debug("Graph optimization enabled")
         except Exception as e:
             logger.warning(f"Graph optimization failed: {e}")
             print(f"Warning: Graph optimization failed: {e}")
-        
+
         return model
-    
+
     def _enable_stream_parallelism(self, model: nn.Module) -> nn.Module:
         """Enable stream parallelism for concurrent operations."""
-        
-        def parallel_forward(self, x):
-            streams = [mx.Stream(mx.gpu) for _ in range(2)]
-            
-            with streams[0]:
-                x1 = self.layers[:len(self.layers)//2](x)
-            
-            with streams[1]:
-                x2 = self.layers[len(self.layers)//2:](x)
-            
-            mx.synchronize()
-            return x1 + x2
-        
+        # MLX handles stream scheduling internally; keep this as an explicit no-op hook.
+        logger.debug("Stream parallelism enabled via MLX runtime scheduling")
         return model
-    
+
     def accelerate_transformer(
         self,
         model: nn.Module,
@@ -251,12 +249,12 @@ class MLXAccelerator:
         head_dim: int
     ) -> nn.Module:
         """Apply transformer-specific optimizations with AMX acceleration."""
-        
+
         @mx.compile
         def optimized_attention(query, key, value, mask=None, cache=None):
             """Fused attention with AMX-accelerated matmul."""
             scale = head_dim ** -0.5
-            
+
             # Update cache if provided (for KV caching)
             if cache is not None:
                 if "k" in cache and "v" in cache:
@@ -268,76 +266,76 @@ class MLXAccelerator:
                         value = value[:, -self.config.kv_cache_size:]
                 cache["k"] = key
                 cache["v"] = value
-            
+
             # AMX-accelerated matrix multiplication
             scores = mx.matmul(query, mx.swapaxes(key, -2, -1)) * scale
-            
+
             if mask is not None:
                 scores = scores + mask
-            
+
             # Fused softmax operation
             probs = mx.softmax(scores, axis=-1)
-            
+
             # AMX-accelerated output projection
             output = mx.matmul(probs, value)
-            
+
             return output, cache
-        
+
         # Replace attention mechanism
         if hasattr(model, 'attention'):
             model.attention.forward = optimized_attention
-        
+
         # Apply to all transformer layers
         for layer in model.layers if hasattr(model, 'layers') else []:
             if hasattr(layer, 'self_attn'):
                 layer.self_attn.forward = optimized_attention
-        
+
         return model
-    
+
     def optimize_generation(
         self,
         generate_fn: Callable,
         max_cache_size: int = 32768
     ) -> Callable:
         """Optimize text generation function."""
-        
+
         @functools.wraps(generate_fn)
         def optimized_generate(*args, **kwargs):
-            cache = {}
-            
+            cache: Dict[Any, Any] = {}
+
             def cached_forward(x, cache_key):
                 if cache_key in cache:
                     return cache[cache_key]
-                
+
                 result = generate_fn(x)
-                
+
                 if len(cache) < max_cache_size:
                     cache[cache_key] = result
-                
+
                 return result
-            
+
             return generate_fn(*args, **kwargs)
-        
+
         return optimized_generate
-    
+
     def create_pipeline(
         self,
         models: List[nn.Module],
         batch_size: int = 1
     ) -> Callable:
         """Create an optimized inference pipeline."""
-        
+
         optimized_models = [self.optimize_model(m) for m in models]
-        
+
         def pipeline(x):
             """Run inference through pipeline."""
             for model in optimized_models:
                 x = model(x)
                 mx.eval(x)
             return x
-        
+
         return mx.compile(pipeline)
-    
+
     def profile_model(
         self,
         model: nn.Module,
@@ -346,30 +344,35 @@ class MLXAccelerator:
     ) -> Dict[str, Any]:
         """Profile model performance on MLX."""
         model.eval()
-        
+
         dummy_input = mx.random.normal(input_shape)
         if self.config.dtype == mx.float16:
             dummy_input = dummy_input.astype(mx.float16)
-        
+
         mx.eval(dummy_input)
-        
+
         warmup_iterations = 10
         for _ in range(warmup_iterations):
             output = model(dummy_input)
             mx.eval(output)
-        
+
         start_time = time.perf_counter()
         for _ in range(num_iterations):
             output = model(dummy_input)
             mx.eval(output)
-        
+
         end_time = time.perf_counter()
-        
+
         avg_time = (end_time - start_time) / num_iterations
         throughput = input_shape[0] / avg_time if avg_time > 0 else 0
-        
-        num_params = sum(p.size for p in tree_flatten(model.parameters()))
-        
+
+        flattened_params = tree_flatten(model.parameters())
+        num_params = 0
+        for item in flattened_params:
+            param = item[1] if isinstance(item, tuple) and len(item) == 2 else item
+            if hasattr(param, "shape"):
+                num_params += int(np.prod(param.shape))
+
         return {
             "avg_inference_time": avg_time,
             "throughput": throughput,
@@ -378,24 +381,24 @@ class MLXAccelerator:
             "device": str(self.device),
             "batch_size": input_shape[0]
         }
-    
+
     def optimize_memory(self, model: nn.Module) -> nn.Module:
         """Optimize memory usage for large models."""
-        
+
         def shard_weights(weights, num_shards=2):
             """Shard weights across multiple arrays."""
             if weights.size < self.config.fusion_threshold:
                 return [weights]
-            
+
             return mx.split(weights, num_shards, axis=0)
-        
+
         for name, param in model.parameters().items():
             if param.size > self.config.fusion_threshold:
                 sharded = shard_weights(param)
                 model.parameters()[name] = sharded[0]
-        
+
         return model
-    
+
     def quantize_model(
         self,
         model: nn.Module,
@@ -406,18 +409,18 @@ class MLXAccelerator:
         logger.info(f"Starting model quantization: {bits}-bit")
         if mixed_precision:
             logger.info(f"Mixed precision config: {mixed_precision}")
-        
+
         quantized_layers = 0
         total_layers = 0
-        
+
         def quantize_weight(param_name: str, w: mx.array) -> mx.array:
             """Quantize weight with per-layer precision."""
             if w.dtype not in [mx.float32, mx.float16, mx.bfloat16]:
                 return w
-            
+
             nonlocal quantized_layers, total_layers
             total_layers += 1
-            
+
             # Determine bits for this layer
             layer_bits = bits
             if mixed_precision:
@@ -431,25 +434,25 @@ class MLXAccelerator:
                 elif any(ffn in param_name for ffn in ["mlp", "feed_forward", "ffn"]):
                     layer_bits = mixed_precision.get("ffn_bits", bits)
                     logger.debug(f"Layer {param_name}: using {layer_bits}-bit (FFN)")
-            
+
             # Group-wise quantization for better quality
             group_size = 64
             orig_shape = w.shape
             w_flat = w.reshape(-1)
-            
+
             # Pad for group alignment
             pad_size = (group_size - w_flat.shape[0] % group_size) % group_size
             if pad_size > 0:
                 w_flat = mx.pad(w_flat, [(0, pad_size)])
-            
+
             # Reshape for group-wise quantization
             w_grouped = w_flat.reshape(-1, group_size)
-            
+
             # Compute scales per group
             w_max = mx.max(mx.abs(w_grouped), axis=1, keepdims=True)
             scale = w_max / (2 ** (layer_bits - 1) - 1)
             scale = mx.where(scale == 0, 1.0, scale)  # Avoid division by zero
-            
+
             # Quantize
             if layer_bits == 4:
                 quantized = mx.round(w_grouped / scale).astype(mx.int8)
@@ -461,17 +464,17 @@ class MLXAccelerator:
                 # For higher precision, keep as is
                 logger.debug(f"Layer {param_name}: keeping original precision")
                 return w
-            
+
             # Dequantize for inference
             dequantized = quantized.astype(mx.float16) * scale
-            
+
             # Reshape back
             dequantized_flat = dequantized.reshape(-1)
             if pad_size > 0:
                 dequantized_flat = dequantized_flat[:-pad_size]
-            
+
             return dequantized_flat.reshape(orig_shape)
-        
+
         # Apply quantization to all parameters
         if hasattr(model, 'named_parameters'):
             for name, param in model.named_parameters():
@@ -482,31 +485,31 @@ class MLXAccelerator:
                 else:
                     # For models that don't support in-place update
                     logger.debug(f"Cannot update parameter {name} in-place, skipping")
-        
+
         mx.eval(model.parameters())
-        
+
         logger.info(f"Quantization completed: {quantized_layers}/{total_layers} layers quantized")
         return model
-    
+
     @staticmethod
     def get_device_info() -> Dict[str, Any]:
         """Get MLX device information."""
         device = mx.default_device()
-        
+
         info = {
             "device": str(device),
             "is_gpu": str(device).lower() == "gpu",
             "default_dtype": str(mx.float32)
         }
-        
+
         return info
-    
+
     def _enable_amx_acceleration(self, model: nn.Module) -> nn.Module:
         """Enable AMX coprocessor acceleration."""
         logger.debug("Configuring model for AMX acceleration")
         # Configure for AMX usage
-        mx.set_default_device(mx.gpu)
-        
+        mx.set_default_device(self.device)
+
         # Check if model has apply_to_parameters method
         if hasattr(model, 'apply_to_parameters'):
             # Apply AMX-friendly layouts to weight matrices
@@ -521,16 +524,16 @@ class MLXAccelerator:
                         if pad_rows > 0 or pad_cols > 0:
                             param = mx.pad(param, [(0, pad_rows), (0, pad_cols)])
                 return param
-            
+
             model.apply_to_parameters(optimize_for_amx)
             logger.debug("AMX optimization applied to model weights")
         else:
             # For models without apply_to_parameters
             # AMX will still be used automatically by MLX for matrix operations
             logger.debug("AMX acceleration enabled (automatic for matrix ops)")
-        
+
         return model
-    
+
     def _fuse_operations(self, model: nn.Module) -> nn.Module:
         """Fuse operations for reduced kernel launches."""
         # Operation fusion is handled by mx.compile decorator
@@ -539,7 +542,7 @@ class MLXAccelerator:
             model.config.fuse_ops = True
             logger.debug("Operation fusion enabled in model config")
         return model
-    
+
     def _setup_rotating_kv_cache(self, model: nn.Module) -> nn.Module:
         """Setup rotating KV cache for long contexts."""
         logger.debug(f"Setting up rotating KV cache with max size: {self.config.kv_cache_size}")
@@ -549,19 +552,19 @@ class MLXAccelerator:
             "current_size": 0,
             "cache": {}
         }
-        
+
         # Modify forward to use cache
         original_forward = model.forward if hasattr(model, 'forward') else model.__call__
-        
+
         def forward_with_cache(x, **kwargs):
             kwargs['cache'] = model.kv_cache.get('cache', {})
             result = original_forward(x, **kwargs)
             return result
-        
+
         model.forward = forward_with_cache
         logger.debug("Rotating KV cache configured")
         return model
-    
+
     def generate_optimized(
         self,
         model: nn.Module,
@@ -572,7 +575,7 @@ class MLXAccelerator:
         top_p: float = 0.95,
         repetition_penalty: float = 1.1,
         stream: bool = True,
-        stop_sequences: List[str] = None
+        stop_sequences: Optional[List[str]] = None
     ) -> Generator[str, None, None]:
         """Optimized generation with AMX and caching."""
         # Add stop sequences to tokenizer if provided
@@ -583,7 +586,7 @@ class MLXAccelerator:
                     logger.debug(f"Added stop sequence to tokenizer: {stop_seq}")
                 except Exception as e:
                     logger.warning(f"Could not add stop sequence '{stop_seq}': {e}")
-        
+
         # Import sample_utils for creating sampler
         try:
             from mlx_lm.sample_utils import make_sampler
@@ -593,25 +596,27 @@ class MLXAccelerator:
         except ImportError:
             sampler = None
             logger.warning("mlx_lm.sample_utils not available, using default sampler")
-        
+
         # Check if mlx_lm functions are available
         if stream and stream_generate is not None:
             logger.debug("Using mlx_lm stream_generate for optimized generation")
-            # stream_generate accepts sampler, not individual params
-            generation_kwargs = {
-                "prompt": prompt,
-                "max_tokens": max_tokens,
-            }
+            # Note: repetition_penalty may need to be handled via logits_processors.
             if sampler is not None:
-                generation_kwargs["sampler"] = sampler
-            
-            # Note: repetition_penalty may need to be handled via logits_processors
-            # For now, we'll use the basic generation
-            for response in stream_generate(
-                model,
-                tokenizer,
-                **generation_kwargs
-            ):
+                responses = stream_generate(
+                    model,
+                    tokenizer,
+                    prompt,
+                    max_tokens=max_tokens,
+                    sampler=sampler,
+                )
+            else:
+                responses = stream_generate(
+                    model,
+                    tokenizer,
+                    prompt,
+                    max_tokens=max_tokens,
+                )
+            for response in responses:
                 # stream_generate returns GenerationResponse objects with .text attribute
                 if hasattr(response, 'text'):
                     yield response.text
@@ -620,25 +625,27 @@ class MLXAccelerator:
                     yield str(response)
         elif not stream and generate is not None:
             logger.debug("Using mlx_lm generate for optimized generation")
-            # generate also uses sampler, not individual params
-            generation_kwargs = {
-                "prompt": prompt,
-                "max_tokens": max_tokens,
-            }
             if sampler is not None:
-                generation_kwargs["sampler"] = sampler
-                
-            result = generate(
-                model,
-                tokenizer,
-                **generation_kwargs
-            )
+                result = generate(
+                    model,
+                    tokenizer,
+                    prompt,
+                    max_tokens=max_tokens,
+                    sampler=sampler,
+                )
+            else:
+                result = generate(
+                    model,
+                    tokenizer,
+                    prompt,
+                    max_tokens=max_tokens,
+                )
             yield result
         else:
             # Fallback: just return a message
             logger.warning("MLX generation functions not available, using fallback")
             yield f"MLX generation not available. Input: {prompt[:50]}..."
-    
+
     @staticmethod
     def benchmark_operation(
         operation: Callable,
@@ -649,32 +656,32 @@ class MLXAccelerator:
         """Benchmark operation with AMX comparison."""
         x = mx.random.normal(input_shape)
         mx.eval(x)
-        
+
         # Warmup
         for _ in range(10):
             _ = operation(x)
             mx.eval(_)
-        
+
         # Benchmark
         start = time.perf_counter()
         for _ in range(num_iterations):
             result = operation(x)
             mx.eval(result)
         end = time.perf_counter()
-        
+
         avg_time = (end - start) / num_iterations * 1000  # ms
-        
+
         # Calculate FLOPS for matmul operations
-        flops = 0
+        flops: float = 0.0
         if len(input_shape) >= 2:
             # Approximate FLOPS for matrix operations
-            flops = 2 * np.prod(input_shape) * input_shape[-1] * num_iterations / (end - start)
-        
+            flops = float(2 * np.prod(input_shape) * input_shape[-1] * num_iterations / (end - start))
+
         result = {
             "avg_time_ms": avg_time,
             "throughput_gflops": flops / 1e9 if flops > 0 else 0,
             "amx_enabled": use_amx
         }
-        
+
         logger.debug(f"Benchmark results: {result}")
         return result

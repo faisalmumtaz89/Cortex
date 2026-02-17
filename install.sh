@@ -1,212 +1,280 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Cortex Installer - Clean setup for macOS Apple Silicon
-# Usage: ./install.sh
+set -euo pipefail
 
-set -e  # Exit on error
+TARGET="${1:-latest}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-RESET='\033[0m'
-
-# Banner
-echo -e "${CYAN}"
-echo "╭─────────────────────────────────────────────────────╮"
-echo "│               CORTEX INSTALLER                      │"
-echo "│    GPU-Accelerated LLM for Apple Silicon           │"
-echo "╰─────────────────────────────────────────────────────╯"
-echo -e "${RESET}\n"
-
-# Check system
-echo -e "${BOLD}System Check${RESET}\n"
-
-# Check macOS
-if [[ "$OSTYPE" != "darwin"* ]]; then
-    echo -e "${RED}✗ Cortex requires macOS${RESET}"
-    exit 1
+if [[ -n "${1:-}" ]] && [[ ! "$1" =~ ^(stable|latest|[0-9]+\.[0-9]+\.[0-9]+(-[^[:space:]]+)?)$ ]]; then
+  echo "Usage: $0 [stable|latest|VERSION]" >&2
+  exit 1
 fi
-echo -e "${GREEN}✓ macOS detected${RESET}"
 
-# Check architecture
-ARCH=$(uname -m)
-if [[ "$ARCH" != "arm64" ]]; then
-    echo -e "${YELLOW}⚠ Cortex is optimized for Apple Silicon (detected: $ARCH)${RESET}"
-    read -p "Continue anyway? (y/n): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
+if [[ -t 1 ]]; then
+  RED=$'\033[31m'
+  GREEN=$'\033[32m'
+  YELLOW=$'\033[33m'
+  CYAN=$'\033[36m'
+  BOLD=$'\033[1m'
+  RESET=$'\033[0m'
 else
-    echo -e "${GREEN}✓ Apple Silicon detected${RESET}"
+  RED=""
+  GREEN=""
+  YELLOW=""
+  CYAN=""
+  BOLD=""
+  RESET=""
 fi
 
-# Check Python
-if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}✗ Python 3 not found${RESET}"
-    echo -e "${BLUE}→ Install with: brew install python@3.11${RESET}"
-    exit 1
-fi
+log() {
+  echo "${CYAN}→${RESET} $*"
+}
 
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-if ! python3 - <<'PY'
+ok() {
+  echo "${GREEN}✓${RESET} $*"
+}
+
+warn() {
+  echo "${YELLOW}⚠${RESET} $*" >&2
+}
+
+die() {
+  echo "${RED}✗${RESET} $*" >&2
+  exit 1
+}
+
+pick_python() {
+  local candidates=()
+  if [[ -n "${CORTEX_PYTHON:-}" ]]; then
+    candidates+=("${CORTEX_PYTHON}")
+  fi
+  candidates+=("python3.13" "python3.12" "python3.11" "python3")
+
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    if ! command -v "${candidate}" >/dev/null 2>&1; then
+      continue
+    fi
+    if "${candidate}" - <<'PY' >/dev/null 2>&1
 import sys
-sys.exit(0 if sys.version_info >= (3, 11) else 1)
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
 PY
-then
-    echo -e "${RED}✗ Python 3.11+ required (found ${PYTHON_VERSION})${RESET}"
-    echo -e "${BLUE}→ Install with: brew install python@3.11${RESET}"
-    exit 1
+    then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_source_checkout() {
+  if [[ ! -f "${SCRIPT_DIR}/pyproject.toml" ]] || [[ ! -d "${SCRIPT_DIR}/cortex" ]]; then
+    return 1
+  fi
+  grep -q '^name = "cortex-llm"' "${SCRIPT_DIR}/pyproject.toml"
+}
+
+pick_downloader() {
+  if command -v curl >/dev/null 2>&1; then
+    echo "curl"
+    return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    echo "wget"
+    return 0
+  fi
+  return 1
+}
+
+ensure_bun() {
+  if command -v bun >/dev/null 2>&1; then
+    command -v bun
+    return 0
+  fi
+
+  local bun_local="${HOME}/.bun/bin/bun"
+  if [[ -x "${bun_local}" ]]; then
+    echo "${bun_local}"
+    return 0
+  fi
+
+  local downloader
+  downloader="$(pick_downloader || true)"
+  if [[ -z "${downloader}" ]]; then
+    die "Bun is required to build the OpenTUI sidecar, but neither curl nor wget is available."
+  fi
+
+  log "Bun not found. Installing Bun..."
+  if [[ "${downloader}" == "curl" ]]; then
+    curl -fsSL https://bun.sh/install | bash >/dev/null
+  else
+    wget -q -O - https://bun.sh/install | bash >/dev/null
+  fi
+
+  if command -v bun >/dev/null 2>&1; then
+    command -v bun
+    return 0
+  fi
+  if [[ -x "${bun_local}" ]]; then
+    echo "${bun_local}"
+    return 0
+  fi
+
+  die "Bun installation failed. Install manually from https://bun.sh and rerun installer."
+}
+
+ensure_source_sidecar() {
+  local source_root="$1"
+  local sidecar="${source_root}/cortex/ui_runtime/bin/cortex-tui"
+  if [[ -x "${sidecar}" ]]; then
+    return 0
+  fi
+
+  local frontend_dir="${source_root}/frontend/cortex-tui"
+  if [[ ! -d "${frontend_dir}" ]]; then
+    die "OpenTUI frontend sources not found at ${frontend_dir}."
+  fi
+
+  local bun_bin
+  bun_bin="$(ensure_bun)"
+
+  log "Building OpenTUI sidecar..."
+  (
+    cd "${frontend_dir}"
+    "${bun_bin}" install >/dev/null
+    "${bun_bin}" run build >/dev/null
+  )
+
+  if [[ ! -x "${sidecar}" ]]; then
+    die "OpenTUI sidecar build failed: ${sidecar} was not produced."
+  fi
+
+  ok "OpenTUI sidecar built."
+}
+
+verify_sidecar_runtime() {
+  local sidecar_path
+  local sidecar_ok
+  sidecar_path="$("${RUNTIME_PYTHON}" - <<'PY'
+from cortex.ui_runtime.launcher import _bundled_binary
+print(_bundled_binary())
+PY
+)"
+  sidecar_ok="$("${RUNTIME_PYTHON}" - <<'PY'
+import os
+from cortex.ui_runtime.launcher import _bundled_binary
+path = _bundled_binary()
+print("1" if path.exists() and os.access(path, os.X_OK) else "0")
+PY
+)"
+
+  if [[ "${sidecar_ok}" != "1" ]]; then
+    die "OpenTUI sidecar is missing or not executable at ${sidecar_path}. Installation incomplete."
+  fi
+  ok "OpenTUI sidecar ready: ${sidecar_path}"
+}
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  die "Cortex is currently supported on macOS only."
 fi
-echo -e "${GREEN}✓ Python $PYTHON_VERSION${RESET}"
 
-# Clean and setup venv
-echo -e "\n${BOLD}Setting Up Environment${RESET}\n"
-
-if [ -d "venv" ]; then
-    echo -e "${BLUE}→ Removing existing virtual environment...${RESET}"
-    rm -rf venv
+shell_arch="$(uname -m)"
+if [[ "${shell_arch}" != "arm64" ]]; then
+  if [[ "${shell_arch}" == "x86_64" ]] && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
+    warn "Terminal is running under Rosetta. Native arm64 terminal is recommended."
+  else
+    die "Unsupported architecture: ${shell_arch}. Cortex requires Apple Silicon."
+  fi
 fi
 
-echo -e "${BLUE}→ Creating virtual environment...${RESET}"
-python3 -m venv venv
-echo -e "${GREEN}✓ Virtual environment created${RESET}"
+if ! command -v xcode-select >/dev/null 2>&1 || ! xcode-select -p >/dev/null 2>&1; then
+  die "Xcode Command Line Tools are required. Run: xcode-select --install"
+fi
 
-# Install dependencies
-echo -e "\n${BOLD}Installing Dependencies${RESET}\n"
+PYTHON_BIN="$(pick_python || true)"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  die "Python 3.11+ was not found. Install it with: brew install python@3.11"
+fi
 
-echo -e "${BLUE}→ Upgrading pip...${RESET}"
-./venv/bin/pip install --upgrade pip setuptools wheel
-echo -e "${GREEN}✓ Pip upgraded${RESET}"
+PY_ARCH="$("${PYTHON_BIN}" -c 'import platform; print(platform.machine())')"
+if [[ "${PY_ARCH}" != "arm64" ]]; then
+  die "Detected ${PYTHON_BIN} (${PY_ARCH}). Install/use an arm64 Python 3.11+."
+fi
 
-echo -e "${BLUE}→ Installing Cortex with dependencies...${RESET}"
-if ./venv/bin/pip install -e .; then
-    echo -e "${GREEN}✓ Cortex installed${RESET}"
+INSTALL_ROOT="${CORTEX_INSTALL_ROOT:-$HOME/.cortex/install}"
+VENV_DIR="${INSTALL_ROOT}/venv"
+BIN_DIR="${CORTEX_BIN_DIR:-$HOME/.local/bin}"
+LOCAL_LINK="${BIN_DIR}/cortex"
+
+mkdir -p "${INSTALL_ROOT}" "${BIN_DIR}"
+
+if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+  log "Creating isolated runtime at ${VENV_DIR}"
+  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+fi
+
+PIP="${VENV_DIR}/bin/pip"
+RUNTIME_PYTHON="${VENV_DIR}/bin/python"
+
+log "Upgrading installer tooling"
+"${PIP}" install --upgrade pip setuptools wheel >/dev/null
+
+INSTALL_MODE="pypi"
+if [[ "${TARGET}" =~ ^(stable|latest)$ ]] && is_source_checkout && [[ "${CORTEX_INSTALL_SOURCE:-1}" == "1" ]]; then
+  INSTALL_MODE="source"
+fi
+
+if [[ "${INSTALL_MODE}" == "source" ]]; then
+  log "Installing Cortex from source checkout: ${SCRIPT_DIR}"
+  "${PIP}" install --upgrade -e "${SCRIPT_DIR}"
+  ensure_source_sidecar "${SCRIPT_DIR}"
 else
-    echo -e "${RED}✗ Installation failed${RESET}"
-    exit 1
+  PACKAGE_SPEC="cortex-llm"
+  if [[ "${TARGET}" != "stable" ]] && [[ "${TARGET}" != "latest" ]]; then
+    PACKAGE_SPEC="cortex-llm==${TARGET}"
+  fi
+  log "Installing ${PACKAGE_SPEC}"
+  "${PIP}" install --upgrade "${PACKAGE_SPEC}"
 fi
 
-# Create launcher script
-echo -e "\n${BOLD}Creating Launcher${RESET}\n"
+if [[ ! -x "${VENV_DIR}/bin/cortex" ]]; then
+  die "Installation completed but cortex entrypoint was not created."
+fi
 
-CORTEX_HOME=$(pwd)
-LAUNCHER_SCRIPT="/tmp/cortex_launcher"
+verify_sidecar_runtime
 
-cat > "$LAUNCHER_SCRIPT" << 'EOF'
-#!/usr/bin/env python3
-"""Cortex launcher"""
-import os, sys, subprocess
-from pathlib import Path
+ln -sfn "${VENV_DIR}/bin/cortex" "${LOCAL_LINK}"
+chmod +x "${VENV_DIR}/bin/cortex"
 
-CORTEX_HOME = Path("CORTEX_HOME_PLACEHOLDER")
-VENV_PATH = CORTEX_HOME / "venv"
+ACTIVE_BIN="${LOCAL_LINK}"
+for system_dir in "/opt/homebrew/bin" "/usr/local/bin"; do
+  if [[ -d "${system_dir}" ]] && [[ -w "${system_dir}" ]]; then
+    ln -sfn "${LOCAL_LINK}" "${system_dir}/cortex"
+    ACTIVE_BIN="${system_dir}/cortex"
+    break
+  fi
+done
 
-if not VENV_PATH.exists():
-    print(f"Error: Run install.sh in {CORTEX_HOME}")
-    sys.exit(1)
+INSTALLED_VERSION="$("${RUNTIME_PYTHON}" - <<'PY'
+from importlib.metadata import version
+print(version("cortex-llm"))
+PY
+)"
 
-env = os.environ.copy()
-env["VIRTUAL_ENV"] = str(VENV_PATH)
-python_path = VENV_PATH / "bin" / "python"
+ok "Installed Cortex ${INSTALLED_VERSION}"
+ok "Launcher: ${ACTIVE_BIN}"
 
-try:
-    subprocess.run([str(python_path), "-m", "cortex"] + sys.argv[1:], env=env)
-except KeyboardInterrupt:
-    sys.exit(130)
-EOF
-
-# Replace placeholder with actual path
-sed -i '' "s|CORTEX_HOME_PLACEHOLDER|$CORTEX_HOME|g" "$LAUNCHER_SCRIPT"
-
-# Install to user directory first
-mkdir -p ~/.local/bin
-cp "$LAUNCHER_SCRIPT" ~/.local/bin/cortex
-chmod +x ~/.local/bin/cortex
-echo -e "${GREEN}✓ Launcher created at ~/.local/bin/cortex${RESET}"
-
-# Try to create system-wide link
-echo -e "${BLUE}→ Attempting system-wide install...${RESET}"
-
-# Check if we can write to /usr/local/bin
-if [ -w "/usr/local/bin" ]; then
-    ln -sf ~/.local/bin/cortex /usr/local/bin/cortex
-    echo -e "${GREEN}✓ System-wide 'cortex' command installed${RESET}"
-    INSTALL_LOCATION="/usr/local/bin"
-else
-    # Try with sudo (will fail in non-interactive, but provide instructions)
-    read -p "Install system-wide 'cortex' command with sudo? (y/N): " -n 1 -r
+if ! command -v cortex >/dev/null 2>&1; then
+  if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
     echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if sudo ln -sf ~/.local/bin/cortex /usr/local/bin/cortex 2>/dev/null; then
-            echo -e "${GREEN}✓ System-wide 'cortex' command installed${RESET}"
-            INSTALL_LOCATION="/usr/local/bin"
-        else
-            echo -e "${YELLOW}⚠ Could not install system-wide${RESET}"
-            echo -e "${BLUE}→ To install system-wide, run:${RESET}"
-            echo -e "   ${CYAN}sudo ln -sf ~/.local/bin/cortex /usr/local/bin/cortex${RESET}"
-            INSTALL_LOCATION="~/.local/bin"
-        fi
-    else
-        INSTALL_LOCATION="~/.local/bin"
-    fi
-    
-    # Update PATH if needed
-    if [[ "$INSTALL_LOCATION" = "~/.local/bin" ]] && [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-        read -p "Add ~/.local/bin to PATH in .zshrc? (y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            echo >> ~/.zshrc
-            echo "# Cortex" >> ~/.zshrc
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-            echo -e "${GREEN}✓ Added ~/.local/bin to PATH in .zshrc${RESET}"
-        else
-            echo -e "${YELLOW}⚠ ~/.local/bin not added to PATH${RESET}"
-        fi
-    fi
+    warn "cortex is not currently on PATH."
+    echo "Add this to your shell profile:"
+    echo "  export PATH=\"${BIN_DIR}:\$PATH\""
+    echo
+  fi
 fi
 
-rm -f "$LAUNCHER_SCRIPT"
-
-# Create directories
-echo -e "\n${BOLD}Creating Directories${RESET}\n"
-mkdir -p ~/models ~/.cortex
-echo -e "${GREEN}✓ Created ~/models and ~/.cortex${RESET}"
-
-# Verify installation
-echo -e "\n${BOLD}Verifying Installation${RESET}\n"
-
-if ./venv/bin/python -c "import cortex" 2>/dev/null; then
-    echo -e "${GREEN}✓ Cortex imports correctly${RESET}"
-else
-    echo -e "${RED}✗ Import test failed${RESET}"
-fi
-
-# Success message
-echo -e "\n${GREEN}${BOLD}"
-echo "╭─────────────────────────────────────────────────────╮"
-echo "│                INSTALLATION COMPLETE!               │"
-echo "╰─────────────────────────────────────────────────────╯"
-echo -e "${RESET}\n"
-
-if [ "$INSTALL_LOCATION" = "/usr/local/bin" ]; then
-    echo -e "${BOLD}Ready to use!${RESET}\n"
-    echo -e "Start Cortex:"
-    echo -e "   ${CYAN}cortex${RESET}\n"
-else
-    echo -e "${BOLD}Next Steps:${RESET}\n"
-    echo -e "1. Add to PATH:"
-    echo -e "   ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${RESET}\n"
-    echo -e "2. Start Cortex:"
-    echo -e "   ${CYAN}cortex${RESET}\n"
-fi
-
-echo -e "Download models (inside Cortex):"
-echo -e "   ${CYAN}/download${RESET}\n"
-
-echo -e "${BOLD}Alternative (works immediately):${RESET}"
-echo -e "   ${CYAN}./venv/bin/python -m cortex${RESET}\n"
+echo
+echo "${BOLD}Installation complete.${RESET}"
+echo "Run: cortex"
+echo

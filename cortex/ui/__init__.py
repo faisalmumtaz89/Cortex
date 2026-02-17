@@ -1,6 +1,6 @@
 """Terminal UI components for Cortex."""
 
-from typing import Dict, Any, Optional
+from typing import Dict
 
 __all__ = [
     "Theme",
@@ -9,7 +9,7 @@ __all__ = [
 
 class Theme:
     """UI theme configuration."""
-    
+
     DEFAULT_THEME = {
         "primary": "#00ff00",
         "secondary": "#0080ff",
@@ -22,9 +22,9 @@ class Theme:
         "border": "#444444",
         "highlight": "#333333"
     }
-    
+
     DARK_THEME = DEFAULT_THEME
-    
+
     LIGHT_THEME = {
         "primary": "#0080ff",
         "secondary": "#00c853",
@@ -37,7 +37,7 @@ class Theme:
         "border": "#cccccc",
         "highlight": "#eeeeee"
     }
-    
+
     @classmethod
     def get_theme(cls, theme_name: str = "default") -> Dict[str, str]:
         """Get theme by name."""
@@ -50,13 +50,13 @@ class Theme:
 
 class UIComponents:
     """Common UI component definitions."""
-    
+
     HEADER_HEIGHT = 3
     FOOTER_HEIGHT = 2
     SIDEBAR_WIDTH = 30
     MIN_TERMINAL_WIDTH = 80
     MIN_TERMINAL_HEIGHT = 24
-    
+
     SHORTCUTS = {
         "new_conversation": "ctrl+n",
         "switch_conversation": "ctrl+tab",
@@ -69,12 +69,12 @@ class UIComponents:
         "settings": "ctrl+,",
         "help": "ctrl+h"
     }
-    
+
     COMMANDS = {
         "/help": "Show available commands",
         "/status": "Show current setup and GPU info",
         "/download": "Download models from HuggingFace",
-        "/model": "Switch or load a model",
+        "/model": "Switch local/cloud model",
         "/models": "List available models",
         "/clear": "Clear current conversation",
         "/save": "Save conversation",
@@ -85,7 +85,7 @@ class UIComponents:
         "/gpu": "Show GPU status",
         "/quit": "Exit application"
     }
-    
+
     STATUS_ICONS = {
         "idle": "⚪",
         "loading": "🔄",
@@ -94,7 +94,7 @@ class UIComponents:
         "error": "❌",
         "cancelled": "⚠️"
     }
-    
+
     @classmethod
     def format_performance_metrics(
         cls,
@@ -104,7 +104,7 @@ class UIComponents:
     ) -> str:
         """Format performance metrics for display."""
         return f"⚡{tokens_per_second:.1f}t/s | GPU: {gpu_utilization:.0f}% | Mem: {memory_gb:.1f}GB"
-    
+
     @classmethod
     def format_model_info(
         cls,

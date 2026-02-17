@@ -50,7 +50,9 @@ dependencies = [
     "numpy>=1.24.0",
     "packaging>=23.0",
     "requests>=2.31.0",
-
+    "openai>=1.54.0",
+    "anthropic>=0.42.0",
+    "keyring>=24.3.0",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +63,8 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.8.0",
+    "types-PyYAML>=6.0.12.20250915",
+    "types-psutil>=7.0.0.20251001",
 ]
 
 # Optional model format support
@@ -83,11 +87,11 @@ Homepage = "https://github.com/faisalmumtaz/Cortex"
 Documentation = "https://github.com/faisalmumtaz/Cortex/wiki"
 
 [tool.setuptools]
-packages = ["cortex", "cortex.metal", "cortex.ui", "cortex.fine_tuning", "cortex.quantization", "cortex.template_registry", "cortex.template_registry.template_profiles", "cortex.template_registry.template_profiles.complex", "cortex.template_registry.template_profiles.standard", "cortex.tools"]
+packages = ["cortex", "cortex.app", "cortex.protocol", "cortex.cloud", "cortex.cloud.clients", "cortex.metal", "cortex.ui", "cortex.ui_runtime", "cortex.fine_tuning", "cortex.quantization", "cortex.template_registry", "cortex.template_registry.template_profiles", "cortex.template_registry.template_profiles.complex", "cortex.template_registry.template_profiles.standard", "cortex.tooling", "cortex.tooling.builtin"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-cortex = ["config.yaml"]
+cortex = ["config.yaml", "ui_runtime/bin/*"]
 
 [tool.black]
 line-length = 100
@@ -96,14 +100,29 @@ target-version = ['py311', 'py312']
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
-ignore = ["E501"]
+ignore = ["E501", "N805"]
 
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["textual", "textual.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["sentencepiece"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["auto_gptq", "awq", "accelerate", "accelerate.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 markers = [

@@ -1,9 +1,9 @@
 """Base template profile for all template implementations."""
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class TemplateType(Enum):
@@ -30,89 +30,83 @@ class TemplateConfig:
     supports_multi_turn: bool = True
     strip_special_tokens: bool = False
     show_reasoning: bool = False
-    custom_filters: List[str] = None
-    stop_sequences: List[str] = None
-    
-    def __post_init__(self):
-        if self.custom_filters is None:
-            self.custom_filters = []
-        if self.stop_sequences is None:
-            self.stop_sequences = []
+    custom_filters: List[str] = field(default_factory=list)
+    stop_sequences: List[str] = field(default_factory=list)
 
 
 class BaseTemplateProfile(ABC):
     """Base class for all template profiles."""
-    
+
     def __init__(self, config: Optional[TemplateConfig] = None):
         """Initialize the template profile."""
         self.config = config or self.get_default_config()
         self._tokenizer = None
-    
+
     @abstractmethod
     def get_default_config(self) -> TemplateConfig:
         """Return the default configuration for this template."""
         pass
-    
+
     @abstractmethod
     def format_messages(self, messages: List[Dict[str, str]], add_generation_prompt: bool = True) -> str:
         """Format a list of messages into the model's expected format.
-        
+
         Args:
             messages: List of message dictionaries with 'role' and 'content'
             add_generation_prompt: Whether to add the assistant prompt at the end
-            
+
         Returns:
             Formatted prompt string
         """
         pass
-    
+
     @abstractmethod
     def process_response(self, raw_output: str) -> str:
         """Process the model's raw output to clean it up.
-        
+
         Args:
             raw_output: Raw text from the model
-            
+
         Returns:
             Cleaned output text
         """
         pass
-    
+
     def supports_streaming(self) -> bool:
         """Check if this profile supports streaming response processing.
-        
+
         Returns:
             True if the profile has streaming capabilities, False otherwise
         """
         return hasattr(self, 'process_streaming_response')
-    
+
     def can_handle(self, model_name: str, tokenizer: Any = None) -> Tuple[bool, float]:
         """Check if this profile can handle the given model.
-        
+
         Args:
             model_name: Name of the model
             tokenizer: Optional tokenizer object
-            
+
         Returns:
             Tuple of (can_handle, confidence_score)
             confidence_score is between 0.0 and 1.0
         """
         return False, 0.0
-    
+
     def set_tokenizer(self, tokenizer: Any) -> None:
         """Set the tokenizer for this profile."""
         self._tokenizer = tokenizer
-    
+
     def get_stop_sequences(self) -> List[str]:
         """Get the stop sequences for this template."""
         return self.config.stop_sequences.copy()
-    
+
     def update_config(self, **kwargs) -> None:
         """Update configuration values."""
         for key, value in kwargs.items():
             if hasattr(self.config, key):
                 setattr(self.config, key, value)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert profile to dictionary representation."""
         return {
@@ -125,7 +119,7 @@ class BaseTemplateProfile(ABC):
             'custom_filters': self.config.custom_filters,
             'stop_sequences': self.config.stop_sequences
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'BaseTemplateProfile':
         """Create profile from dictionary representation."""

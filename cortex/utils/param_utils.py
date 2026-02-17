@@ -4,7 +4,22 @@ from __future__ import annotations
 import json
 import struct
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
+
+
+def _cfg_int(cfg: Dict[str, Any], key: str, default: int) -> int:
+    """Read integer-like config values safely."""
+    value = cfg.get(key, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _cfg_bool(cfg: Dict[str, Any], key: str, default: bool) -> bool:
+    """Read boolean-like config values safely."""
+    value = cfg.get(key, default)
+    return bool(value)
 
 
 def _is_parameter_tensor(tensor_name: str) -> bool:
@@ -77,15 +92,15 @@ def _detect_config_parameters(model_path: Path) -> Optional[int]:
 
 def _calc_llama_params(cfg: Dict[str, Any]) -> Optional[int]:
     try:
-        vocab_size = cfg.get('vocab_size', 32000)
-        hidden_size = cfg.get('hidden_size', 4096)
-        intermediate_size = cfg.get('intermediate_size', 11008)
-        num_layers = cfg.get('num_hidden_layers', 32)
-        num_attention_heads = cfg.get('num_attention_heads', 32)
+        vocab_size = _cfg_int(cfg, 'vocab_size', 32000)
+        hidden_size = _cfg_int(cfg, 'hidden_size', 4096)
+        intermediate_size = _cfg_int(cfg, 'intermediate_size', 11008)
+        num_layers = _cfg_int(cfg, 'num_hidden_layers', 32)
+        num_attention_heads = _cfg_int(cfg, 'num_attention_heads', 32)
         is_gemma = cfg.get('model_type', '').lower() == 'gemma'
         embedding_params = vocab_size * hidden_size
         if is_gemma:
-            num_kv = cfg.get('num_key_value_heads', max(1, num_attention_heads // 4))
+            num_kv = _cfg_int(cfg, 'num_key_value_heads', max(1, num_attention_heads // 4))
             head_dim = hidden_size // num_attention_heads
             q_proj = hidden_size * hidden_size
             k_proj = hidden_size * (num_kv * head_dim)
@@ -99,7 +114,7 @@ def _calc_llama_params(cfg: Dict[str, Any]) -> Optional[int]:
         layer = attention + ff + ln
         transformer = num_layers * layer
         final_ln = hidden_size
-        tie_word_embeddings = cfg.get('tie_word_embeddings', True)
+        tie_word_embeddings = _cfg_bool(cfg, 'tie_word_embeddings', True)
         lm_head = 0 if tie_word_embeddings else vocab_size * hidden_size
         return embedding_params + transformer + final_ln + lm_head
     except Exception:
@@ -108,14 +123,13 @@ def _calc_llama_params(cfg: Dict[str, Any]) -> Optional[int]:
 
 def _calc_gpt_params(cfg: Dict[str, Any]) -> Optional[int]:
     try:
-        vocab_size = cfg.get('vocab_size', 50257)
-        n_embd = cfg.get('n_embd', cfg.get('hidden_size', 768))
-        n_layer = cfg.get('n_layer', cfg.get('num_hidden_layers', 12))
-        n_head = cfg.get('n_head', cfg.get('num_attention_heads', 12))
-        max_pos = cfg.get('n_positions', cfg.get('max_position_embeddings', 1024))
+        vocab_size = _cfg_int(cfg, 'vocab_size', 50257)
+        n_embd = _cfg_int(cfg, 'n_embd', _cfg_int(cfg, 'hidden_size', 768))
+        n_layer = _cfg_int(cfg, 'n_layer', _cfg_int(cfg, 'num_hidden_layers', 12))
+        max_pos = _cfg_int(cfg, 'n_positions', _cfg_int(cfg, 'max_position_embeddings', 1024))
         embedding = vocab_size * n_embd + max_pos * n_embd
         attention = 4 * (n_embd * n_embd)
-        mlp_size = cfg.get('n_inner', 4 * n_embd)
+        mlp_size = _cfg_int(cfg, 'n_inner', 4 * n_embd)
         mlp = n_embd * mlp_size + mlp_size * n_embd
         ln = 2 * n_embd
         block = attention + mlp + ln
@@ -129,12 +143,12 @@ def _calc_gpt_params(cfg: Dict[str, Any]) -> Optional[int]:
 
 def _calc_bert_params(cfg: Dict[str, Any]) -> Optional[int]:
     try:
-        vocab_size = cfg.get('vocab_size', 30522)
-        hidden = cfg.get('hidden_size', 768)
-        layers = cfg.get('num_hidden_layers', 12)
-        intermediate = cfg.get('intermediate_size', 3072)
-        max_pos = cfg.get('max_position_embeddings', 512)
-        type_vocab = cfg.get('type_vocab_size', 2)
+        vocab_size = _cfg_int(cfg, 'vocab_size', 30522)
+        hidden = _cfg_int(cfg, 'hidden_size', 768)
+        layers = _cfg_int(cfg, 'num_hidden_layers', 12)
+        intermediate = _cfg_int(cfg, 'intermediate_size', 3072)
+        max_pos = _cfg_int(cfg, 'max_position_embeddings', 512)
+        type_vocab = _cfg_int(cfg, 'type_vocab_size', 2)
         embedding = vocab_size * hidden + max_pos * hidden + type_vocab * hidden
         attention = 4 * (hidden * hidden)
         ff = hidden * intermediate + intermediate * hidden
@@ -149,9 +163,9 @@ def _calc_bert_params(cfg: Dict[str, Any]) -> Optional[int]:
 
 def _calc_generic_transformer_params(cfg: Dict[str, Any]) -> Optional[int]:
     try:
-        vocab_size = cfg.get('vocab_size', 32000)
-        hidden_size = cfg.get('hidden_size', cfg.get('n_embd', cfg.get('d_model', 512)))
-        num_layers = cfg.get('num_hidden_layers', cfg.get('n_layer', cfg.get('num_layers', 6)))
+        vocab_size = _cfg_int(cfg, 'vocab_size', 32000)
+        hidden_size = _cfg_int(cfg, 'hidden_size', _cfg_int(cfg, 'n_embd', _cfg_int(cfg, 'd_model', 512)))
+        num_layers = _cfg_int(cfg, 'num_hidden_layers', _cfg_int(cfg, 'n_layer', _cfg_int(cfg, 'num_layers', 6)))
         if hidden_size is None or num_layers is None:
             return None
         embedding = vocab_size * hidden_size
@@ -243,6 +257,8 @@ def format_param_count(params_b: Optional[float]) -> str:
         return "0"
     except Exception:
         try:
+            if params_b is None:
+                return "unknown"
             return f"{float(params_b):.2f}B"
         except Exception:
             return "unknown"

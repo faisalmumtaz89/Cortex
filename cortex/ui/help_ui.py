@@ -9,7 +9,7 @@ def show_shortcuts(*, terminal_width: int, box: Any) -> None:
     """Show keyboard shortcuts."""
     width = min(terminal_width - 2, 70)
 
-    print()
+    box.console.print()
     box.print_box_header("Keyboard Shortcuts", width)
     box.print_empty_line(width)
 
@@ -36,7 +36,7 @@ def show_help(*, terminal_width: int, box: Any) -> None:
     """Show available commands."""
     width = min(terminal_width - 2, 70)
 
-    print()
+    box.console.print()
     box.print_box_header("Available Commands", width)
     box.print_empty_line(width)
 
@@ -44,14 +44,14 @@ def show_help(*, terminal_width: int, box: Any) -> None:
         ("/help", "Show this help message"),
         ("/status", "Show current setup and GPU info"),
         ("/download", "Download a model from HuggingFace"),
-        ("/model", "Manage models (load/delete/info)"),
+        ("/model", "Manage local/cloud models (load/delete/switch)"),
         ("/finetune", "Fine-tune a model interactively"),
         ("/clear", "Clear conversation history"),
         ("/save", "Save current conversation"),
         ("/template", "Manage chat templates"),
         ("/gpu", "Show GPU status"),
         ("/benchmark", "Run performance benchmark"),
-        ("/login", "Login to HuggingFace for gated models"),
+        ("/login", "Manage OpenAI/Anthropic/HuggingFace credentials"),
         ("/quit", "Exit Cortex"),
     ]
 

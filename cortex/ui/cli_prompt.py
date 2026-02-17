@@ -25,8 +25,7 @@ def format_prompt_with_chat_template(
     # Build messages list from conversation history
     messages = []
     if conversation and conversation.messages:
-        context_messages = conversation.messages[-10:]
-        for msg in context_messages:
+        for msg in conversation.messages[-20:]:
             messages.append({
                 "role": msg.role.value,
                 "content": msg.content
@@ -47,7 +46,7 @@ def format_prompt_with_chat_template(
             interactive=False
         )
         formatted = profile.format_messages(messages, add_generation_prompt=True)
-        return formatted
+        return formatted if isinstance(formatted, str) else str(formatted)
 
     except (AttributeError, TypeError, ValueError) as e:
         if logger is not None:
@@ -60,7 +59,7 @@ def format_prompt_with_chat_template(
                     tokenize=False,
                     add_generation_prompt=True
                 )
-                return formatted
+                return formatted if isinstance(formatted, str) else str(formatted)
             except (AttributeError, TypeError, ValueError) as e:
                 if logger is not None:
                     logger.debug(f"Tokenizer apply_chat_template failed: {e}")

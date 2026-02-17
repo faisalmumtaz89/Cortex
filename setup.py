@@ -2,7 +2,8 @@
 
 import sys
 from pathlib import Path
-from setuptools import setup, find_packages
+
+from setuptools import find_packages, setup
 
 # Check Python version
 if sys.version_info < (3, 11):
@@ -18,15 +19,15 @@ def read_requirements():
     if requirements_file.exists():
         with open(requirements_file) as f:
             return [
-                line.strip() 
-                for line in f 
+                line.strip()
+                for line in f
                 if line.strip() and not line.startswith("#")
             ]
     return []
 
 setup(
     name="cortex-llm",
-    version="1.0.10",
+    version="1.0.18",
     author="Cortex Development Team",
     description="GPU-Accelerated LLM Terminal for Apple Silicon",
     long_description=README,
@@ -53,6 +54,8 @@ setup(
             "black>=23.0.0",
             "ruff>=0.1.0",
             "mypy>=1.8.0",
+            "types-PyYAML>=6.0.12.20250915",
+            "types-psutil>=7.0.0.20251001",
         ],
         "optional": [
             "sentencepiece>=0.1.99",
@@ -71,7 +74,7 @@ setup(
     },
     include_package_data=True,
     package_data={
-        "cortex": ["config.yaml"],
+        "cortex": ["config.yaml", "ui_runtime/bin/*"],
     },
     zip_safe=False,
     platforms=["darwin"],

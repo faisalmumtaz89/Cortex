@@ -18,8 +18,9 @@ class CommandHandlers:
     run_benchmark: Callable[[], None]
     manage_template: Callable[[str], None]
     run_finetune: Callable[[], None]
-    hf_login: Callable[[], None]
+    login: Callable[[str], None]
     show_shortcuts: Callable[[], None]
+    unknown_command: Callable[[str], None]
 
 
 def handle_command(command: str, handlers: CommandHandlers) -> bool:
@@ -49,13 +50,12 @@ def handle_command(command: str, handlers: CommandHandlers) -> bool:
     elif cmd == "/finetune":
         handlers.run_finetune()
     elif cmd == "/login":
-        handlers.hf_login()
+        handlers.login(args)
     elif cmd in ["/quit", "/exit"]:
         return False
     elif cmd == "?":
         handlers.show_shortcuts()
     else:
-        print(f"\033[31mUnknown command: {cmd}\033[0m")
-        print("\033[2mType /help for available commands\033[0m")
+        handlers.unknown_command(cmd)
 
     return True

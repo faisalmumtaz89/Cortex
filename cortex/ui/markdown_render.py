@@ -1,9 +1,9 @@
 """Markdown rendering helpers with <think> dimming support."""
 
-from typing import List
+from typing import Any, List, cast
 
-from rich.console import Console
 from rich.cells import cell_len
+from rich.console import Console
 from rich.markdown import Markdown
 from rich.segment import Segment
 from rich.style import Style
@@ -12,6 +12,7 @@ from rich.text import Text
 
 THINK_START_MARKER = "[[[THINK_START]]]"
 THINK_END_MARKER = "[[[THINK_END]]]"
+FenceElementBase = cast(Any, Markdown.elements["fence"])
 
 
 def _mark_think_sections(text: str) -> str:
@@ -38,16 +39,37 @@ def _mark_think_sections(text: str) -> str:
     return "".join(output)
 
 
-class CodeBlockWithLineNumbers(Markdown.elements["fence"]):
+class CodeBlockWithLineNumbers(FenceElementBase):  # type: ignore[misc, valid-type]
     """Markdown code block with line numbers."""
 
     def __rich_console__(self, console: Console, options):
         code = str(self.text).rstrip()
-        syntax = Syntax(code, self.lexer_name, theme=self.theme, line_numbers=True)
+        syntax = Syntax(
+            code,
+            self.lexer_name,
+            theme=self.theme,
+            line_numbers=True,
+            word_wrap=True,
+        )
         yield syntax
 
 
-class CodeBlockPlain(Markdown.elements["fence"]):
+class CodeBlockSyntax(FenceElementBase):  # type: ignore[misc, valid-type]
+    """Markdown code block with syntax highlighting and wrapped lines."""
+
+    def __rich_console__(self, console: Console, options):
+        code = str(self.text).rstrip()
+        syntax = Syntax(
+            code,
+            self.lexer_name,
+            theme=self.theme,
+            line_numbers=False,
+            word_wrap=True,
+        )
+        yield syntax
+
+
+class CodeBlockPlain(FenceElementBase):  # type: ignore[misc, valid-type]
     """Markdown code block rendered as plain text (no syntax highlighting)."""
 
     def __rich_console__(self, console: Console, options):
@@ -62,6 +84,16 @@ class MarkdownWithLineNumbers(Markdown):
     elements.update({
         "fence": CodeBlockWithLineNumbers,
         "code_block": CodeBlockWithLineNumbers,
+    })
+
+
+class MarkdownSyntaxCode(Markdown):
+    """Markdown renderer that keeps syntax highlighting for fenced code blocks."""
+
+    elements = Markdown.elements.copy()
+    elements.update({
+        "fence": CodeBlockSyntax,
+        "code_block": CodeBlockSyntax,
     })
 
 
@@ -95,13 +127,17 @@ class ThinkMarkdown:
         use_line_numbers: bool = False,
         syntax_highlighting: bool = True,
     ) -> None:
+        self._markdown: Markdown
         marked = _mark_think_sections(markup)
         if syntax_highlighting:
-            markdown_cls = MarkdownWithLineNumbers if use_line_numbers else Markdown
-            self._markdown = markdown_cls(marked, code_theme=code_theme)
+            self._markdown = (MarkdownWithLineNumbers if use_line_numbers else MarkdownSyntaxCode)(
+                marked,
+                code_theme=code_theme,
+            )
         else:
-            markdown_cls = MarkdownPlainCodeWithLineNumbers if use_line_numbers else MarkdownPlainCode
-            self._markdown = markdown_cls(marked)
+            self._markdown = (MarkdownPlainCodeWithLineNumbers if use_line_numbers else MarkdownPlainCode)(
+                marked
+            )
 
     def __rich_console__(self, console: Console, options):
         segments = console.render(self._markdown, options)
@@ -151,26 +187,29 @@ class ThinkMarkdown:
                     carry = ""
                     carry_style = None
 
-            output = ""
+            output_chars: List[str] = []
             index = 0
             while index < len(text):
                 if text.startswith(start_marker, index):
-                    if output:
+                    if output_chars:
+                        output = "".join(output_chars)
                         yield from emit(output, style)
-                        output = ""
+                        output_chars.clear()
                     in_think = True
                     index += len(start_marker)
                     continue
                 if text.startswith(end_marker, index):
-                    if output:
+                    if output_chars:
+                        output = "".join(output_chars)
                         yield from emit(output, style)
-                        output = ""
+                        output_chars.clear()
                     in_think = False
                     index += len(end_marker)
                     continue
-                output += text[index]
+                output_chars.append(text[index])
                 index += 1
 
+            output = "".join(output_chars)
             output, carry = pending_suffix(output)
             if output:
                 yield from emit(output, style)

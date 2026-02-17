@@ -2,7 +2,11 @@
 
 ## How Cortex Works
 
-Cortex is an interactive REPL (Read-Eval-Print Loop) for running large language models locally on Apple Silicon. You launch it with `cortex` (or `python -m cortex`) and interact using slash commands inside the REPL.
+Cortex uses a split runtime:
+- `cortex` launches an OpenTUI frontend sidecar (terminal renderer)
+- frontend talks to Python backend worker (`python -m cortex --worker-stdio`) over JSON-RPC
+
+Compatibility fallback remains available with `cortex --legacy-ui`.
 
 **Available slash commands:**
 
@@ -11,12 +15,12 @@ Cortex is an interactive REPL (Read-Eval-Print Loop) for running large language 
 | `/help` | Show all available commands |
 | `/status` | Show current setup (GPU, model, template) |
 | `/gpu` | Show GPU information and memory status |
-| `/model` | Manage models (load, delete, info) |
+| `/model` | Manage local/cloud models (load, delete, switch) |
 | `/download` | Download a model from HuggingFace |
 | `/benchmark` | Run performance benchmark |
 | `/template` | Configure chat template for current model |
 | `/finetune` | Fine-tune a model interactively |
-| `/login` | Login to HuggingFace for gated models |
+| `/login` | Manage OpenAI/Anthropic/HuggingFace credentials |
 | `/save` | Save current conversation |
 | `/clear` | Clear conversation history |
 | `/quit` | Exit Cortex |
@@ -29,6 +33,35 @@ Cortex is an interactive REPL (Read-Eval-Print Loop) for running large language 
 | `Ctrl+D` | Exit Cortex |
 | `Tab` | Auto-complete commands (readline) |
 | `?` | Show in-app help |
+
+---
+
+## OpenTUI Runtime Startup
+
+### OpenTUI sidecar unavailable
+
+If the sidecar frontend binary (or Bun dev runtime) is missing, Cortex logs a warning and falls back to `--legacy-ui` automatically.
+
+Options:
+
+1. Run compatibility mode explicitly:
+```bash
+cortex --legacy-ui
+```
+
+2. For source development, install Bun and frontend deps:
+```bash
+cd frontend/cortex-tui
+npm install
+bun run scripts/build.ts
+```
+
+3. Verify worker path manually:
+```bash
+python -m cortex --worker-stdio
+```
+
+If worker handshake fails, check protocol version compatibility between frontend and backend (`1.0.0`).
 
 ---
 
@@ -155,9 +188,11 @@ If you see "No model loaded" after starting Cortex, you need to download or sele
 Inside the Cortex REPL:
 
 1. Use `/download` to download a model from HuggingFace. You will be prompted for a repository ID (e.g., `meta-llama/Llama-3.2-3B`).
-2. Use `/model` to list and load models that are already downloaded.
+2. Use `/model` to list and load local models that are already downloaded.
+3. Or select a cloud model with `/model openai:gpt-5.1` or `/model anthropic:claude-sonnet-4-5`.
 
-For gated models (like Llama), you must first authenticate with `/login` and provide your HuggingFace access token.
+For cloud models, configure API keys with `/login openai` or `/login anthropic`.
+For gated HuggingFace models (like Llama), use `/login huggingface`.
 
 ### Model format not supported
 
@@ -227,7 +262,7 @@ Response quality depends on the model and its configuration:
 
 - Ensure you are using an appropriate chat template. Use `/template` to configure or reconfigure the template for your current model.
 - Try a different model. Larger models generally produce better responses but require more memory.
-- Generation parameters (temperature, top_p, top_k, repetition_penalty) are configured in `config.yaml` under the `[inference]` section. Lower temperature values (e.g., 0.3) produce more focused responses; higher values (e.g., 1.0) produce more varied output.
+- Generation parameters (temperature, top_p, top_k, repetition_penalty) are configured as flat keys in `config.yaml`. Lower temperature values (e.g., 0.3) produce more focused responses; higher values (e.g., 1.0) produce more varied output.
 
 ---
 
@@ -300,17 +335,61 @@ Cortex uses a custom input handler with character-by-character reading for its s
 
 ---
 
+## Cloud and Tooling Issues
+
+### Stuck on "Thinking..." for cloud models
+
+If cloud generation appears stalled, verify:
+
+1. `cloud_enabled: true` in `config.yaml`
+2. Valid provider key via `/login openai` or `/login anthropic`
+3. Reasonable timeout/retry values:
+
+```yaml
+cloud_timeout_seconds: 60
+cloud_max_retries: 2
+tools_idle_timeout_seconds: 45
+```
+
+Cortex now fails fast on true idle stream timeouts and logs attempt details in `~/.cortex/cortex.log` with provider/model and request id.
+
+### Model emits fake tool JSON or `<tool_calls>` text
+
+When tools are disabled (`tools_enabled: false` or `tools_profile: off`), Cortex injects a no-tools instruction to prevent fake tool-call output.
+
+If you want tools, explicitly enable them:
+
+```yaml
+tools_enabled: true
+tools_profile: read_only
+```
+
+### Tool permission prompts
+
+When tools are enabled, every new permission scope prompts:
+
+- `Allow once`
+- `Allow always`
+- `Reject`
+
+Pressing `Esc` maps to reject/cancel.
+Persistent approvals are stored in `~/.cortex/tool_permissions.yaml`.
+
+---
+
 ## Common Errors and Solutions
 
 | Error | Cause | Solution |
 |-------|-------|----------|
 | "GPU validation failed" | Not running on Apple Silicon or Metal not available | Verify hardware with `python -c "import platform; print(platform.machine())"` |
 | "No model loaded" | No model selected | Use `/model` or `/download` in the REPL |
+| "Missing API key for openai/anthropic" | Cloud model selected without credentials | Run `/login openai` or `/login anthropic` |
 | "Failed to load model" | Model corrupted, wrong format, or insufficient memory | Check `/gpu` for memory, try a smaller model |
 | "MLX not available" | MLX not installed or not on Apple Silicon | `pip install "mlx>=0.30.4" "mlx-lm>=0.30.5" --upgrade` |
 | "MPS backend not available" | PyTorch MPS not supported | Update PyTorch and verify you are on a recent macOS release |
 | "Unknown command" | Typo in slash command | Type `/help` to see available commands |
 | "huggingface-hub not installed" | Missing dependency for `/login` | `pip install huggingface-hub` |
+| "OpenAI/Anthropic runtime dependency is missing" | Missing provider SDK | Run `/login openai` or `/login anthropic` to auto-install and configure dependencies |
 
 ---
 

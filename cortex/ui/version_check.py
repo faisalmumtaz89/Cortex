@@ -1,4 +1,4 @@
-"""Pipx-based version check for Cortex."""
+"""Version check helpers for Cortex package installs."""
 
 from __future__ import annotations
 
@@ -8,10 +8,11 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from typing import Optional
 
-from packaging.version import Version, InvalidVersion
-
+from packaging.version import InvalidVersion, Version
 
 UPDATE_CACHE_TTL = timedelta(hours=24)
 
@@ -22,13 +23,21 @@ class UpdateStatus:
     latest_version: str
 
 
+def _coerce_optional_str(value: object) -> Optional[str]:
+    """Normalize arbitrary values into optional non-empty strings."""
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    return None
+
+
 def get_update_status(*, config) -> Optional[UpdateStatus]:
-    """Return update status if an update is available via pipx."""
+    """Return update status when a newer package version is available."""
     if not _should_check_updates(config):
         return None
 
-    pipx_version = _get_pipx_installed_version()
-    if not pipx_version:
+    installed_version = _get_installed_version()
+    if not installed_version:
         return None
 
     latest_version = _fetch_latest_version()
@@ -40,12 +49,12 @@ def get_update_status(*, config) -> Optional[UpdateStatus]:
             return None
 
     try:
-        if Version(latest_version) <= Version(pipx_version):
+        if Version(latest_version) <= Version(installed_version):
             return None
     except InvalidVersion:
         return None
 
-    return UpdateStatus(current_version=pipx_version, latest_version=latest_version)
+    return UpdateStatus(current_version=installed_version, latest_version=latest_version)
 
 
 def _should_check_updates(config) -> bool:
@@ -55,8 +64,25 @@ def _should_check_updates(config) -> bool:
     return True
 
 
+def _get_installed_version() -> Optional[str]:
+    """Read the currently installed package version."""
+    for package_name in ("cortex-llm", "cortex_llm"):
+        try:
+            installed = package_version(package_name)
+        except PackageNotFoundError:
+            continue
+        except Exception:
+            continue
+
+        normalized = _coerce_optional_str(installed)
+        if normalized:
+            return normalized
+
+    return _get_pipx_installed_version()
+
+
 def _get_pipx_installed_version() -> Optional[str]:
-    """Read the installed version from pipx, if available."""
+    """Read the installed version from pipx, if available (legacy fallback)."""
     if not shutil.which("pipx"):
         return None
 
@@ -86,10 +112,10 @@ def _get_pipx_installed_version() -> Optional[str]:
     metadata = info.get("metadata") or {}
     main_package = metadata.get("main_package") or {}
     return (
-        main_package.get("package_version")
-        or main_package.get("version")
-        or info.get("package_version")
-        or info.get("version")
+        _coerce_optional_str(main_package.get("package_version"))
+        or _coerce_optional_str(main_package.get("version"))
+        or _coerce_optional_str(info.get("package_version"))
+        or _coerce_optional_str(info.get("version"))
     )
 
 
@@ -106,8 +132,8 @@ def _parse_pipx_list_text(output: str) -> Optional[str]:
 
 def _get_latest_version_cached(config) -> Optional[str]:
     """Use cached update info when available."""
-    cached_version = config.get_state_value("latest_version")
-    cached_at = config.get_state_value("latest_version_checked_at")
+    cached_version = _coerce_optional_str(config.get_state_value("latest_version"))
+    cached_at = _coerce_optional_str(config.get_state_value("latest_version_checked_at"))
     if not cached_version or not cached_at:
         return None
     try:
@@ -146,9 +172,9 @@ def _fetch_latest_version() -> Optional[str]:
         if parsed:
             return parsed
 
-    pipx_version = _get_pipx_installed_version()
-    if pipx_version:
-        return pipx_version
+    installed_version = _get_installed_version()
+    if installed_version:
+        return installed_version
 
     return None
 
