@@ -199,3 +199,4 @@ frontend/cortex-tui/node_modules/
 frontend/cortex-tui/dist/
 frontend/cortex-tui/dist-node/
 cortex/ui_runtime/bin/cortex-tui
+frontend/cortex-tui/bun.lock

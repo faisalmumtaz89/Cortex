@@ -3,7 +3,12 @@
 set -euo pipefail
 
 TARGET="${1:-latest}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ -n "${BASH_SOURCE[0]-}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+else
+  # When executed via `curl ... | bash`, BASH_SOURCE can be unset under `set -u`.
+  SCRIPT_DIR="$(pwd -P)"
+fi
 
 if [[ -n "${1:-}" ]] && [[ ! "$1" =~ ^(stable|latest|[0-9]+\.[0-9]+\.[0-9]+(-[^[:space:]]+)?)$ ]]; then
   echo "Usage: $0 [stable|latest|VERSION]" >&2
@@ -104,11 +109,11 @@ ensure_bun() {
     die "Bun is required to build the OpenTUI sidecar, but neither curl nor wget is available."
   fi
 
-  log "Bun not found. Installing Bun..."
+  log "Bun not found. Installing Bun..." >&2
   if [[ "${downloader}" == "curl" ]]; then
-    curl -fsSL https://bun.sh/install | bash >/dev/null
+    curl -fsSL https://bun.sh/install | bash -s -- >/dev/null
   else
-    wget -q -O - https://bun.sh/install | bash >/dev/null
+    wget -q -O - https://bun.sh/install | bash -s -- >/dev/null
   fi
 
   if command -v bun >/dev/null 2>&1; then
