@@ -131,19 +131,40 @@ ensure_bun() {
 ensure_source_sidecar() {
   local source_root="$1"
   local sidecar="${source_root}/cortex/ui_runtime/bin/cortex-tui"
-  if [[ -x "${sidecar}" ]]; then
-    return 0
-  fi
-
   local frontend_dir="${source_root}/frontend/cortex-tui"
   if [[ ! -d "${frontend_dir}" ]]; then
     die "OpenTUI frontend sources not found at ${frontend_dir}."
   fi
 
+  local needs_build="0"
+  local reason="missing"
+  if [[ ! -x "${sidecar}" ]]; then
+    needs_build="1"
+    reason="missing"
+  else
+    # Rebuild when frontend sources/config are newer than the bundled sidecar.
+    local stale_marker=""
+    stale_marker="$(find "${frontend_dir}" -type f \
+      \( -name "*.ts" -o -name "*.tsx" -o -name "package.json" -o -name "bun.lock*" -o -name "tsconfig*.json" \) \
+      -newer "${sidecar}" -print -quit 2>/dev/null || true)"
+    if [[ -n "${stale_marker}" ]]; then
+      needs_build="1"
+      reason="stale"
+    fi
+  fi
+
+  if [[ "${needs_build}" != "1" ]]; then
+    return 0
+  fi
+
   local bun_bin
   bun_bin="$(ensure_bun)"
 
-  log "Building OpenTUI sidecar..."
+  if [[ "${reason}" == "stale" ]]; then
+    log "Rebuilding OpenTUI sidecar (frontend sources changed)..."
+  else
+    log "Building OpenTUI sidecar..."
+  fi
   (
     cd "${frontend_dir}"
     "${bun_bin}" install >/dev/null

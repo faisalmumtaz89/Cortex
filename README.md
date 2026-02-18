@@ -57,7 +57,7 @@ cd Cortex
 ./install.sh
 ```
 
-The installer checks Apple Silicon compatibility, provisions an isolated runtime under `~/.cortex/install`, installs Cortex, and sets up the `cortex` command launcher.
+The installer checks Apple Silicon compatibility, provisions an isolated runtime under `~/.cortex/install`, installs Cortex, builds the OpenTUI sidecar when missing or stale, and sets up the `cortex` command launcher.
 
 ## Requirements
 

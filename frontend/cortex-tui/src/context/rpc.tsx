@@ -5,6 +5,7 @@ import { useStore } from "./store"
 type RpcContextValue = {
   client: RpcClient
   bootstrap: () => Promise<void>
+  runCommand: (command: string) => Promise<boolean>
   submitInput: (text: string) => Promise<boolean>
   replyPermission: (requestID: string, reply: "allow_once" | "allow_always" | "reject") => Promise<boolean>
 }
@@ -86,6 +87,42 @@ export function RpcProvider(props: ParentProps) {
     })
     const session = await client.request("session.create_or_resume", {})
     store.setSessionID(String(session.session_id ?? ""))
+    await refreshModels()
+  }
+
+  const refreshModels = async (): Promise<void> => {
+    try {
+      const models = await client.request("model.list", {})
+      store.setModelStateFromList(models as Record<string, unknown>)
+    } catch {
+      // Non-fatal: model bar can stay on previous state if the list call fails.
+    }
+  }
+
+  const runCommand = async (command: string): Promise<boolean> => {
+    const sessionID = store.state.sessionID
+    const normalized = command.trim()
+    if (!sessionID || !normalized) {
+      return false
+    }
+
+    const slashCommand = normalized.startsWith("/") ? normalized : `/${normalized}`
+    store.clearError()
+    try {
+      const result = await client.request("command.execute", {
+        session_id: sessionID,
+        command: slashCommand,
+      })
+      if (result.exit === true) {
+        process.exit(0)
+      }
+      await refreshModels()
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      store.setError(message)
+      return false
+    }
   }
 
   const submitInput = async (text: string): Promise<boolean> => {
@@ -96,14 +133,7 @@ export function RpcProvider(props: ParentProps) {
     store.clearError()
     try {
       if (text.startsWith("/")) {
-        const result = await client.request("command.execute", {
-          session_id: sessionID,
-          command: text.trim(),
-        })
-        if (result.exit === true) {
-          process.exit(0)
-        }
-        return true
+        return runCommand(text.trim())
       }
 
       const result = await client.request(
@@ -170,6 +200,7 @@ export function RpcProvider(props: ParentProps) {
       value={{
         client,
         bootstrap,
+        runCommand,
         submitInput,
         replyPermission,
       }}

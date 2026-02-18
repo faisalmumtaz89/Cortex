@@ -38,6 +38,40 @@ class ModelDownloader:
 
         return False, None
 
+    @staticmethod
+    def _has_model_weights(model_dir: Path) -> bool:
+        """Return True if directory contains recognizable weight files."""
+        weight_patterns = (
+            "*.safetensors",
+            "*.gguf",
+            "*.ggml",
+            "pytorch_model*.bin",
+            "weights.npz",
+        )
+        for pattern in weight_patterns:
+            if any(model_dir.glob(pattern)):
+                return True
+        return False
+
+    def _is_incomplete_snapshot(self, model_dir: Path) -> bool:
+        """Detect interrupted snapshot downloads that should be resumed."""
+        if not model_dir.exists() or not model_dir.is_dir():
+            return False
+
+        hf_download_cache = model_dir / ".cache" / "huggingface" / "download"
+        if hf_download_cache.exists():
+            if any(hf_download_cache.glob("*.incomplete")):
+                return True
+            if any(hf_download_cache.glob("*.lock")):
+                return True
+
+        # Some interrupted downloads leave metadata without any model weights.
+        has_metadata = (model_dir / "config.json").exists() or (model_dir / "model.safetensors.index.json").exists()
+        if has_metadata and not self._has_model_weights(model_dir):
+            return True
+
+        return False
+
     def download_model(self, repo_id: str, filename: Optional[str] = None) -> Tuple[bool, str, Optional[Path]]:
         """
         Download a model from HuggingFace.
@@ -77,8 +111,12 @@ class ModelDownloader:
 
                 print(f"Downloading repository {repo_id}...")
 
+                resumed = False
                 if local_path.exists() and any(local_path.iterdir()):
-                    return False, f"Model already exists: {local_path}", local_path
+                    if self._is_incomplete_snapshot(local_path):
+                        resumed = True
+                    else:
+                        return False, f"Model already exists: {local_path}", local_path
 
                 downloaded_path = snapshot_download(
                     repo_id=repo_id,
@@ -86,7 +124,9 @@ class ModelDownloader:
                     # Downloads always resume when possible by default
                 )
 
-                return True, f"Downloaded to {local_path}", local_path
+                if resumed:
+                    return True, f"Resumed and downloaded to {local_path}", Path(downloaded_path)
+                return True, f"Downloaded to {local_path}", Path(downloaded_path)
 
         except GatedRepoError:
             # Check if user is logged in

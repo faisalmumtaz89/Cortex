@@ -90,7 +90,7 @@ export function PromptPanel(props: {
         />
       </box>
       <box flexDirection="row" justifyContent="space-between">
-        <text fg={UI_PALETTE.textMuted}>Enter submit · Esc reject permission</text>
+        <text fg={UI_PALETTE.textMuted}>Enter submit · Esc reject permission · F1 setup · F2 switch · F3 download</text>
         <Show when={props.status !== "idle"}>
           <text fg={props.statusColor}>{props.status}</text>
         </Show>

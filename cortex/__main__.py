@@ -160,7 +160,7 @@ def main() -> None:
     if exit_code == 127:
         print(
             "OpenTUI sidecar not available in this environment. "
-            "Install Bun, or run `npm install` in frontend/cortex-tui to provision local Bun.",
+            "If running from source, execute `./install.sh` at the repository root to build and install the sidecar.",
             file=sys.stderr,
         )
         raise SystemExit(exit_code)

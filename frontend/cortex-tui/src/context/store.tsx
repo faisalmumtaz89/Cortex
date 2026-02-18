@@ -34,6 +34,9 @@ export interface MessageRecord {
 type State = {
   sessionID: string
   status: SessionStatus
+  activeModelLabel: string
+  localModelCount: number
+  firstLocalModelName?: string
   error?: string
   pendingPermission?: {
     request_id: string
@@ -52,6 +55,7 @@ const StoreContext = createContext<{
   applyEvent: (event: EventEnvelope) => void
   flushPendingEvents: () => void
   applySubmitResultFallback: (result: Record<string, unknown>) => void
+  setModelStateFromList: (payload: Record<string, unknown>) => void
   setSessionID: (sessionID: string) => void
   setError: (message: string) => void
   clearError: () => void
@@ -60,6 +64,8 @@ const StoreContext = createContext<{
 const initialState: State = {
   sessionID: "",
   status: "idle",
+  activeModelLabel: "No model loaded",
+  localModelCount: 0,
   messages: {},
   orderedMessageIDs: [],
   seqBySession: {},
@@ -379,6 +385,33 @@ export function StoreProvider(props: ParentProps) {
     }
   }
 
+  const setModelStateFromList = (payload: Record<string, unknown>) => {
+    const activeTargetRaw = payload.active_target
+    const activeTarget =
+      activeTargetRaw && typeof activeTargetRaw === "object"
+        ? (activeTargetRaw as Record<string, unknown>)
+        : {}
+
+    const localRaw = Array.isArray(payload.local) ? payload.local : []
+    const firstLocalEntry = localRaw.find(
+      (item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).name === "string",
+    ) as Record<string, unknown> | undefined
+
+    const firstLocalName =
+      firstLocalEntry && typeof firstLocalEntry.name === "string" ? firstLocalEntry.name.trim() : undefined
+
+    const activeLabel =
+      typeof activeTarget.label === "string" && activeTarget.label.trim().length > 0
+        ? activeTarget.label.trim()
+        : "No model loaded"
+
+    batch(() => {
+      setState("activeModelLabel", activeLabel)
+      setState("localModelCount", localRaw.length)
+      setState("firstLocalModelName", firstLocalName && firstLocalName.length > 0 ? firstLocalName : undefined)
+    })
+  }
+
   const setError = (message: string) => {
     const normalized = message.trim()
     setState("error", normalized ? normalized : undefined)
@@ -394,6 +427,7 @@ export function StoreProvider(props: ParentProps) {
     applyEvent,
     flushPendingEvents,
     applySubmitResultFallback,
+    setModelStateFromList,
     setSessionID,
     setError,
     clearError,

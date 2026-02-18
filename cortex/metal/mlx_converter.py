@@ -521,7 +521,15 @@ class MLXConverter:
             normalized_hf_repo = self._normalize_hf_repo(hf_repo)
             if mlx_utils is None or not hasattr(mlx_utils, "save"):
                 return False, "MLX LM save() not available; upgrade mlx-lm.", None
-            mlx_utils.save(output_path, model_path, model, tokenizer, model_config, hf_repo=normalized_hf_repo)
+            # Older mlx-lm versions don't accept the hf_repo keyword.
+            try:
+                mlx_utils.save(output_path, model_path, model, tokenizer, model_config, hf_repo=normalized_hf_repo)
+            except TypeError as save_error:
+                error_text = str(save_error)
+                if "unexpected keyword argument 'hf_repo'" not in error_text:
+                    raise
+                logger.warning("mlx-lm save() does not accept hf_repo; retrying without hf_repo")
+                mlx_utils.save(output_path, model_path, model, tokenizer, model_config)
             logger.info("MLX conversion completed")
 
             # Apply AMX optimizations if enabled

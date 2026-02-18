@@ -45,6 +45,11 @@ export function SessionRoute(props: {
 
   const messages = createMemo(() => store.state.orderedMessageIDs.map((id) => store.state.messages[id]).filter(Boolean))
   const hasPendingPermission = createMemo(() => Boolean(store.state.pendingPermission))
+  const activeModelLabel = createMemo(() => {
+    const label = store.state.activeModelLabel?.trim()
+    return label && label.length > 0 ? label : "No model loaded"
+  })
+  const hasActiveModel = createMemo(() => activeModelLabel() !== "No model loaded")
 
   const emitLayoutDebug = (stage: string) => {
     if (!debugLayout) {
@@ -124,9 +129,64 @@ export function SessionRoute(props: {
     }
   }
 
+  const setPromptCommand = (command: string) => {
+    if (!input || input.isDestroyed) {
+      return
+    }
+    input.clear()
+    input.insertText(command)
+    input.focus()
+  }
+
+  const submitSystemCommand = async (command: string) => {
+    const submitted = await props.onSubmit(command)
+    if (submitted) {
+      toBottom()
+      emitLayoutDebug(`quick_command:${command}`)
+    }
+  }
+
+  const runQuickSetup = async () => {
+    if (hasActiveModel()) {
+      await submitSystemCommand("/model")
+      return
+    }
+
+    const firstLocal = (store.state.firstLocalModelName || "").trim()
+    if (firstLocal.length > 0) {
+      await submitSystemCommand(`/model ${firstLocal}`)
+      return
+    }
+
+    setPromptCommand("/download ")
+  }
+
+  const runQuickSwitch = async () => {
+    await submitSystemCommand("/model")
+  }
+
+  const runQuickDownload = () => {
+    setPromptCommand("/download ")
+  }
+
   const onPromptKeyDown = (event: KeyEvent) => {
     if (!hasPendingPermission()) {
       const key = String(event.name ?? "").toLowerCase()
+      if (key === "f1") {
+        event.preventDefault()
+        void runQuickSetup()
+        return
+      }
+      if (key === "f2") {
+        event.preventDefault()
+        void runQuickSwitch()
+        return
+      }
+      if (key === "f3") {
+        event.preventDefault()
+        runQuickDownload()
+        return
+      }
       const shift = Boolean((event as { shift?: boolean }).shift)
       if ((key === "return" || key === "enter") && !shift) {
         event.preventDefault()
@@ -221,6 +281,20 @@ export function SessionRoute(props: {
           <text fg={UI_PALETTE.accent}>Cortex</text>
           <text fg={UI_PALETTE.textMuted}>status:</text>
           <text fg={statusColor()}>{store.state.status}</text>
+        </box>
+
+        <box
+          flexDirection="column"
+          border={["left"]}
+          borderColor={hasActiveModel() ? UI_PALETTE.accent : UI_PALETTE.statusBusy}
+          paddingLeft={2}
+          paddingTop={1}
+          paddingBottom={1}
+          backgroundColor={UI_PALETTE.panel}
+        >
+          <text fg={UI_PALETTE.textMuted}>Model</text>
+          <text fg={hasActiveModel() ? UI_PALETTE.text : UI_PALETTE.statusError}>{activeModelLabel()}</text>
+          <text fg={UI_PALETTE.textMuted}>F1 Setup · F2 Switch · F3 Download</text>
         </box>
 
         <scrollbox
