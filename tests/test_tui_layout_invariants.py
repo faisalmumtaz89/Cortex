@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from cortex.ui_runtime import launcher
 
 
@@ -17,6 +18,7 @@ def _repo_root() -> Path:
 
 def _read(path: str) -> str:
     return (_repo_root() / path).read_text(encoding="utf-8")
+
 
 def _try_decode_utf8(data: bytes) -> str | None:
     try:
@@ -47,12 +49,15 @@ def test_session_layout_uses_single_flex_scroll_transcript() -> None:
 def test_prompt_panel_contract_is_bottom_anchor_stable() -> None:
     source = _read("frontend/cortex-tui/src/components/prompt_panel.tsx")
 
-    assert "placeholder={props.hasPendingPermission ? \"Permission modal active...\" : \"Ask Cortex...\"}" in source
+    assert (
+        'placeholder={props.hasPendingPermission ? "Permission modal active..." : "Ask Cortex..."}'
+        in source
+    )
     assert "minHeight={1}" in source
     assert "maxHeight={6}" in source
-    assert "Enter submit · Esc reject permission" in source
-    assert "vertical: \"┃\"" in source
-    assert "bottomLeft: \"╹\"" in source
+    assert "Enter submit | Esc reject permission | type /setup /model /download" in source
+    assert 'vertical: "┃"' in source
+    assert 'bottomLeft: "╹"' in source
 
 
 def test_index_startup_uses_full_screen_alt_buffer() -> None:
@@ -62,6 +67,14 @@ def test_index_startup_uses_full_screen_alt_buffer() -> None:
     assert "experimental_splitHeight" not in source
     assert "queryCursorRow" not in source
     assert "computeSplitHeight" not in source
+
+
+def test_model_hint_copy_uses_ascii_safe_separators() -> None:
+    source = _read("frontend/cortex-tui/src/routes/session.tsx")
+
+    assert "Model:" in source
+    assert "Type: setup | model | download" not in source
+    assert "Type: setup · model · download" not in source
 
 
 def test_app_disables_stdout_interception_without_startup_clear_hacks() -> None:
@@ -99,6 +112,7 @@ def test_role_specific_message_components_exist_and_generic_renderer_removed() -
 def test_message_components_render_panel_metadata_rows() -> None:
     user_source = _read("frontend/cortex-tui/src/components/messages/user_message.tsx")
     assistant_source = _read("frontend/cortex-tui/src/components/messages/assistant_message.tsx")
+    system_source = _read("frontend/cortex-tui/src/components/messages/system_message.tsx")
 
     assert "formatTimestamp(props.message.createdTsMs)" in user_source
     assert "backgroundColor={UI_PALETTE.panel}" in user_source
@@ -106,6 +120,17 @@ def test_message_components_render_panel_metadata_rows() -> None:
     assert "modeLabel()" in assistant_source
     assert "modelLabel()" in assistant_source
     assert "formatDuration(props.message.elapsedMs)" in assistant_source
+    assert (
+        "const showLiveProgress = hasProgress && !props.message.final && !isTerminalPhase"
+        in system_source
+    )
+    assert "Download complete:" in system_source
+    assert "100.0% (finalizing)" in system_source
+    assert 'phase !== "finalizing" && !transferComplete' in system_source
+    assert (
+        "{showLiveProgress && progress && <text fg={UI_PALETTE.textMuted}>{progressHeadline(progress)}</text>}"
+        in system_source
+    )
 
 
 def test_store_merge_logic_protects_streamed_content_and_dedupes_per_message() -> None:
@@ -117,7 +142,7 @@ def test_store_merge_logic_protects_streamed_content_and_dedupes_per_message() -
     assert "created_ts_ms" in source
     assert "completed_ts_ms" in source
     assert "elapsed_ms" in source
-    assert "setState(\"notices\"" not in source
+    assert 'setState("notices"' not in source
 
 
 def test_frontend_colors_are_centralized_in_shared_palette_module() -> None:

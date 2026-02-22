@@ -6,6 +6,7 @@ import argparse
 import os
 import sys
 from io import TextIOBase
+from typing import Any
 
 # Disable multiprocessing resource tracking before any imports that might use it
 # This prevents semaphore leak warnings from transformers internals.
@@ -26,14 +27,6 @@ try:
 except ImportError:
     pass
 
-from cortex.app.lazy_inference_engine import LazyProxy
-from cortex.app.worker_runtime import WorkerRuntime
-from cortex.config import Config
-from cortex.conversation_manager import ConversationManager
-from cortex.gpu_validator import GPUValidator
-from cortex.logging_config import configure_logging
-from cortex.model_manager import ModelManager
-from cortex.runtime_io import bound_redirected_stdio_files
 from cortex.ui_runtime.launcher import launch_tui
 
 
@@ -42,7 +35,14 @@ def _build_components(
     strict_gpu_validation: bool = True,
     lazy_inference_engine: bool = False,
     eager_gpu_validation: bool = True,
-):
+) -> tuple[Any, Any, Any, Any, Any]:
+    from cortex.app.lazy_inference_engine import LazyProxy
+    from cortex.config import Config
+    from cortex.conversation_manager import ConversationManager
+    from cortex.gpu_validator import GPUValidator
+    from cortex.logging_config import configure_logging
+    from cortex.model_manager import ModelManager
+
     config = Config()
     configure_logging(config)
     gpu_validator = GPUValidator()
@@ -89,7 +89,11 @@ def _cleanup_inference_engine(inference_engine) -> None:
     if inference_engine is None:
         return
 
-    if inference_engine is not None and hasattr(inference_engine, "memory_pool") and inference_engine.memory_pool:
+    if (
+        inference_engine is not None
+        and hasattr(inference_engine, "memory_pool")
+        and inference_engine.memory_pool
+    ):
         inference_engine.memory_pool.cleanup()
 
     try:
@@ -104,6 +108,9 @@ def _cleanup_inference_engine(inference_engine) -> None:
 
 
 def _run_worker_stdio() -> None:
+    from cortex.app.worker_runtime import WorkerRuntime
+    from cortex.runtime_io import bound_redirected_stdio_files
+
     os.environ["CORTEX_WORKER_MODE"] = "1"
     bound_redirected_stdio_files()
 
@@ -145,31 +152,36 @@ def _run_worker_stdio() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="cortex")
-    parser.add_argument("--worker-stdio", action="store_true", help="Run backend worker over JSON-RPC stdio.")
-    args = parser.parse_args()
+    try:
+        parser = argparse.ArgumentParser(prog="cortex")
+        parser.add_argument(
+            "--worker-stdio", action="store_true", help="Run backend worker over JSON-RPC stdio."
+        )
+        args = parser.parse_args()
 
-    if args.worker_stdio:
-        _run_worker_stdio()
-        return
+        if args.worker_stdio:
+            _run_worker_stdio()
+            return
 
-    exit_code = launch_tui()
-    if exit_code == 0:
-        return
+        exit_code = launch_tui()
+        if exit_code == 0:
+            return
 
-    if exit_code == 127:
+        if exit_code == 127:
+            print(
+                "OpenTUI sidecar not available in this environment. "
+                "If running from source, execute `./install.sh` at the repository root to build and install the sidecar.",
+                file=sys.stderr,
+            )
+            raise SystemExit(exit_code)
+
         print(
-            "OpenTUI sidecar not available in this environment. "
-            "If running from source, execute `./install.sh` at the repository root to build and install the sidecar.",
+            "Failed to start OpenTUI frontend runtime.",
             file=sys.stderr,
         )
         raise SystemExit(exit_code)
-
-    print(
-        "Failed to start OpenTUI frontend runtime.",
-        file=sys.stderr,
-    )
-    raise SystemExit(exit_code)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
 
 
 if __name__ == "__main__":

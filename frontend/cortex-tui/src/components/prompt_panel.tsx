@@ -5,6 +5,14 @@ import { UI_PALETTE } from "./ui_palette"
 const PROMPT_KEYBINDINGS: KeyBinding[] = [
   { name: "return", action: "submit" },
   { name: "return", shift: true, action: "newline" },
+  { name: "enter", action: "submit" },
+  { name: "enter", shift: true, action: "newline" },
+  { name: "kpenter", action: "submit" },
+  { name: "kpenter", shift: true, action: "newline" },
+  { name: "numpadenter", action: "submit" },
+  { name: "numpadenter", shift: true, action: "newline" },
+  { name: "linefeed", action: "submit" },
+  { name: "linefeed", shift: true, action: "newline" },
 ]
 const PROMPT_TOP_SPACER_ROWS = 2
 const PROMPT_BOTTOM_SPACER_ROWS = 1
@@ -90,7 +98,7 @@ export function PromptPanel(props: {
         />
       </box>
       <box flexDirection="row" justifyContent="space-between">
-        <text fg={UI_PALETTE.textMuted}>Enter submit · Esc reject permission · F1 setup · F2 switch · F3 download</text>
+        <text fg={UI_PALETTE.textMuted}>Enter submit | Esc reject permission | type /setup /model /download</text>
         <Show when={props.status !== "idle"}>
           <text fg={props.statusColor}>{props.status}</text>
         </Show>

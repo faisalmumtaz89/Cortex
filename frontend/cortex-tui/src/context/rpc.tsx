@@ -12,6 +12,24 @@ type RpcContextValue = {
 
 const RpcContext = createContext<RpcContextValue>()
 
+const SLASH_COMMAND_ALIASES = new Set([
+  "help",
+  "status",
+  "gpu",
+  "model",
+  "models",
+  "download",
+  "login",
+  "clear",
+  "save",
+  "benchmark",
+  "template",
+  "finetune",
+  "quit",
+  "exit",
+  "setup",
+])
+
 function splitCommandArgs(raw: string): string[] {
   const result: string[] = []
   let current = ""
@@ -73,6 +91,31 @@ function parseWorkerCommand(): { cmd: string; args: string[]; cwd: string } {
   }
 }
 
+function parseTimeoutMs(raw: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(raw ?? "", 10)
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed
+  }
+  return fallback
+}
+
+function normalizeSlashCommand(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return null
+  }
+  if (trimmed.startsWith("/")) {
+    return trimmed
+  }
+
+  const parts = splitCommandArgs(trimmed)
+  const first = (parts[0] || "").toLowerCase()
+  if (!SLASH_COMMAND_ALIASES.has(first)) {
+    return null
+  }
+  return `/${trimmed}`
+}
+
 export function RpcProvider(props: ParentProps) {
   const store = useStore()
   const worker = parseWorkerCommand()
@@ -106,13 +149,28 @@ export function RpcProvider(props: ParentProps) {
       return false
     }
 
-    const slashCommand = normalized.startsWith("/") ? normalized : `/${normalized}`
+    const slashCommand = normalizeSlashCommand(normalized) || (normalized.startsWith("/") ? normalized : `/${normalized}`)
+    const lowerCommand = slashCommand.toLowerCase()
+    const commandTimeoutMs = parseTimeoutMs(
+      process.env.CORTEX_WORKER_COMMAND_TIMEOUT_MS ?? process.env.CORTEX_WORKER_TURN_TIMEOUT_MS,
+      1_800_000,
+    )
+    const downloadTimeoutMs = parseTimeoutMs(process.env.CORTEX_WORKER_DOWNLOAD_TIMEOUT_MS, commandTimeoutMs)
+    const timeoutMs = lowerCommand.startsWith("/download")
+      ? Math.max(downloadTimeoutMs, commandTimeoutMs)
+      : commandTimeoutMs
+
     store.clearError()
+    store.appendLocalMessage("user", slashCommand)
     try {
-      const result = await client.request("command.execute", {
-        session_id: sessionID,
-        command: slashCommand,
-      })
+      const result = await client.request(
+        "command.execute",
+        {
+          session_id: sessionID,
+          command: slashCommand,
+        },
+        timeoutMs,
+      )
       if (result.exit === true) {
         process.exit(0)
       }
@@ -127,20 +185,37 @@ export function RpcProvider(props: ParentProps) {
 
   const submitInput = async (text: string): Promise<boolean> => {
     const sessionID = store.state.sessionID
-    if (!sessionID || !text.trim()) {
+    const normalized = text.trim()
+    if (!sessionID || !normalized) {
       return false
     }
     store.clearError()
     try {
-      if (text.startsWith("/")) {
-        return runCommand(text.trim())
+      const maybeCommand = normalizeSlashCommand(normalized)
+      if (maybeCommand) {
+        return runCommand(maybeCommand)
+      }
+
+      if (store.state.activeModelLabel === "No model loaded") {
+        const firstLocal = (store.state.firstLocalModelName || "").trim()
+        if (firstLocal) {
+          const loaded = await runCommand(`/model ${firstLocal}`)
+          if (!loaded) {
+            return false
+          }
+        } else {
+          store.setError(
+            "No model loaded. Run: download mlx-community/Nanbeige4.1-3B-bf16 --load",
+          )
+          return false
+        }
       }
 
       const result = await client.request(
         "session.submit_user_input",
         {
           session_id: sessionID,
-          user_input: text.trim(),
+          user_input: normalized,
         },
         Number.parseInt(process.env.CORTEX_WORKER_TURN_TIMEOUT_MS ?? "1800000", 10),
       )

@@ -91,6 +91,123 @@ pick_downloader() {
   return 1
 }
 
+purge_stale_site_package_cortex() {
+  local python_bin="$1"
+  local source_root="$2"
+
+  "${python_bin}" - "$source_root" <<'PY'
+import shutil
+import site
+import sys
+from pathlib import Path
+
+source_root = Path(sys.argv[1]).resolve()
+removed = []
+
+site_dirs = []
+try:
+    site_dirs.extend(Path(p).resolve() for p in site.getsitepackages())
+except Exception:
+    pass
+user_site = site.getusersitepackages()
+if isinstance(user_site, str) and user_site:
+    site_dirs.append(Path(user_site).resolve())
+
+for base in site_dirs:
+    candidate = base / "cortex"
+    if not candidate.exists() or not candidate.is_dir():
+        continue
+    # Keep source tree packages untouched; only purge stale copies in site-packages.
+    if source_root in candidate.parents:
+        continue
+    shutil.rmtree(candidate)
+    removed.append(str(candidate))
+
+for path in removed:
+    print(path)
+PY
+}
+
+clear_hidden_site_flags() {
+  local python_bin="$1"
+  command -v chflags >/dev/null 2>&1 || return 0
+
+  local site_dirs=""
+  site_dirs="$("${python_bin}" - <<'PY'
+import site
+from pathlib import Path
+
+dirs = []
+try:
+    dirs.extend(site.getsitepackages())
+except Exception:
+    pass
+user_site = site.getusersitepackages()
+if isinstance(user_site, str) and user_site:
+    dirs.append(user_site)
+
+for value in dirs:
+    path = Path(value).expanduser().resolve()
+    print(path)
+PY
+)"
+
+  while IFS= read -r dir; do
+    [[ -z "${dir}" ]] && continue
+    [[ -d "${dir}" ]] || continue
+    chflags nohidden "${dir}" >/dev/null 2>&1 || true
+    find "${dir}" -maxdepth 1 -type f -name "*.pth" -exec chflags nohidden {} + >/dev/null 2>&1 || true
+  done <<< "${site_dirs}"
+}
+
+ensure_source_package_link() {
+  local python_bin="$1"
+  local source_root="$2"
+
+  "${python_bin}" - "$source_root" <<'PY'
+import shutil
+import site
+import sys
+from pathlib import Path
+
+source_root = Path(sys.argv[1]).resolve()
+source_package = source_root / "cortex"
+if not source_package.is_dir():
+    raise SystemExit("missing source package directory")
+
+site_dirs = []
+try:
+    site_dirs.extend(Path(p).resolve() for p in site.getsitepackages())
+except Exception:
+    pass
+user_site = site.getusersitepackages()
+if isinstance(user_site, str) and user_site:
+    site_dirs.append(Path(user_site).resolve())
+
+created_link = None
+for base in site_dirs:
+    if not base.exists():
+        continue
+    candidate = base / "cortex"
+    if candidate.exists() or candidate.is_symlink():
+        if candidate.is_symlink() and candidate.resolve() == source_package:
+            created_link = candidate
+            break
+        if candidate.is_dir() and not candidate.is_symlink():
+            shutil.rmtree(candidate)
+        else:
+            candidate.unlink()
+    candidate.symlink_to(source_package, target_is_directory=True)
+    created_link = candidate
+    break
+
+if created_link is None:
+    raise SystemExit("unable to create site-packages source link for cortex")
+
+print(created_link)
+PY
+}
+
 ensure_bun() {
   if command -v bun >/dev/null 2>&1; then
     command -v bun
@@ -244,6 +361,7 @@ RUNTIME_PYTHON="${VENV_DIR}/bin/python"
 
 log "Upgrading installer tooling"
 "${PIP}" install --upgrade pip setuptools wheel >/dev/null
+clear_hidden_site_flags "${RUNTIME_PYTHON}"
 
 INSTALL_MODE="pypi"
 if [[ "${TARGET}" =~ ^(stable|latest)$ ]] && is_source_checkout && [[ "${CORTEX_INSTALL_SOURCE:-1}" == "1" ]]; then
@@ -252,7 +370,32 @@ fi
 
 if [[ "${INSTALL_MODE}" == "source" ]]; then
   log "Installing Cortex from source checkout: ${SCRIPT_DIR}"
+  stale_removed="$(purge_stale_site_package_cortex "${RUNTIME_PYTHON}" "${SCRIPT_DIR}" || true)"
+  if [[ -n "${stale_removed}" ]]; then
+    warn "Removed stale site-packages Cortex module(s):"
+    while IFS= read -r line; do
+      [[ -n "${line}" ]] && echo "  - ${line}" >&2
+    done <<< "${stale_removed}"
+  fi
   "${PIP}" install --upgrade -e "${SCRIPT_DIR}"
+  clear_hidden_site_flags "${RUNTIME_PYTHON}"
+  SOURCE_LINK_PATH="$(ensure_source_package_link "${RUNTIME_PYTHON}" "${SCRIPT_DIR}")" \
+    || die "Unable to create stable source link in site-packages."
+  ok "Source package link: ${SOURCE_LINK_PATH}"
+
+  SOURCE_IMPORT_PATH="$("${RUNTIME_PYTHON}" - "$SCRIPT_DIR" <<'PY'
+import sys
+from pathlib import Path
+source_root = Path(sys.argv[1]).resolve()
+import cortex
+module_path = Path(cortex.__file__).resolve()
+print(module_path)
+if source_root not in module_path.parents:
+    raise SystemExit(1)
+PY
+)" || die "Editable install did not resolve cortex imports to source checkout. Re-run installer."
+
+  ok "Python import path: ${SOURCE_IMPORT_PATH}"
   ensure_source_sidecar "${SCRIPT_DIR}"
 else
   PACKAGE_SPEC="cortex-llm"
@@ -261,6 +404,7 @@ else
   fi
   log "Installing ${PACKAGE_SPEC}"
   "${PIP}" install --upgrade "${PACKAGE_SPEC}"
+  clear_hidden_site_flags "${RUNTIME_PYTHON}"
 fi
 
 if [[ ! -x "${VENV_DIR}/bin/cortex" ]]; then

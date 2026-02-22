@@ -17,6 +17,36 @@ class CustomSpeedScroll implements ScrollAcceleration {
   reset(): void {}
 }
 
+const SLASH_COMMAND_ALIASES = new Set([
+  "help",
+  "status",
+  "gpu",
+  "model",
+  "models",
+  "download",
+  "login",
+  "clear",
+  "save",
+  "benchmark",
+  "template",
+  "finetune",
+  "quit",
+  "exit",
+  "setup",
+])
+
+function isSlashCommandLike(raw: string): boolean {
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return false
+  }
+  if (trimmed.startsWith("/")) {
+    return true
+  }
+  const firstWord = trimmed.split(/\s+/, 1)[0]?.toLowerCase() || ""
+  return SLASH_COMMAND_ALIASES.has(firstWord)
+}
+
 export function SessionRoute(props: {
   onSubmit: (value: string) => Promise<boolean>
 }) {
@@ -25,6 +55,7 @@ export function SessionRoute(props: {
   let transcriptScroll: ScrollBoxRenderable | undefined
   let lastSubmitFingerprint = ""
   let lastSubmitAtMs = 0
+  let isSubmitting = false
   let lastAssistantMessageID = ""
   let sawFirstAssistantDelta = false
   const debugLayout = process.env.CORTEX_TUI_DEBUG_LAYOUT === "1"
@@ -112,83 +143,53 @@ export function SessionRoute(props: {
     if (!fingerprint) {
       return
     }
+    const commandLike = isSlashCommandLike(fingerprint)
+    if (isSubmitting && !commandLike) {
+      return
+    }
     const now = Date.now()
     if (fingerprint === lastSubmitFingerprint && now - lastSubmitAtMs < 250) {
       return
     }
     lastSubmitFingerprint = fingerprint
     lastSubmitAtMs = now
-
-    const submitted = await props.onSubmit(value)
-    if (submitted) {
-      input.clear()
-      lastSubmitFingerprint = ""
-      lastSubmitAtMs = 0
-      toBottom()
-      emitLayoutDebug("submit_success")
-    }
-  }
-
-  const setPromptCommand = (command: string) => {
-    if (!input || input.isDestroyed) {
-      return
+    if (!commandLike) {
+      isSubmitting = true
     }
     input.clear()
-    input.insertText(command)
-    input.focus()
-  }
 
-  const submitSystemCommand = async (command: string) => {
-    const submitted = await props.onSubmit(command)
+    let submitted = false
+    try {
+      submitted = await props.onSubmit(value)
+    } finally {
+      if (!commandLike) {
+        isSubmitting = false
+      }
+      lastSubmitFingerprint = ""
+      lastSubmitAtMs = 0
+    }
     if (submitted) {
       toBottom()
-      emitLayoutDebug(`quick_command:${command}`)
-    }
-  }
-
-  const runQuickSetup = async () => {
-    if (hasActiveModel()) {
-      await submitSystemCommand("/model")
+      emitLayoutDebug("submit_success")
       return
     }
 
-    const firstLocal = (store.state.firstLocalModelName || "").trim()
-    if (firstLocal.length > 0) {
-      await submitSystemCommand(`/model ${firstLocal}`)
-      return
+    if (input && !input.isDestroyed && input.plainText.trim().length === 0) {
+      input.setText(value)
     }
-
-    setPromptCommand("/download ")
-  }
-
-  const runQuickSwitch = async () => {
-    await submitSystemCommand("/model")
-  }
-
-  const runQuickDownload = () => {
-    setPromptCommand("/download ")
   }
 
   const onPromptKeyDown = (event: KeyEvent) => {
     if (!hasPendingPermission()) {
       const key = String(event.name ?? "").toLowerCase()
-      if (key === "f1") {
-        event.preventDefault()
-        void runQuickSetup()
-        return
-      }
-      if (key === "f2") {
-        event.preventDefault()
-        void runQuickSwitch()
-        return
-      }
-      if (key === "f3") {
-        event.preventDefault()
-        runQuickDownload()
-        return
-      }
       const shift = Boolean((event as { shift?: boolean }).shift)
-      if ((key === "return" || key === "enter") && !shift) {
+      const isEnterKey =
+        key === "return" ||
+        key === "linefeed" ||
+        key === "kpenter" ||
+        key === "numpadenter" ||
+        key.includes("enter")
+      if (isEnterKey && !shift) {
         event.preventDefault()
         void submitFromPrompt()
       }
@@ -277,24 +278,22 @@ export function SessionRoute(props: {
         paddingRight={2}
         gap={1}
       >
-        <box flexDirection="row" gap={1}>
-          <text fg={UI_PALETTE.accent}>Cortex</text>
-          <text fg={UI_PALETTE.textMuted}>status:</text>
-          <text fg={statusColor()}>{store.state.status}</text>
-        </box>
+        <box flexDirection="column" gap={0}>
+          <box flexDirection="row" gap={1}>
+            <text fg={UI_PALETTE.accent}>Cortex</text>
+            <text fg={UI_PALETTE.textMuted}>status:</text>
+            <text fg={statusColor()}>{store.state.status}</text>
+          </box>
 
-        <box
-          flexDirection="column"
-          border={["left"]}
-          borderColor={hasActiveModel() ? UI_PALETTE.accent : UI_PALETTE.statusBusy}
-          paddingLeft={2}
-          paddingTop={1}
-          paddingBottom={1}
-          backgroundColor={UI_PALETTE.panel}
-        >
-          <text fg={UI_PALETTE.textMuted}>Model</text>
-          <text fg={hasActiveModel() ? UI_PALETTE.text : UI_PALETTE.statusError}>{activeModelLabel()}</text>
-          <text fg={UI_PALETTE.textMuted}>F1 Setup · F2 Switch · F3 Download</text>
+          <box height={1} />
+
+          <box flexDirection="row" backgroundColor={UI_PALETTE.panel}>
+            <text fg={hasActiveModel() ? UI_PALETTE.accent : UI_PALETTE.statusBusy}>│</text>
+            <box flexDirection="row" gap={1} paddingLeft={2}>
+              <text fg={UI_PALETTE.textMuted}>Model:</text>
+              <text fg={hasActiveModel() ? UI_PALETTE.text : UI_PALETTE.statusError}>{activeModelLabel()}</text>
+            </box>
+          </box>
         </box>
 
         <scrollbox
@@ -334,6 +333,9 @@ export function SessionRoute(props: {
           statusColor={statusColor()}
           setInputRef={(r: TextareaRenderable) => {
             input = r
+            if (!hasPendingPermission() && !r.isDestroyed) {
+              r.focus()
+            }
           }}
           onPromptKeyDown={onPromptKeyDown}
           onSubmit={() => {

@@ -17,6 +17,21 @@ export type MessagePart =
       error?: string
     }
 
+export interface DownloadProgressRecord {
+  kind: "download"
+  repoID: string
+  phase: string
+  bytesDownloaded: number
+  bytesTotal?: number
+  percent?: number
+  filesCompleted?: number
+  filesTotal?: number
+  speedBps?: number
+  etaSeconds?: number
+  elapsedSeconds?: number
+  stalled: boolean
+}
+
 export interface MessageRecord {
   id: string
   role: MessageRole
@@ -29,6 +44,7 @@ export interface MessageRecord {
   mode?: string
   modelLabel?: string
   parentID?: string
+  downloadProgress?: DownloadProgressRecord
 }
 
 type State = {
@@ -54,6 +70,7 @@ const StoreContext = createContext<{
   state: State
   applyEvent: (event: EventEnvelope) => void
   flushPendingEvents: () => void
+  appendLocalMessage: (role: MessageRole, content: string) => void
   applySubmitResultFallback: (result: Record<string, unknown>) => void
   setModelStateFromList: (payload: Record<string, unknown>) => void
   setSessionID: (sessionID: string) => void
@@ -129,12 +146,79 @@ export function StoreProvider(props: ParentProps) {
     return Math.round(value)
   }
 
+  const parseNonNegativeNumber = (value: unknown): number | undefined => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      return undefined
+    }
+    return value
+  }
+
   const parseString = (value: unknown): string | undefined => {
     if (typeof value !== "string") {
       return undefined
     }
     const normalized = value.trim()
     return normalized.length > 0 ? normalized : undefined
+  }
+
+  const parseDownloadProgress = (raw: unknown): DownloadProgressRecord | undefined => {
+    if (!raw || typeof raw !== "object") {
+      return undefined
+    }
+    const payload = raw as Record<string, unknown>
+    if (String(payload.kind ?? "") !== "download") {
+      return undefined
+    }
+
+    const repoID = parseString(payload.repo_id)
+    if (!repoID) {
+      return undefined
+    }
+
+    const bytesDownloaded = parseNonNegativeNumber(payload.bytes_downloaded)
+    if (bytesDownloaded === undefined) {
+      return undefined
+    }
+
+    const phase = parseString(payload.phase) ?? "preparing"
+    const parsed: DownloadProgressRecord = {
+      kind: "download",
+      repoID,
+      phase,
+      bytesDownloaded,
+      stalled: Boolean(payload.stalled),
+    }
+
+    const bytesTotal = parsePositiveInt(payload.bytes_total)
+    if (bytesTotal !== undefined) {
+      parsed.bytesTotal = bytesTotal
+    }
+    const percent = parseNonNegativeNumber(payload.percent)
+    if (percent !== undefined) {
+      parsed.percent = Math.min(100, percent)
+    }
+    const filesCompleted = parseNonNegativeNumber(payload.files_completed)
+    if (filesCompleted !== undefined) {
+      parsed.filesCompleted = filesCompleted
+    }
+    const filesTotal = parseNonNegativeNumber(payload.files_total)
+    if (filesTotal !== undefined && filesTotal > 0) {
+      parsed.filesTotal = filesTotal
+    }
+    const speedBps = parseNonNegativeNumber(payload.speed_bps)
+    if (speedBps !== undefined && speedBps > 0) {
+      parsed.speedBps = speedBps
+    }
+    const etaSeconds = parseNonNegativeNumber(payload.eta_seconds)
+    if (etaSeconds !== undefined && etaSeconds > 0) {
+      parsed.etaSeconds = etaSeconds
+    }
+    const elapsedSeconds = parseNonNegativeNumber(payload.elapsed_seconds)
+    if (elapsedSeconds !== undefined) {
+      parsed.elapsedSeconds = elapsedSeconds
+    }
+
+    return parsed
   }
 
   const ensureMessage = (id: string, role: MessageRole = "assistant") => {
@@ -314,6 +398,10 @@ export function StoreProvider(props: ParentProps) {
         if (typeof event.payload.final === "boolean") {
           setState("messages", id, "final", event.payload.final)
         }
+        const parsedProgress = parseDownloadProgress(event.payload.progress)
+        if (parsedProgress) {
+          setState("messages", id, "downloadProgress", parsedProgress)
+        }
         ingestMessageMetadata(id, event.payload, event.ts_ms, incomingFinal)
         const rawParts = event.payload.parts
         if (Array.isArray(rawParts)) {
@@ -356,6 +444,20 @@ export function StoreProvider(props: ParentProps) {
 
   const setSessionID = (sessionID: string) => {
     setState("sessionID", sessionID)
+  }
+
+  const appendLocalMessage = (role: MessageRole, content: string) => {
+    const text = content.trim()
+    if (!text) {
+      return
+    }
+    const now = Date.now()
+    const messageID = `local:${role}:${now}:${Math.random().toString(16).slice(2, 10)}`
+    ensureMessage(messageID, role)
+    setState("messages", messageID, "content", text)
+    setState("messages", messageID, "final", true)
+    setState("messages", messageID, "createdTsMs", now)
+    setState("messages", messageID, "completedTsMs", now)
   }
 
   const applySubmitResultFallback = (result: Record<string, unknown>) => {
@@ -423,14 +525,15 @@ export function StoreProvider(props: ParentProps) {
   }
 
   const value = {
-    state,
-    applyEvent,
-    flushPendingEvents,
-    applySubmitResultFallback,
-    setModelStateFromList,
-    setSessionID,
-    setError,
-    clearError,
+      state,
+      applyEvent,
+      flushPendingEvents,
+      appendLocalMessage,
+      applySubmitResultFallback,
+      setModelStateFromList,
+      setSessionID,
+      setError,
+      clearError,
   }
 
   return <StoreContext.Provider value={value}>{props.children}</StoreContext.Provider>

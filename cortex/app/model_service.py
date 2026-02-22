@@ -47,7 +47,10 @@ class ModelService:
         for item in local_available:
             entry = dict(item)
             entry["loaded"] = item.get("name") in loaded
-            entry["active"] = item.get("name") == self.model_manager.current_model and self.active_target.backend == "local"
+            entry["active"] = (
+                item.get("name") == self.model_manager.current_model
+                and self.active_target.backend == "local"
+            )
             local.append(entry)
 
         cloud = []
@@ -72,8 +75,16 @@ class ModelService:
             "active_target": {
                 "backend": self.active_target.backend,
                 "local_model": self.active_target.local_model,
-                "provider": self.active_target.cloud_model.provider.value if self.active_target.cloud_model else None,
-                "model_id": self.active_target.cloud_model.model_id if self.active_target.cloud_model else None,
+                "provider": (
+                    self.active_target.cloud_model.provider.value
+                    if self.active_target.cloud_model
+                    else None
+                ),
+                "model_id": (
+                    self.active_target.cloud_model.model_id
+                    if self.active_target.cloud_model
+                    else None
+                ),
                 "label": self.get_active_model_label(),
             },
             "local": local,
@@ -92,9 +103,11 @@ class ModelService:
             "backend": self.active_target.backend,
             "chip_name": getattr(gpu_info, "chip_name", "unknown"),
             "gpu_cores": getattr(gpu_info, "gpu_cores", 0),
-            "total_memory_gb": round(float(getattr(gpu_info, "total_memory", 0)) / (1024**3), 2)
-            if gpu_info
-            else 0.0,
+            "total_memory_gb": (
+                round(float(getattr(gpu_info, "total_memory", 0)) / (1024**3), 2)
+                if gpu_info
+                else 0.0
+            ),
         }
 
     def gpu_status(self) -> Dict[str, Any]:
@@ -138,13 +151,31 @@ class ModelService:
 
     def select_cloud_model(self, provider: str, model_id: str) -> Dict[str, Any]:
         provider_enum = CloudProvider.from_value(provider)
-        ref = CloudModelRef(provider=provider_enum, model_id=model_id.strip())
+        normalized_model_id = model_id.strip()
+        if not normalized_model_id:
+            return {"ok": False, "message": "Cloud model ID cannot be empty."}
+
+        is_auth, _source = self.cloud_router.get_auth_status(provider_enum)
+        if not is_auth:
+            return {
+                "ok": False,
+                "message": (
+                    f"{provider_enum.value} is not authenticated. "
+                    f"Run /login {provider_enum.value} <api_key>."
+                ),
+            }
+
+        ref = CloudModelRef(provider=provider_enum, model_id=normalized_model_id)
         self.active_target = ActiveModelTarget.cloud(ref)
 
         self.config.set_state_value("last_used_backend", "cloud")
         self.config.set_state_value("last_used_cloud_provider", provider_enum.value)
         self.config.set_state_value("last_used_cloud_model", ref.model_id)
-        return {"ok": True, "message": f"Active cloud model set to {ref.selector}", "active_model": ref.selector}
+        return {
+            "ok": True,
+            "message": f"Active cloud model set to {ref.selector}",
+            "active_model": ref.selector,
+        }
 
     def delete_local_model(self, model_name: str) -> Dict[str, Any]:
         available = self.model_manager.discover_available_models()
