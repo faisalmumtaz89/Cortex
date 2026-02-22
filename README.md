@@ -30,15 +30,15 @@ cortex
 If OpenTUI sidecar is unavailable in a source checkout:
 
 ```bash
-cd frontend/cortex-tui
-npm install
+./install.sh
 ```
 
 Inside Cortex:
 
-- `/download` to fetch a model from HuggingFace
-- `/login openai` or `/login anthropic` to add cloud API credentials
-- `/model` to switch between local and cloud models
+- `/download <repo_id> [filename] [--load]` to fetch a model from HuggingFace (example: `/download mlx-community/Nanbeige4.1-3B-bf16 --load`)
+- `/login openai <api_key>` or `/login anthropic <api_key>` to save cloud API credentials
+- `/login huggingface` to check HuggingFace auth status (use `huggingface-cli login` in your shell for gated repos)
+- `/model` to list/select local or cloud models (by index, local name/path, or `provider:model`)
 - `/status` to confirm GPU acceleration and current settings
 
 ## Installation
