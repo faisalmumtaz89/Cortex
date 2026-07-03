@@ -2,18 +2,13 @@
 
 ## Getting Started
 
-### Development Environment Setup
-
 ```bash
-# Clone the repository
 git clone https://github.com/faisalmumtaz89/Cortex.git
 cd Cortex
 
-# Create a virtual environment
-python -m venv venv
-source venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 
-# Install in development mode with dev dependencies
 pip install -e ".[dev]"
 ```
 
@@ -21,93 +16,59 @@ pip install -e ".[dev]"
 
 - macOS on Apple Silicon (ARM64)
 - Python 3.11 or later
-- Bun runtime (global `bun` or local runtime from `frontend/cortex-tui/npm install`)
+- Bun runtime for frontend work (global `bun`, or the local runtime provisioned by `npm install` in `frontend/cortex-tui`)
 
 ## Project Structure
 
 ```
 Cortex/
 ├── pyproject.toml                  # Build config, dependencies, tool settings
-├── config.yaml                     # Default runtime configuration
-├── setup.py                        # Packaging/install shim
-├── requirements.txt                # Pinned dependency list
-├── install.sh                      # Shell-based installer
+├── config.yaml                     # Commented configuration template
+├── install.sh                      # Shell installer (isolated runtime + sidecar build)
 ├── cortex/
-│   ├── __init__.py                 # Package init, system requirement checks
-│   ├── __main__.py                 # Entry point - wires all components together
+│   ├── __main__.py                 # Entry point: TUI launch, --worker-stdio, -p headless
 │   ├── config.py                   # Configuration loading (Config class)
-│   ├── gpu_validator.py            # GPU detection and validation (GPUValidator)
-│   ├── model_manager.py            # Model loading and management (ModelManager)
-│   ├── model_downloader.py         # HuggingFace model downloads (ModelDownloader)
-│   ├── inference_engine.py         # Text generation (InferenceEngine)
-│   ├── conversation_manager.py     # Chat history and persistence (ConversationManager)
+│   ├── gpu_validator.py            # Apple Silicon / Metal / MLX validation
+│   ├── model_manager.py            # Local model loading (MLX + GGUF)
+│   ├── model_downloader.py         # HuggingFace downloads with resume
+│   ├── inference_engine.py         # Local text generation
+│   ├── conversation_manager.py     # Chat history and persistence
 │   ├── app/                        # Worker application service layer
 │   │   ├── worker_runtime.py       # JSON-RPC runtime assembly
 │   │   ├── session_service.py      # Session orchestration
+│   │   ├── command_service.py      # Slash command execution
 │   │   ├── model_service.py        # Model/auth operations
-│   │   └── permission_service.py   # Permission ask/reply bridge
-│   ├── protocol/                   # JSON-RPC protocol contracts/server
-│   │   ├── rpc_server.py
-│   │   ├── schema.py
-│   │   └── types.py
-│   ├── metal/                      # GPU acceleration layer
-│   │   ├── __init__.py
-│   │   ├── gpu_validator.py        # Metal-level GPU validation
-│   │   ├── memory_pool.py          # GPU memory pool management
-│   │   ├── optimizer.py            # Unified MLX/MPS optimizer
-│   │   ├── mps_optimizer.py        # PyTorch MPS backend optimizer
-│   │   ├── mlx_accelerator.py      # MLX framework integration
-│   │   ├── mlx_compat.py           # MLX compatibility patches
-│   │   ├── mlx_converter.py        # Model conversion for MLX
-│   │   └── performance_profiler.py # GPU performance profiling
-│   ├── ui/                         # Terminal UI helpers
-│   │   ├── __init__.py
-│   │   ├── cli_commands.py         # Slash command dispatch helpers
-│   │   └── generation.py           # Streaming response helpers
-│   ├── ui_runtime/                 # OpenTUI launcher + bundled binary
-│   │   ├── launcher.py
-│   │   └── bin/cortex-tui
-│   ├── fine_tuning/                # Fine-tuning support
-│   │   ├── __init__.py
-│   │   ├── wizard.py               # Interactive fine-tuning wizard
-│   │   ├── trainer.py              # Training loop
-│   │   ├── mlx_lora_trainer.py     # MLX LoRA training
-│   │   └── dataset.py              # Dataset handling
-│   ├── quantization/               # Model quantization
-│   │   ├── __init__.py
-│   │   └── dynamic_quantizer.py    # Dynamic quantization
-│   ├── template_registry/          # Chat template management
-│   │   ├── __init__.py
-│   │   ├── registry.py             # Template registry
-│   │   ├── auto_detector.py        # Automatic template detection
-│   │   ├── config_manager.py       # Template configuration
-│   │   ├── interactive.py          # Interactive template setup
-│   │   └── template_profiles/      # Built-in template profiles
-│   └── utils/
-│       └── param_utils.py          # Parameter utilities
+│   │   ├── permission_service.py   # Permission ask/reply bridge
+│   │   └── headless.py             # cortex -p single-turn execution
+│   ├── tooling/                    # Agent loop
+│   │   ├── orchestrator.py         # Generation + tool execution + permissions
+│   │   ├── registry.py             # Profile-aware tool registry
+│   │   ├── permissions.py          # Rule engine + persisted approvals
+│   │   ├── agent_prompt.py         # System prompt + AGENTS.md context
+│   │   ├── local_protocol.py       # <tool_calls> protocol for local models
+│   │   └── builtin/                # read_file, list_dir, search, edit_file, write_file, bash
+│   ├── cloud/                      # Cloud providers
+│   │   ├── router.py               # Provider routing + retries
+│   │   ├── catalog.py              # Model catalog (+ ~/.cortex/cloud_models.json overrides)
+│   │   ├── credentials.py          # Keychain/env credential handling
+│   │   └── clients/                # openai_client, anthropic_client, scripted_client
+│   ├── protocol/                   # JSON-RPC contracts/server (rpc_server, schema, types, events)
+│   ├── metal/                      # MLX acceleration layer (accelerator, converter, memory pool, profiler)
+│   ├── template_registry/          # Chat template detection and profiles
+│   └── ui_runtime/                 # OpenTUI launcher + bundled sidecar binary
 ├── frontend/cortex-tui/            # OpenTUI + Solid frontend source
-├── tests/
-│   ├── test_apple_silicon.py       # Apple Silicon GPU tests
-│   ├── test_metal_optimization.py  # Metal optimization tests
-│   └── verify_gpu_acceleration.py  # GPU acceleration verification
-├── docs/                           # Documentation
-├── scripts/                        # Helper scripts (reserved)
-└── tools/                          # Development/build tools
+├── tests/                          # Pytest suite (incl. test_agent_runtime_e2e.py)
+├── scripts/typecheck.sh            # mypy wrapper
+└── docs/
 ```
 
-## Application Architecture
+## Runtime Split
 
-Runtime split:
-- Frontend: OpenTUI sidecar (`frontend/cortex-tui`)
-- Backend: Python worker (`python -m cortex --worker-stdio`)
+- Frontend: OpenTUI sidecar (`frontend/cortex-tui`), spawned by `cortex`
+- Backend: Python worker (`python -m cortex --worker-stdio`), JSON-RPC 2.0 over stdio
+- Headless: `python -m cortex -p "..."` reuses the worker wiring for one turn
 
-The entry point is `cortex/__main__.py`. By default it launches the OpenTUI sidecar. Worker mode constructs backend services and starts JSON-RPC stdio server:
-
-```python
-python -m cortex --worker-stdio
-```
-
-GPU validation runs first. If it fails, the process exits before any other components are created. On shutdown, the inference engine's memory pool is cleaned up and PyTorch MPS caches are flushed.
+Never print to stdout in worker code — stdout is the JSON-RPC channel. Diagnostics go to stderr or the log file.
 
 Frontend source commands:
 
@@ -116,65 +77,31 @@ cd frontend/cortex-tui
 npm install
 npm run typecheck
 npm run dev        # Runs OpenTUI from source
-npm run build      # Builds darwin-arm64 bundled sidecar binary
+npm run build      # Builds the darwin-arm64 bundled sidecar binary
 ```
 
-## Running Tests
+## Testing: the Empirical Gate
 
-The test suite lives in the `tests/` directory:
+Behavioral claims must be validated against the real runtime, not inferred from reading code:
+
+1. **E2E suite** — `tests/test_agent_runtime_e2e.py` spawns the real worker subprocess in a scratch repository and drives full agent turns over JSON-RPC. The model is replaced with a deterministic script (`CORTEX_SCRIPTED_MODEL` pointing at a JSON script file); everything else — orchestrator, tool registry, permission engine, event stream, persistence — runs for real. Assertions check observable effects: files on disk, event sequences, exit codes.
+2. **Full suite** — `python -m pytest tests/ -q` must be green before and after any change.
+3. **Manual verification** — `python -m cortex -p "prompt" --model ...` exercises a real turn end to end.
+
+If a change cannot be observed through one of these, add the scenario to the E2E suite first, then make the change.
 
 ```bash
-# Run all tests
-python -m pytest tests/
-
-# Run a specific test file
-python -m pytest tests/test_apple_silicon.py
-python -m pytest tests/test_metal_optimization.py
-
-# Run with verbose output
-python -m pytest tests/ -v
-
-# Coverage reporting requires pytest-cov (not installed by default)
-# python -m pytest tests/ --cov=cortex
+python -m pytest tests/ -q                          # everything
+python -m pytest tests/test_agent_runtime_e2e.py -q # just the E2E gate
 ```
 
 ## Code Style
 
-Formatting and linting tools are configured in `pyproject.toml`:
-
-- **Black** -- code formatter (line length 100)
-- **Ruff** -- linter (line length 100, rules: E, F, I, N, W)
-- **mypy** -- type checker
+Configured in `pyproject.toml`: line length 100, `ruff` (rules E, F, I, N, W) and `mypy` must be clean.
 
 ```bash
-# Format code
-black cortex/ tests/
-
-# Lint
 ruff check cortex/ tests/
-
-# Type check
-mypy cortex/
-```
-
-The relevant `pyproject.toml` sections:
-
-```toml
-[tool.black]
-line-length = 100
-target-version = ['py311', 'py312']
-
-[tool.ruff]
-line-length = 100
-target-version = "py311"
-select = ["E", "F", "I", "N", "W"]
-ignore = ["E501"]
-
-[tool.mypy]
-python_version = "3.11"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
+./scripts/typecheck.sh        # mypy cortex
 ```
 
 ## Key Classes Reference
@@ -183,10 +110,13 @@ disallow_untyped_defs = false
 |---|---|---|
 | `Config` | `cortex.config` | Loads and holds runtime configuration |
 | `GPUValidator` | `cortex.gpu_validator` | Validates Apple Silicon GPU availability |
-| `ModelManager` | `cortex.model_manager` | Loads, manages, and serves models |
-| `ModelDownloader` | `cortex.model_downloader` | Downloads models from HuggingFace Hub |
-| `InferenceEngine` | `cortex.inference_engine` | Runs text generation with `GenerationRequest` |
-| `ConversationManager` | `cortex.conversation_manager` | Manages chat history and persistence |
-| `WorkerRuntime` | `cortex.app.worker_runtime` | JSON-RPC session runtime for OpenTUI |
+| `ModelManager` | `cortex.model_manager` | Loads and manages local MLX/GGUF models |
+| `ModelDownloader` | `cortex.model_downloader` | HuggingFace downloads with resume |
+| `InferenceEngine` | `cortex.inference_engine` | Local text generation |
+| `ConversationManager` | `cortex.conversation_manager` | Chat history and persistence |
+| `WorkerRuntime` | `cortex.app.worker_runtime` | JSON-RPC session runtime |
+| `CommandService` | `cortex.app.command_service` | Slash command execution |
+| `ToolingOrchestrator` | `cortex.tooling.orchestrator` | Agent loop: generation, tools, permissions |
+| `ToolRegistry` | `cortex.tooling.registry` | Profile-aware tool registry |
+| `PermissionManager` | `cortex.tooling.permissions` | Permission rules and persisted approvals |
 | `TemplateRegistry` | `cortex.template_registry` | Chat template detection and management |
-| `FineTuneWizard` | `cortex.fine_tuning` | Interactive fine-tuning workflow |
