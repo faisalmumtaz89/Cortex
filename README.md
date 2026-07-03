@@ -59,12 +59,18 @@ cortex -p "fix the failing test" --model anthropic:claude-sonnet-4-5 --full-auto
 
 Reads are allowed; edits and shell commands are denied unless `--full-auto`. Exit codes: `0` success, `1` turn error, `2` setup error.
 
-## Requirements
+## Platform Support
 
-- Apple Silicon Mac (M1–M4), macOS 13.3+, Python 3.11+, Xcode Command Line Tools
-- 8GB+ unified memory (16GB+ recommended for larger local models)
+Local inference is Apple Silicon-only (MLX and llama.cpp-Metal require it); the agent itself — worker, TUI, tools, cloud models — is portable Python + Bun.
 
-Intel Macs, Linux, and Windows are not supported.
+| Platform | Support |
+|---|---|
+| Apple Silicon Mac (M1–M4, macOS 13.3+) | **Full** — local models on the GPU plus cloud models. The installer targets this platform only. |
+| Linux | **Cloud-only, from source** — install with `pip install -e .`, then `/login` a provider. Local models are unavailable; no installer. Works (the benchmark harness runs Cortex this way in Linux containers) but is not officially supported. |
+| Windows | Not supported natively (the agent's shell tool and TUI build assume POSIX). WSL2 works — it follows the Linux path above. |
+| Intel Mac | Not supported. |
+
+macOS requirements: Python 3.11+, Xcode Command Line Tools, 8GB+ unified memory (16GB+ recommended for larger local models).
 
 ## Documentation
 

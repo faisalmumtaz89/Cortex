@@ -15,7 +15,7 @@
 - Git (source installs)
 - Bun runtime for frontend source builds (global `bun`, or the local runtime provisioned by `npm install` in `frontend/cortex-tui`; the installer handles this)
 
-**Not supported:** Intel Macs, Linux, Windows.
+**Platform boundary:** local inference requires Apple Silicon (MLX / llama.cpp-Metal). On Linux, Cortex runs **cloud-only from a source install** (`pip install -e .` + `/login`) — no local models, no installer, not officially supported. Windows is not supported natively (POSIX shell tool and TUI build) — use WSL2, which follows the Linux path. Intel Macs are not supported.
 
 ## Recommended Install
 
