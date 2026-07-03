@@ -15,7 +15,7 @@
 - Git (source installs)
 - Bun runtime for frontend source builds (global `bun`, or the local runtime provisioned by `npm install` in `frontend/cortex-tui`; the installer handles this)
 
-**Not supported:** Intel Macs, Linux, Windows.
+**Not supported:** Intel Macs, Linux, Windows. Cortex runs on Apple Silicon Macs only.
 
 ## Recommended Install
 

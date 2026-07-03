@@ -61,10 +61,11 @@ Reads are allowed; edits and shell commands are denied unless `--full-auto`. Exi
 
 ## Requirements
 
-- Apple Silicon Mac (M1–M4), macOS 13.3+, Python 3.11+, Xcode Command Line Tools
-- 8GB+ unified memory (16GB+ recommended for larger local models)
+**Cortex runs on Apple Silicon Macs. Nothing else.**
 
-Intel Macs, Linux, and Windows are not supported.
+- Apple Silicon Mac (M1–M4), macOS 13.3+
+- Python 3.11+, Xcode Command Line Tools
+- 8GB+ unified memory (16GB+ recommended for larger local models)
 
 ## Documentation
 

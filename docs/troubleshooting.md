@@ -55,7 +55,7 @@ If the worker handshake fails, check protocol version compatibility between fron
 
 ## GPU Not Detected
 
-Cortex only runs on Apple Silicon Macs (M1, M2, M3, M4 series) with Metal support and the MLX framework. If GPU validation fails, local models are unavailable (cloud models may still work in worker/headless mode).
+Cortex runs on Apple Silicon Macs (M1–M4) with Metal and the MLX framework. If GPU validation fails, local models are unavailable (cloud models still work).
 
 **Check your hardware:**
 
