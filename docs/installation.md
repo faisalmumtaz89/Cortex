@@ -1,372 +1,158 @@
 # Installation Guide
 
-## Quick Start
+## Prerequisites
 
-### Prerequisites
+**Hardware:**
 
-**Hardware Requirements:**
-- Apple Silicon Mac (M1-M4 series)
-- 8GB+ unified memory (16GB+ recommended)
+- Apple Silicon Mac (M1–M4 series)
+- 8GB+ unified memory (16GB+ recommended for larger local models)
 - macOS 13.3+ (MLX minimum requirement)
 
-**Software Requirements:**
+**Software:**
+
 - Python 3.11+ (3.12 recommended)
 - Xcode Command Line Tools
-- Git
-- Bun runtime for frontend source builds (global `bun` or local runtime via `npm install` in `frontend/cortex-tui`)
+- Git (source installs)
+- Bun runtime for frontend source builds (global `bun`, or the local runtime provisioned by `npm install` in `frontend/cortex-tui`; the installer handles this)
 
-**Not Supported:**
-- Intel Macs
-- Linux/Windows
+**Not supported:** Intel Macs, Linux, Windows.
 
-### Basic Installation
+## Recommended Install
 
 ```bash
-# Recommended one-line install
+# One-line installer
 curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
 
-# Or clone and run locally
+# Pin a specific version
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash -s -- 1.0.18
+
+# Or clone and run locally (installs from the source checkout)
 git clone https://github.com/faisalmumtaz89/Cortex.git
 cd Cortex
 ./install.sh
-
-# OR manually install dependencies
-pip install -r requirements.txt
-pip install -e .
 
 # Start Cortex
 cortex
 ```
 
-### Development Installation
+The installer:
+
+1. Verifies Apple Silicon and an arm64 Python 3.11+
+2. Creates an isolated runtime under `~/.cortex/install`
+3. Installs the `cortex-llm` package (or the source checkout)
+4. Builds the OpenTUI sidecar when missing or stale (installing Bun if needed)
+5. Links the `cortex` launcher into `~/.local/bin`
+
+If `~/.local/bin` is not on your `PATH`, the installer prints the line to add to your shell profile.
+
+## Development Install
 
 ```bash
-# Install with development dependencies
+git clone https://github.com/faisalmumtaz89/Cortex.git
+cd Cortex
+python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Run tests to verify installation
-python -m pytest tests/
+# Verify
+python -m pytest tests/ -q
 ```
 
-### OpenTUI Frontend Build (Maintainers)
+For the frontend:
 
 ```bash
 cd frontend/cortex-tui
 npm install
 npm run typecheck
-npm run build
-```
-
-## Detailed Installation
-
-### 1. System Dependencies
-
-**Install Xcode Command Line Tools:**
-```bash
-xcode-select --install
-```
-
-**Install Homebrew (if not installed):**
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-**Install Python 3.11+ via Homebrew:**
-```bash
-brew install python@3.11
-# Or use pyenv for version management
-brew install pyenv
-pyenv install 3.11.7
-pyenv global 3.11.7
-```
-
-### 2. Virtual Environment Setup
-
-**Using venv (recommended):**
-```bash
-python3.11 -m venv cortex-env
-source cortex-env/bin/activate  # macOS
-```
-
-**Using conda:**
-```bash
-conda create -n cortex python=3.11
-conda activate cortex
-```
-
-### 3. GPU Dependencies
-
-**Install MLX Framework:**
-```bash
-pip install "mlx>=0.30.4" "mlx-lm>=0.30.5"
-```
-
-**Install PyTorch with MPS support:**
-```bash
-pip install torch torchvision torchaudio
-```
-
-**Verify GPU Support:**
-```bash
-python -c "import mlx.core as mx; print(f'MLX device: {mx.default_device()}')"
-python -c "import torch; print(f'MPS available: {torch.backends.mps.is_available()}')"
-```
-
-### 4. Install Cortex
-
-**Recommended installer (no pipx required):**
-```bash
-curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
-```
-
-**Pin a specific version:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash -s -- 1.0.18
-```
-
-**From Source (development):**
-```bash
-git clone https://github.com/faisalmumtaz89/Cortex.git
-cd Cortex
-pip install -e .
-```
-
-### 5. Configuration Setup
-
-Configuration is automatically set up during installation. You can modify settings by editing `config.yaml` in the project root:
-
-```bash
-# Start Cortex and use /status to see current configuration
-cortex
-# Then type: /status
+npm run build      # bundled darwin-arm64 sidecar binary
 ```
 
 ## Verification
 
-### Test Basic Functionality
-
 ```bash
-# Start Cortex interactive mode
 cortex
-
-# Then use these commands inside Cortex:
-# /status      - Check current setup
-# /gpu         - Show GPU information  
-# /benchmark   - Run performance test (if model loaded)
 ```
 
-### Expected Output
+Then inside Cortex:
 
-When you run `cortex` and then `/status`, you should see:
-```
-╭─ Current Setup ──────────────────────────────────────╮
-│                                                      │
-│  GPU: Apple Silicon M3 Pro                          │
-│  Cores: 18                                          │ 
-│  Memory: 36.0 GB                                    │
-│  Model: None loaded                                  │
-│                                                      │
-╰──────────────────────────────────────────────────────╯
-```
+- `/status` — current setup (GPU, model, settings)
+- `/gpu` — GPU information
+- `/benchmark` — performance test (after loading a local model)
 
-## Model Installation
+Verify MLX sees the GPU directly:
 
-### Downloading Models
-
-**Using Cortex's built-in downloader (recommended):**
 ```bash
-# Start Cortex
+python -c "import mlx.core as mx; print(f'MLX device: {mx.default_device()}')"
+```
+
+## Getting a Model
+
+**Local (built-in downloader, recommended):**
+
+```bash
 cortex
-
-# Then use the download command
-/download
-
-# Or specify a model directly
-/download microsoft/DialoGPT-medium
+/download mlx-community/Nanbeige4.1-3B-bf16 --load
 ```
 
-**Manual Model Installation:**
+Prefer `mlx-community` models (native MLX) or GGUF files. Downloads land in `model_path` (default `~/models`).
+
+**Cloud instead of local:**
+
 ```bash
-# Create models directory
-mkdir -p ~/models
-
-# Download from Hugging Face (example)
-git lfs clone https://huggingface.co/mlx-community/Mistral-7B-Instruct-v0.2-4bit ~/models/mistral-7b-4bit
+/login openai <api_key>        # or /login anthropic <api_key>
+/model openai:gpt-5.1
 ```
 
-### Model Configuration
+**Default model (optional)** — edit `config.yaml` in the directory you run Cortex from:
 
-**Set default model:**
-Edit the `config.yaml` file in the project root:
 ```yaml
-default_model: 'mistral-7b-instruct'
+default_model: Nanbeige4.1-3B-bf16
 model_path: ~/models
 ```
 
-Or set it through the last used model (Cortex remembers your last loaded model):
+Cortex also remembers the last loaded model across restarts (`~/.cortex/state.yaml`).
+
+## Common Installation Issues
+
+**MLX not available**
+
 ```bash
-cortex
-# Load a model with: /model path/to/your/model
-# Cortex will remember this as the last used model
-```
+# Ensure you are on Apple Silicon
+python -c "import platform; print(platform.machine())"   # expect: arm64
 
-## Troubleshooting
-
-### Common Installation Issues
-
-**Issue: MLX not available**
-```bash
-# Solution: Ensure you're on Apple Silicon
-python -c "import platform; print(platform.machine())"
-# Should output: arm64
-
-# Reinstall MLX
 pip uninstall mlx mlx-lm
 pip install "mlx>=0.30.4" "mlx-lm>=0.30.5"
 ```
 
-**Issue: MPS backend not available**
-```bash
-# Solution: Update PyTorch
-pip install torch torchvision torchaudio --upgrade
+**OpenTUI sidecar missing (source checkout)** — run `./install.sh` at the repository root, or `npm install` in `frontend/cortex-tui`.
 
-# Check macOS version
-sw_vers
-# Requires a recent macOS version for MLX/MPS
-```
+**Permission denied on `~/.cortex`**
 
-**Issue: Memory errors**
 ```bash
-# Solution: Use MLX conversion or dynamic quantization
-# Edit config.yaml:
-auto_quantize: true
-gpu_optimization_level: maximum
-```
-
-**Issue: Permission denied**
-```bash
-# Solution: Fix permissions
 sudo chown -R $(whoami) ~/.cortex
 chmod -R 755 ~/.cortex
 ```
 
-### Performance Issues
-
-**Slow inference:**
-```bash
-# Check GPU utilization within Cortex:
-cortex
-/gpu           # Check GPU status
-/benchmark     # Run performance test
-
-# Enable optimizations in config.yaml:
-gpu_optimization_level: maximum
-```
-
-**High memory usage:**
-```bash
-# Enable memory optimization in config.yaml:
-default_quantization: Q4_K_M
-auto_quantize: true
-```
-
-### Diagnostic Commands
-
-Cortex provides built-in diagnostics through its interactive interface:
-
-```bash
-# Start Cortex
-cortex
-
-# Then use these diagnostic commands:
-/status        # Current system status
-/gpu          # GPU information
-/benchmark    # Performance test (with loaded model)
-```
-
-For detailed system information, you can run:
-```bash
-# Check system info
-system_profiler SPHardwareDataType
-system_profiler SPDisplaysDataType
-
-# Run comprehensive validation
-python tests/test_apple_silicon.py
-```
+For everything else, see `docs/troubleshooting.md`.
 
 ## Uninstallation
 
-### Remove Cortex
-
 ```bash
-# Uninstall package
-pip uninstall cortex-llm
+# Remove the isolated runtime and launcher
+rm -rf ~/.cortex/install
+rm -f ~/.local/bin/cortex
 
-# Remove configuration and cache
+# Remove configuration, caches, and conversations
 rm -rf ~/.cortex
 
-# Remove models (optional)
+# Remove downloaded models (optional)
 rm -rf ~/models
 ```
 
-### Clean Installation
-
-```bash
-# Remove all Python packages
-pip freeze | xargs pip uninstall -y
-
-# Reinstall from scratch
-pip install cortex-llm
-```
-
-## Advanced Installation
-
-### Build from Source
-
-```bash
-# Install build dependencies
-pip install build wheel
-
-# Build package
-python -m build
-
-# Install built package
-pip install dist/cortex_llm-*.whl
-```
-
-### Development Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/faisalmumtaz89/Cortex.git
-
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Run full test suite
-python -m pytest tests/
-```
-
-## Platform-Specific Notes
-
-### macOS (Apple Silicon)
-
-- **Recommended:** macOS 13.3+ for MLX support
-- **Best performance:** Newer macOS releases with up‑to‑date Metal drivers
-- **Memory:** Unified memory shared between CPU and GPU
-- **Performance:** Best with higher-end Apple Silicon chips and high memory configurations
-
-### Other Platforms
-
-Cortex is not supported on Intel Macs, Linux, or Windows.
+If you installed into your own environment instead: `pip uninstall cortex-llm`.
 
 ## Next Steps
 
-After successful installation:
-
-1. **Start Cortex:** `cortex`
-2. **Download a model:** Use `/download` inside Cortex
-3. **Start chatting:** Type your message after downloading a model
-4. **Get help:** Use `/help` for available commands
-
-For detailed usage instructions, see the [CLI Documentation](cli.md) and [Configuration Guide](configuration.md).
+1. Start Cortex: `cortex`
+2. Get a model: `/download ... --load` or `/login` + `/model provider:model`
+3. Ask for changes to your code — see the [CLI Documentation](cli.md)
+4. Tune settings — see the [Configuration Guide](configuration.md)

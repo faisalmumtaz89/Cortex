@@ -19,9 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAIClient:
-    """OpenAI streaming and key validation wrapper."""
+    """OpenAI streaming and key validation wrapper.
 
-    def __init__(self, api_key: str, timeout_seconds: int = 60):
+    Also serves OpenAI-compatible endpoints (Azure OpenAI's /openai/v1/ path)
+    via base_url.
+    """
+
+    def __init__(self, api_key: str, timeout_seconds: int = 60, base_url: Optional[str] = None):
         try:
             from openai import OpenAI  # type: ignore
         except Exception as exc:
@@ -29,7 +33,7 @@ class OpenAIClient:
                 "OpenAI runtime dependency is missing. Run /login openai to auto-install and configure it."
             ) from exc
 
-        self.client = OpenAI(api_key=api_key, timeout=timeout_seconds)
+        self.client = OpenAI(api_key=api_key, timeout=timeout_seconds, base_url=base_url)
 
     def validate_key(self) -> Tuple[bool, str]:
         """Validate API key using a low-cost API call."""

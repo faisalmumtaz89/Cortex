@@ -377,7 +377,7 @@ if [[ "${INSTALL_MODE}" == "source" ]]; then
       [[ -n "${line}" ]] && echo "  - ${line}" >&2
     done <<< "${stale_removed}"
   fi
-  "${PIP}" install --upgrade -e "${SCRIPT_DIR}"
+  "${PIP}" install --upgrade -e "${SCRIPT_DIR}[local]"
   clear_hidden_site_flags "${RUNTIME_PYTHON}"
   SOURCE_LINK_PATH="$(ensure_source_package_link "${RUNTIME_PYTHON}" "${SCRIPT_DIR}")" \
     || die "Unable to create stable source link in site-packages."
@@ -398,9 +398,9 @@ PY
   ok "Python import path: ${SOURCE_IMPORT_PATH}"
   ensure_source_sidecar "${SCRIPT_DIR}"
 else
-  PACKAGE_SPEC="cortex-llm"
+  PACKAGE_SPEC="cortex-llm[local]"
   if [[ "${TARGET}" != "stable" ]] && [[ "${TARGET}" != "latest" ]]; then
-    PACKAGE_SPEC="cortex-llm==${TARGET}"
+    PACKAGE_SPEC="cortex-llm[local]==${TARGET}"
   fi
   log "Installing ${PACKAGE_SPEC}"
   "${PIP}" install --upgrade "${PACKAGE_SPEC}"

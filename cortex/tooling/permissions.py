@@ -82,6 +82,15 @@ class PermissionStore:
         self.path.write_text(yaml.safe_dump(serializable, sort_keys=False), encoding="utf-8")
 
 
+def default_rules() -> List[PermissionRule]:
+    """Default policy: read-only tools run silently; edits and bash prompt."""
+    return [
+        PermissionRule(permission="read", pattern="*", action=PermissionAction.ALLOW),
+        PermissionRule(permission="list", pattern="*", action=PermissionAction.ALLOW),
+        PermissionRule(permission="grep", pattern="*", action=PermissionAction.ALLOW),
+    ]
+
+
 class PermissionManager:
     """Evaluate and resolve tool permission requests."""
 

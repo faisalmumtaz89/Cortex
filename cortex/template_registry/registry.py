@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional, Protocol, cast
 
 from cortex.template_registry.auto_detector import TemplateDetector
 from cortex.template_registry.config_manager import ModelTemplateConfig, TemplateConfigManager
-from cortex.template_registry.interactive import InteractiveTemplateSetup
 from cortex.template_registry.template_profiles.base import BaseTemplateProfile, TemplateType
 from cortex.template_registry.template_profiles.complex import ReasoningProfile
 from cortex.template_registry.template_profiles.standard import (
@@ -37,7 +36,6 @@ class TemplateRegistry:
         self.config_manager = TemplateConfigManager(config_path)
         self.detector = TemplateDetector()
         self.console = console
-        self._interactive_setup: Optional[InteractiveTemplateSetup] = None
 
         # Cache of loaded profiles
         self._profile_cache: Dict[str, BaseTemplateProfile] = {}
@@ -53,18 +51,11 @@ class TemplateRegistry:
             TemplateType.CUSTOM: GemmaProfile  # Use Gemma as default custom template
         }
 
-    @property
-    def interactive(self) -> InteractiveTemplateSetup:
-        """Lazily construct interactive setup helper only when needed."""
-        if self._interactive_setup is None:
-            self._interactive_setup = InteractiveTemplateSetup(self.console)
-        return self._interactive_setup
-
     def setup_model(
         self,
         model_name: str,
         tokenizer: Any = None,
-        interactive: bool = True,
+        interactive: bool = False,
         force_setup: bool = False
     ) -> BaseTemplateProfile:
         """Setup or retrieve template for a model.
@@ -72,7 +63,8 @@ class TemplateRegistry:
         Args:
             model_name: Name of the model
             tokenizer: Optional tokenizer object
-            interactive: Whether to use interactive setup
+            interactive: Unused; kept for call-site compatibility (worker mode
+                has no TTY, so template selection is always automatic)
             force_setup: Force re-setup even if config exists
 
         Returns:
@@ -99,36 +91,19 @@ class TemplateRegistry:
         if global_settings.auto_detect or force_setup:
             detected_profile, confidence = self.detector.detect_template(model_name, tokenizer=tokenizer)
 
-            # Check if we should prompt user
-            should_prompt = (
-                interactive and
-                global_settings.prompt_on_unknown and
-                (confidence < 0.5 or force_setup)
+            config = ModelTemplateConfig(
+                detected_type=detected_profile.config.template_type.value,
+                user_preference="auto",
+                custom_filters=detected_profile.config.custom_filters,
+                show_reasoning=False,
+                confidence=confidence
             )
 
-            if should_prompt:
-                # Interactive setup
-                config = self.interactive.setup_model_template(model_name, tokenizer, config)
+            if global_settings.cache_templates:
                 self.config_manager.save_model_config(model_name, config)
-                profile = self._load_profile_from_config(config)
-            else:
-                # Use detected profile
-                config = ModelTemplateConfig(
-                    detected_type=detected_profile.config.template_type.value,
-                    user_preference="auto",
-                    custom_filters=detected_profile.config.custom_filters,
-                    show_reasoning=False,
-                    confidence=confidence
-                )
 
-                if global_settings.cache_templates:
-                    self.config_manager.save_model_config(model_name, config)
-
-                profile = detected_profile
-
-            resolved_profile = profile or SimpleProfile()
-            self._profile_cache[model_name] = resolved_profile
-            return resolved_profile
+            self._profile_cache[model_name] = detected_profile
+            return detected_profile
 
         # Fallback to simple profile
         logger.warning(f"Using fallback template for {model_name}")
@@ -162,14 +137,12 @@ class TemplateRegistry:
     def configure_template(
         self,
         model_name: str,
-        interactive: bool = True,
         **kwargs
     ) -> BaseTemplateProfile:
         """Configure or reconfigure template for a model.
 
         Args:
             model_name: Name of the model
-            interactive: Whether to use interactive configuration
             **kwargs: Configuration overrides
 
         Returns:
@@ -178,33 +151,22 @@ class TemplateRegistry:
         # Get current configuration
         config = self.config_manager.get_model_config(model_name)
 
-        if interactive:
-            if config:
-                # Quick adjust existing
-                config = self.interactive.quick_adjust_template(model_name, config)
-            else:
-                # Full setup
-                config = self.interactive.setup_model_template(model_name)
+        if not config:
+            # Create default config
+            profile, confidence = self.detector.detect_template(model_name)
+            config = ModelTemplateConfig(
+                detected_type=profile.config.template_type.value,
+                user_preference="custom",
+                custom_filters=[],
+                confidence=confidence
+            )
 
-            self.config_manager.save_model_config(model_name, config)
-        else:
-            # Apply kwargs overrides
-            if not config:
-                # Create default config
-                profile, confidence = self.detector.detect_template(model_name)
-                config = ModelTemplateConfig(
-                    detected_type=profile.config.template_type.value,
-                    user_preference="custom",
-                    custom_filters=[],
-                    confidence=confidence
-                )
+        # Apply overrides
+        for key, value in kwargs.items():
+            if hasattr(config, key):
+                setattr(config, key, value)
 
-            # Apply overrides
-            for key, value in kwargs.items():
-                if hasattr(config, key):
-                    setattr(config, key, value)
-
-            self.config_manager.save_model_config(model_name, config)
+        self.config_manager.save_model_config(model_name, config)
 
         # Load and cache updated profile
         if config is None:

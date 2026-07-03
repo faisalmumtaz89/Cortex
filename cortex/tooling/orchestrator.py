@@ -9,12 +9,14 @@ from typing import Callable, Dict, List, Optional, cast
 
 from cortex.conversation_manager import MessageRole
 from cortex.inference_engine import GenerationRequest
+from cortex.tooling.agent_prompt import build_system_prompt
 from cortex.tooling.local_protocol import format_tool_results, parse_tool_calls, strip_tool_blocks
 from cortex.tooling.permissions import (
     PermissionDecision,
     PermissionDeniedError,
     PermissionManager,
     PermissionRequest,
+    default_rules,
 )
 from cortex.tooling.registry import ToolRegistry
 from cortex.tooling.stream_normalizer import merge_stream_text
@@ -40,27 +42,20 @@ NO_TOOLS_SYSTEM_INSTRUCTION = (
     "If user asks to inspect files/code, clearly say tooling is disabled and ask to enable read-only tools."
 )
 
-TOOLS_SYSTEM_INSTRUCTION_TEMPLATE = (
-    "You are running inside the user's local repository at: {cwd}. "
-    "For requests about codebase/files/functions/scripts, use the available tools to inspect real files before concluding. "
-    "Do not say you lack repository access when tools are available. "
-    "If a tool is rejected or unavailable, explain that constraint and continue with best effort."
-)
-
 
 class ToolingOrchestrator:
     """Coordinates generation, tool execution, and permission checks."""
 
     def __init__(self, *, cli):
         self.cli = cli
-        self.permission_manager = PermissionManager()
+        self.permission_manager = PermissionManager(rules=default_rules())
 
     def _tooling_flags(self) -> dict:
         tools_cfg = getattr(self.cli.config, "tools", None)
         tools_enabled = bool(getattr(tools_cfg, "tools_enabled", False))
         tools_profile = str(getattr(tools_cfg, "tools_profile", "off") or "off")
         tools_local_mode = str(getattr(tools_cfg, "tools_local_mode", "disabled") or "disabled")
-        max_iterations = int(getattr(tools_cfg, "tools_max_iterations", 4) or 4)
+        max_iterations = int(getattr(tools_cfg, "tools_max_iterations", 25) or 25)
         return {
             "enabled": tools_enabled and tools_profile != "off",
             "profile": tools_profile,
@@ -200,10 +195,19 @@ class ToolingOrchestrator:
         user_input: str,
         stop_sequences: Optional[List[str]],
         tools_enabled: bool,
+        registry: Optional[ToolRegistry] = None,
     ) -> GenerationRequest:
-        prompt = self.cli._format_prompt_with_chat_template(user_input, include_user=False)
-        if not tools_enabled:
-            prompt = f"{NO_TOOLS_SYSTEM_INSTRUCTION}\n\n{prompt}"
+        if tools_enabled and registry is not None:
+            system_prompt = build_system_prompt(
+                cwd=registry.repo_root,
+                tool_specs=registry.specs(),
+                include_local_protocol=True,
+            )
+        else:
+            system_prompt = NO_TOOLS_SYSTEM_INSTRUCTION
+        prompt = self.cli._format_prompt_with_chat_template(
+            user_input, include_user=False, system_prompt=system_prompt
+        )
         return GenerationRequest(
             prompt=prompt,
             max_tokens=self.cli.config.inference.max_tokens,
@@ -241,6 +245,7 @@ class ToolingOrchestrator:
                     user_input=user_input,
                     stop_sequences=stop_sequences,
                     tools_enabled=tools_enabled,
+                    registry=registry,
                 )
                 generated = "".join(self.cli.inference_engine.generate(request))
 
@@ -296,6 +301,12 @@ class ToolingOrchestrator:
                             first_text_seen=first_text_seen,
                             started_at=started_at,
                         )
+                        # The "diff" metadata is a UI-only payload (can be 400
+                        # rows); strip it from the model-facing copy so it never
+                        # bloats the prompt. The UI copy (recorded above) keeps it.
+                        model_metadata = {
+                            key: value for key, value in tool_result.metadata.items() if key != "diff"
+                        }
                         tool_results_payload.append(
                             {
                                 "id": tool_result.id,
@@ -303,7 +314,7 @@ class ToolingOrchestrator:
                                 "ok": tool_result.ok,
                                 "result": {
                                     "output": tool_result.output,
-                                    "metadata": tool_result.metadata,
+                                    "metadata": model_metadata,
                                 },
                                 "error": tool_result.error,
                             }
@@ -388,7 +399,7 @@ class ToolingOrchestrator:
                 cloud_messages = [
                     {
                         "role": "system",
-                        "content": TOOLS_SYSTEM_INSTRUCTION_TEMPLATE.format(cwd=str(Path.cwd())),
+                        "content": build_system_prompt(cwd=registry.repo_root),
                     },
                     *cloud_messages,
                 ]
@@ -413,6 +424,7 @@ class ToolingOrchestrator:
                 tools=tool_specs,
                 tool_choice="auto",
                 tool_executor=execute_tool if tools_enabled else None,
+                max_tool_iterations=max_iterations,
                 on_wait=on_wait,
                 on_retry=on_retry,
             )

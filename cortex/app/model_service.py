@@ -111,14 +111,35 @@ class ModelService:
         }
 
     def gpu_status(self) -> Dict[str, Any]:
-        status = cast(Dict[str, Any], self.model_manager.get_memory_status())
+        raw = cast(Dict[str, Any], self.model_manager.get_memory_status())
         gpu_info = getattr(self.gpu_validator, "gpu_info", None)
+
+        def rounded(value: Any) -> Any:
+            return round(float(value), 2) if isinstance(value, (int, float)) else value
+
+        # A curated, ordered, flat field set — no raw nested dicts, floats to 2dp.
+        status: Dict[str, Any] = {}
         if gpu_info is not None:
             status["chip_name"] = gpu_info.chip_name
             status["gpu_cores"] = gpu_info.gpu_cores
-            status["metal"] = gpu_info.has_metal
-            status["mps"] = gpu_info.has_mps
-            status["mlx"] = gpu_info.has_mlx
+            status["metal"] = "yes" if gpu_info.has_metal else "no"
+            status["mlx"] = "yes" if gpu_info.has_mlx else "no"
+
+        status["models_loaded"] = raw.get("models_loaded", 0)
+        if raw.get("model_memory_gb") is not None:
+            status["model_memory_gb"] = rounded(raw.get("model_memory_gb"))
+        if raw.get("mlx_memory_gb") is not None:
+            status["mlx_memory_gb"] = rounded(raw.get("mlx_memory_gb"))
+
+        pool = raw.get("memory_pool")
+        if isinstance(pool, dict):
+            status["pool_allocated_gb"] = rounded(pool.get("allocated_gb", 0))
+            status["pool_free_gb"] = rounded(pool.get("free_gb", 0))
+
+        accel = raw.get("mlx_acceleration")
+        if isinstance(accel, dict):
+            status["mlx_acceleration"] = "amx" if accel.get("amx_enabled") else "on"
+
         return status
 
     def _find_local_model_path(self, model_name_or_path: str) -> Optional[str]:
@@ -164,6 +185,19 @@ class ModelService:
                     f"Run /login {provider_enum.value} <api_key>."
                 ),
             }
+
+        if provider_enum == CloudProvider.AZURE:
+            endpoint = self.cloud_router._azure_endpoint()
+            if not endpoint:
+                return {
+                    "ok": False,
+                    "message": (
+                        "Azure OpenAI endpoint not configured. Set AZURE_OPENAI_ENDPOINT "
+                        "or cloud_azure_endpoint in config.yaml, then re-select the model."
+                    ),
+                }
+            # Persist so later sessions work without the env var.
+            self.config.set_state_value("azure_endpoint", endpoint)
 
         ref = CloudModelRef(provider=provider_enum, model_id=normalized_model_id)
         self.active_target = ActiveModelTarget.cloud(ref)

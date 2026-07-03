@@ -8,8 +8,8 @@ import sys
 from io import TextIOBase
 from typing import Any
 
-# Disable multiprocessing resource tracking before any imports that might use it
-# This prevents semaphore leak warnings from transformers internals.
+# Disable multiprocessing resource tracking before any imports that might use it.
+# This prevents semaphore leak warnings from HuggingFace tokenizer internals.
 os.environ["PYTHONWARNINGS"] = "ignore::UserWarning:multiprocessing.resource_tracker"
 
 # Monkey-patch resource tracker before it's used by subprocess-heavy libs.
@@ -96,16 +96,6 @@ def _cleanup_inference_engine(inference_engine) -> None:
     ):
         inference_engine.memory_pool.cleanup()
 
-    try:
-        import torch
-
-        if torch.backends.mps.is_available():
-            torch.mps.synchronize()
-            if hasattr(torch.mps, "empty_cache"):
-                torch.mps.empty_cache()
-    except Exception:
-        pass
-
 
 def _run_worker_stdio() -> None:
     from cortex.app.worker_runtime import WorkerRuntime
@@ -151,16 +141,71 @@ def _run_worker_stdio() -> None:
         _cleanup_inference_engine(inference_engine)
 
 
+def _run_headless(args) -> None:
+    from cortex.app.headless import run_headless
+
+    components = _build_components(
+        strict_gpu_validation=False,
+        lazy_inference_engine=True,
+        eager_gpu_validation=False,
+    )
+    inference_engine = components[3]
+    try:
+        exit_code = run_headless(
+            prompt=args.print,
+            components=components,
+            model=args.model,
+            full_auto=args.full_auto,
+        )
+    finally:
+        _cleanup_inference_engine(inference_engine)
+    if exit_code != 0:
+        raise SystemExit(exit_code)
+
+
+def _package_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("cortex-llm")
+    except Exception:
+        return "dev"
+
+
 def main() -> None:
     try:
         parser = argparse.ArgumentParser(prog="cortex")
         parser.add_argument(
+            "--version",
+            action="version",
+            version=f"cortex {_package_version()}",
+        )
+        parser.add_argument(
             "--worker-stdio", action="store_true", help="Run backend worker over JSON-RPC stdio."
+        )
+        parser.add_argument(
+            "-p",
+            "--print",
+            metavar="PROMPT",
+            help="Run one agent turn headlessly, print the reply, and exit.",
+        )
+        parser.add_argument(
+            "--model",
+            help="Model selector for headless mode (same syntax as /model).",
+        )
+        parser.add_argument(
+            "--full-auto",
+            action="store_true",
+            help="Headless mode: auto-approve edits and shell commands.",
         )
         args = parser.parse_args()
 
         if args.worker_stdio:
             _run_worker_stdio()
+            return
+
+        if args.print:
+            _run_headless(args)
             return
 
         exit_code = launch_tui()

@@ -111,4 +111,7 @@ def test_orchestrator_prepends_tools_instruction_when_tools_on():
     assert router.last_kwargs is not None
     outbound_messages = router.last_kwargs["messages"]
     assert outbound_messages[0]["role"] == "system"
-    assert "local repository" in outbound_messages[0]["content"]
+    system_content = outbound_messages[0]["content"]
+    assert "AI coding agent" in system_content
+    assert "Working directory:" in system_content
+    assert router.last_kwargs["max_tool_iterations"] == 4

@@ -1,7 +1,6 @@
 """Metal optimization package for GPU acceleration on Apple Silicon.
 
 This package provides unified GPU acceleration for LLM inference on Apple Silicon.
-The recommended approach is to use MetalOptimizer for automatic backend selection.
 """
 
 from __future__ import annotations
@@ -13,12 +12,6 @@ from typing import Any, Dict, Optional
 
 # Primary exports
 __all__ = [
-    # Unified optimizer (RECOMMENDED)
-    "MetalOptimizer",
-    "OptimizationConfig",
-    "Backend",
-    "InferenceSession",
-
     # Core functionality
     "MetalCapabilities",
     "check_metal_support",
@@ -28,8 +21,7 @@ __all__ = [
     # Memory management
     "MemoryPool",
 
-    # Backend-specific (use MetalOptimizer instead for most cases)
-    "MPSOptimizer",
+    # Backend-specific
     "MLXAccelerator",
 
     # Performance monitoring
@@ -251,12 +243,7 @@ def initialize_metal_optimizations() -> Dict[str, Any]:
     }
 
 _LAZY_EXPORTS = {
-    "MetalOptimizer": ("cortex.metal.optimizer", "MetalOptimizer"),
-    "OptimizationConfig": ("cortex.metal.optimizer", "OptimizationConfig"),
-    "Backend": ("cortex.metal.optimizer", "Backend"),
-    "InferenceSession": ("cortex.metal.optimizer", "InferenceSession"),
     "MemoryPool": ("cortex.metal.memory_pool", "MemoryPool"),
-    "MPSOptimizer": ("cortex.metal.mps_optimizer", "MPSOptimizer"),
     "MLXAccelerator": ("cortex.metal.mlx_accelerator", "MLXAccelerator"),
     "PerformanceProfiler": ("cortex.metal.performance_profiler", "PerformanceProfiler"),
 }

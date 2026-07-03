@@ -12,6 +12,7 @@ class CloudProvider(str, Enum):
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    AZURE = "azure"
 
     @classmethod
     def from_value(cls, value: Union[str, "CloudProvider"]) -> "CloudProvider":

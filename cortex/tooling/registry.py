@@ -6,13 +6,20 @@ from pathlib import Path
 from typing import Dict, List
 
 from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
-from cortex.tooling.builtin import ApplyPatchTool, BashTool, ListDirTool, ReadFileTool, SearchTool
+from cortex.tooling.builtin import (
+    BashTool,
+    EditFileTool,
+    ListDirTool,
+    ReadFileTool,
+    SearchTool,
+    WriteFileTool,
+)
 from cortex.tooling.types import ToolCall, ToolExecutionState, ToolResult, ToolSpec
 
 _TOOL_PROFILE_ORDER = {
     "off": 0,
     "read_only": 1,
-    "patch": 2,
+    "edit": 2,
     "full": 3,
 }
 
@@ -38,7 +45,8 @@ class ToolRegistry:
         self._register(ListDirTool(), "read_only")
         self._register(ReadFileTool(), "read_only")
         self._register(SearchTool(), "read_only")
-        self._register(ApplyPatchTool(), "patch")
+        self._register(EditFileTool(), "edit")
+        self._register(WriteFileTool(), "edit")
         self._register(BashTool(), "full")
 
     def names(self) -> List[str]:

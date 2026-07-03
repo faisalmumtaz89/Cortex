@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional
 
 import mlx.core as mx
 import psutil
-import torch
 
 from cortex.metal.gpu_validator import GPUValidator
 
@@ -37,7 +36,7 @@ class MemoryBlock:
     allocated: bool
     allocation_time: Optional[datetime]
     last_access: Optional[datetime]
-    device_type: str  # "mps" or "mlx"
+    device_type: str  # "mlx"
     tensor_ref: Any  # Weak reference to tensor
     metadata: Dict[str, Any]
     is_constant: bool = False  # Whether this block is for constant memory
@@ -119,7 +118,7 @@ class MemoryPool:
         self,
         pool_size: Optional[int] = None,
         strategy: AllocationStrategy = AllocationStrategy.UNIFIED,
-        device: str = "mps",
+        device: str = "mlx",
         auto_size: bool = True,
         silent: bool = False,
         use_bfloat16: Optional[bool] = None,
@@ -131,16 +130,17 @@ class MemoryPool:
         Args:
             pool_size: Total pool size in bytes (None for auto-detection)
             strategy: Allocation strategy
-            device: Device type ("mps" or "mlx")
+            device: Device type (only "mlx" is supported)
             auto_size: Automatically determine pool size based on available memory
             silent: Suppress initialization messages
             use_bfloat16: Use bfloat16 if supported (None for auto-detect)
         """
+        if device != "mlx":
+            raise ValueError(f"Unsupported device: {device} (only 'mlx' is supported)")
+
         if auto_size and pool_size is None:
             self.pool_size = self.get_optimal_pool_size()
             logger.info(f"Auto-sizing memory pool to {self.pool_size / (1024**3):.1f}GB")
-            if not silent:
-                print(f"Auto-sizing memory pool to {self.pool_size / (1024**3):.1f}GB")
         else:
             self.pool_size = pool_size or self.get_optimal_pool_size()
             logger.info(f"Memory pool size set to {self.pool_size / (1024**3):.1f}GB")
@@ -165,11 +165,9 @@ class MemoryPool:
             self.use_bfloat16 = self._should_use_bfloat16()
 
         self.optimal_dtype = self._get_optimal_dtype()
-        self.enable_zero_copy = enable_zero_copy and device == "mlx"
+        self.enable_zero_copy = enable_zero_copy
 
         # Regular and constant memory buffers
-        self._mps_buffer: Optional[torch.Tensor] = None
-        self._mps_constant_buffer: Optional[torch.Tensor] = None
         self._mlx_buffer: Optional[mx.array] = None
         self._mlx_constant_buffer: Optional[mx.array] = None
 
@@ -191,15 +189,6 @@ class MemoryPool:
     def cleanup(self) -> None:
         """Clean up allocated resources to prevent leaks."""
         try:
-            # Release MPS buffers
-            if self._mps_buffer is not None:
-                del self._mps_buffer
-                self._mps_buffer = None
-
-            if self._mps_constant_buffer is not None:
-                del self._mps_constant_buffer
-                self._mps_constant_buffer = None
-
             # Release MLX buffers
             if self._mlx_buffer is not None:
                 del self._mlx_buffer
@@ -208,12 +197,6 @@ class MemoryPool:
             if self._mlx_constant_buffer is not None:
                 del self._mlx_constant_buffer
                 self._mlx_constant_buffer = None
-
-            # Force synchronization and cleanup
-            if self.device == "mps" and torch.backends.mps.is_available():
-                torch.mps.synchronize()
-                if hasattr(torch.mps, 'empty_cache'):
-                    torch.mps.empty_cache()
         except Exception:
             pass  # Ignore errors during cleanup
 
@@ -225,182 +208,67 @@ class MemoryPool:
             True if bfloat16 is supported and beneficial
         """
         if self.gpu_validator.gpu_info and self.gpu_validator.gpu_info.supports_bfloat16:
-            if self.device == "mps":
-                # Check PyTorch bfloat16 support on MPS
-                try:
-                    torch.tensor([1.0], dtype=torch.bfloat16, device="mps")
-                    return True
-                except (RuntimeError, TypeError):
-                    return False
-            elif self.device == "mlx":
-                # Check MLX bfloat16 support
-                return hasattr(mx, 'bfloat16')
+            return hasattr(mx, 'bfloat16')
         return False
 
     def _get_optimal_dtype(self) -> Any:
-        """
-        Get optimal dtype for current device and hardware.
+        """Get optimal MLX dtype for current hardware."""
+        if self.use_bfloat16 and hasattr(mx, 'bfloat16'):
+            return mx.bfloat16
+        return mx.float16
 
-        Returns:
-            torch.dtype or mx.dtype
-        """
-        if self.device == "mps":
-            if self.use_bfloat16:
-                return torch.bfloat16
-            else:
-                return torch.float16
-        elif self.device == "mlx":
-            if self.use_bfloat16 and hasattr(mx, 'bfloat16'):
-                return mx.bfloat16
-            else:
-                return mx.float16
-        else:
-            return torch.float32
+    # MLX shape dimensions are int32; a backing buffer cannot exceed this many elements.
+    _MAX_BUFFER_ELEMENTS = 2**31 - 1
 
     def _initialize_pool(self) -> None:
-        """Initialize the memory pool with pre-allocated buffers."""
-        if self.device == "mps" and torch.backends.mps.is_available():
-            self._initialize_mps_pool()
-        elif self.device == "mlx":
-            self._initialize_mlx_pool()
+        """Initialize pool bookkeeping.
+
+        Backing buffers are materialized lazily on first allocation — the pool
+        tracks unified memory but must not eagerly write gigabytes at startup.
+        """
+        if self.strategy in [AllocationStrategy.UNIFIED, AllocationStrategy.ZERO_COPY]:
+            self._create_unified_blocks()
         else:
-            raise RuntimeError(f"Unsupported device: {self.device}")
+            self._create_segmented_blocks()
+        self._create_constant_blocks()
 
-    def _initialize_mps_pool(self) -> None:
-        """Initialize MPS memory pool with optimal dtype and constant memory."""
+        dtype_name = str(self.optimal_dtype).split('.')[-1]
+        logger.info(f"MLX pool initialized: dtype={dtype_name}")
+
+    def _element_size(self) -> int:
+        """Byte width of the pool dtype."""
+        if self.optimal_dtype in [mx.float16, getattr(mx, 'bfloat16', mx.float16)]:
+            return 2
+        return 4
+
+    def _ensure_mlx_buffer(self, is_constant: bool = False) -> mx.array:
+        """Materialize the backing MLX buffer on first use."""
+        buffer = self._mlx_constant_buffer if is_constant else self._mlx_buffer
+        if buffer is not None:
+            return buffer
+
+        size_bytes = self.CONSTANT_POOL_SIZE if is_constant else self.pool_size
+        num_elements = min(size_bytes // self._element_size(), self._MAX_BUFFER_ELEMENTS)
+
         try:
-            device = torch.device("mps")
-
-            # Calculate number of elements based on dtype size
-            if self.optimal_dtype in [torch.float16, torch.bfloat16]:
-                element_size = 2  # 16-bit types
-            else:
-                element_size = 4  # 32-bit types
-
-            # Initialize regular memory pool
-            num_elements = self.pool_size // element_size
-            self._mps_buffer = torch.empty(
-                num_elements,
-                dtype=self.optimal_dtype,
-                device=device
-            )
-
-            # Initialize constant memory pool (for weights)
-            constant_elements = self.CONSTANT_POOL_SIZE // element_size
-            self._mps_constant_buffer = torch.empty(
-                constant_elements,
-                dtype=self.optimal_dtype,
-                device=device
-            )
-            # Mark as read-only after initialization
-            self._mps_constant_buffer.requires_grad_(False)
-
-            dtype_name = str(self.optimal_dtype).split('.')[-1]
-            logger.info(f"MPS memory pool initialized: dtype={dtype_name}, constant_pool={self.CONSTANT_POOL_SIZE / (1024*1024):.1f}MB")
-            if not self.silent:
-                print(f"Initialized MPS pool with dtype: {dtype_name}")
-                print(f"Constant memory pool: {self.CONSTANT_POOL_SIZE / (1024*1024):.1f}MB")
-
-            if self.strategy == AllocationStrategy.UNIFIED:
-                self._create_unified_blocks()
-            else:
-                self._create_segmented_blocks()
-
-            # Create constant memory blocks
-            self._create_constant_blocks()
-
-        except Exception as e:
-            error_msg = str(e).lower()
-
-            # Check if this is a dtype support issue vs memory issue
-            if self.optimal_dtype == torch.bfloat16 and 'bfloat16' in error_msg:
-                # bfloat16 not supported, fallback to float16
-                self.optimal_dtype = torch.float16
-                self.use_bfloat16 = False
-                logger.info("bfloat16 not supported, falling back to float16")
-                if not self.silent:
-                    print("bfloat16 not supported, falling back to float16")
-                self._initialize_mps_pool()  # Retry with float16
-            elif 'invalid buffer size' in error_msg or 'out of memory' in error_msg:
-                # Memory allocation failed - provide helpful error
-                pool_size_gb = self.pool_size / (1024**3)
-                raise RuntimeError(
-                    f"Failed to allocate {pool_size_gb:.2f}GB memory pool. "
-                    f"Insufficient memory available. Consider reducing pool size or "
-                    f"freeing up system memory. Error: {e}"
-                )
-            else:
-                # Other errors - pass through
-                raise RuntimeError(f"Failed to initialize MPS pool: {e}")
-
-    def _initialize_mlx_pool(self) -> None:
-        """Initialize MLX memory pool with optimal dtype and zero-copy support."""
-        try:
-            # Calculate number of elements based on dtype size
-            if self.optimal_dtype in [mx.float16, getattr(mx, 'bfloat16', mx.float16)]:
-                element_size = 2  # 16-bit types
-            else:
-                element_size = 4  # 32-bit types
-
-            num_elements = self.pool_size // element_size
-
-            # For zero-copy, create unified memory that can be shared
-            if self.strategy == AllocationStrategy.ZERO_COPY:
-                logger.info("Creating MLX zero-copy unified memory pool")
-                # MLX arrays are already zero-copy between CPU/GPU
-                self._mlx_buffer = mx.zeros(
-                    (num_elements,),
-                    dtype=self.optimal_dtype
-                )
-                # Force evaluation to allocate unified memory
-                mx.eval(self._mlx_buffer)
-
-                # Also create constant buffer for weights
-                constant_elements = self.CONSTANT_POOL_SIZE // element_size
-                self._mlx_constant_buffer = mx.zeros(
-                    (constant_elements,),
-                    dtype=self.optimal_dtype
-                )
-                mx.eval(self._mlx_constant_buffer)
-
-                dtype_name = str(self.optimal_dtype).split('.')[-1]
-                logger.info(f"MLX zero-copy pool initialized: dtype={dtype_name}, size={self.pool_size / (1024**3):.1f}GB")
-                if not self.silent:
-                    print(f"Initialized MLX zero-copy pool with dtype: {dtype_name}")
-                    print(f"Zero-copy unified memory: {self.pool_size / (1024**3):.1f}GB")
-            else:
-                # Standard MLX buffer
-                self._mlx_buffer = mx.zeros(
-                    (num_elements,),
-                    dtype=self.optimal_dtype
-                )
-                mx.eval(self._mlx_buffer)
-
-                dtype_name = str(self.optimal_dtype).split('.')[-1]
-                logger.info(f"MLX pool initialized: dtype={dtype_name}")
-                if not self.silent:
-                    print(f"Initialized MLX pool with dtype: {dtype_name}")
-
-            if self.strategy in [AllocationStrategy.UNIFIED, AllocationStrategy.ZERO_COPY]:
-                self._create_unified_blocks()
-            else:
-                self._create_segmented_blocks()
-
-            # Create constant blocks for MLX if needed
-            if self._mlx_constant_buffer is not None:
-                self._create_constant_blocks()
-
+            buffer = mx.zeros((num_elements,), dtype=self.optimal_dtype)
+            mx.eval(buffer)
         except Exception as e:
             # Fallback to float16 if bfloat16 fails
             if hasattr(mx, 'bfloat16') and self.optimal_dtype == mx.bfloat16:
                 self.optimal_dtype = mx.float16
                 self.use_bfloat16 = False
                 logger.info("MLX bfloat16 not supported, falling back to float16")
-                if not self.silent:
-                    print("bfloat16 not supported, falling back to float16")
-                self._initialize_mlx_pool()  # Retry with float16
+                buffer = mx.zeros((num_elements,), dtype=self.optimal_dtype)
+                mx.eval(buffer)
             else:
                 raise RuntimeError(f"Failed to initialize MLX pool: {e}")
+
+        if is_constant:
+            self._mlx_constant_buffer = buffer
+        else:
+            self._mlx_buffer = buffer
+        return buffer
 
     def _create_unified_blocks(self) -> None:
         """Create a single unified memory block."""
@@ -575,8 +443,6 @@ class MemoryPool:
         # Fallback to regular memory if constant memory is full
         if tensor is None:
             logger.info("Constant memory full, falling back to regular memory for weights")
-            if not self.silent:
-                print("Constant memory full, falling back to regular memory for weights")
             tensor = self.allocate(size, dtype, is_constant=False)
 
         return tensor
@@ -627,75 +493,40 @@ class MemoryPool:
     ) -> Any:
         """Create a tensor view from a memory block with zero-copy support."""
         # Use zero-copy for MLX arrays when enabled
-        if self.device == "mlx" and self.strategy == AllocationStrategy.ZERO_COPY:
+        if self.strategy == AllocationStrategy.ZERO_COPY:
             return self._create_zero_copy_array(block, size, dtype, is_constant)
 
-        if self.device == "mps":
-            if dtype is None:
-                dtype = self.optimal_dtype
+        if dtype is None:
+            dtype = self.optimal_dtype
+        buffer = self._ensure_mlx_buffer()
 
-            # Select buffer based on memory type
-            buffer = self._mps_constant_buffer if is_constant else self._mps_buffer
-            if buffer is None:
-                raise RuntimeError("MPS memory buffer is not initialized")
+        # Get element size based on buffer dtype
+        if buffer.dtype in [mx.float16, getattr(mx, 'bfloat16', mx.float16)]:
+            buffer_element_size = 2
+        else:
+            buffer_element_size = 4
 
-            # Get element size based on buffer dtype
-            if buffer.dtype in [torch.float16, torch.bfloat16]:
-                buffer_element_size = 2
-            else:
-                buffer_element_size = 4
+        # Calculate number of elements
+        if dtype in [mx.float16, getattr(mx, 'bfloat16', mx.float16)]:
+            target_element_size = 2
+        else:
+            target_element_size = 4
 
-            # Calculate number of elements needed
-            if dtype in [torch.float16, torch.bfloat16]:
-                target_element_size = 2
-            else:
-                target_element_size = 4
+        num_elements = size // target_element_size
+        start_idx = block.offset // buffer_element_size
+        end_idx = start_idx + (size // buffer_element_size)
+        if end_idx > buffer.size:
+            raise RuntimeError(
+                f"Allocation exceeds MLX buffer capacity ({buffer.size} elements)"
+            )
 
-            num_elements = size // target_element_size
-            start_idx = block.offset // buffer_element_size
-            end_idx = start_idx + (size // buffer_element_size)
+        array_view = buffer[start_idx:end_idx]
 
-            tensor_view = buffer[start_idx:end_idx].view(-1)
+        # Convert dtype if needed (MLX handles this automatically)
+        if dtype != buffer.dtype:
+            array_view = array_view.astype(dtype)
 
-            # Convert dtype if needed
-            if dtype != buffer.dtype:
-                tensor_view = tensor_view.to(dtype)
-
-            # Mark as non-gradients for constant memory
-            if is_constant:
-                tensor_view.requires_grad_(False)
-
-            return tensor_view[:num_elements]
-
-        elif self.device == "mlx":
-            if dtype is None:
-                dtype = self.optimal_dtype
-            if self._mlx_buffer is None:
-                raise RuntimeError("MLX memory buffer is not initialized")
-
-            # Get element size based on buffer dtype
-            if self._mlx_buffer.dtype in [mx.float16, getattr(mx, 'bfloat16', mx.float16)]:
-                buffer_element_size = 2
-            else:
-                buffer_element_size = 4
-
-            # Calculate number of elements
-            if dtype in [mx.float16, getattr(mx, 'bfloat16', mx.float16)]:
-                target_element_size = 2
-            else:
-                target_element_size = 4
-
-            num_elements = size // target_element_size
-            start_idx = block.offset // buffer_element_size
-            end_idx = start_idx + (size // buffer_element_size)
-
-            array_view = self._mlx_buffer[start_idx:end_idx]
-
-            # Convert dtype if needed (MLX handles this automatically)
-            if dtype != self._mlx_buffer.dtype:
-                array_view = array_view.astype(dtype)
-
-            return array_view[:num_elements]
+        return array_view[:num_elements]
 
     def _create_zero_copy_array(
         self,
@@ -710,10 +541,8 @@ class MemoryPool:
         if dtype is None:
             dtype = self.optimal_dtype
 
-        # Select buffer based on memory type
-        buffer = self._mlx_constant_buffer if is_constant else self._mlx_buffer
-        if buffer is None:
-            raise RuntimeError("MLX memory buffer is not initialized")
+        # Select buffer based on memory type (materialized lazily)
+        buffer = self._ensure_mlx_buffer(is_constant=is_constant)
 
         # Calculate slice for zero-copy view
         if dtype in [mx.float16, getattr(mx, 'bfloat16', mx.float16)]:
@@ -724,6 +553,10 @@ class MemoryPool:
         num_elements = size // element_size
         start_idx = block.offset // element_size
         end_idx = start_idx + num_elements
+        if end_idx > buffer.size:
+            raise RuntimeError(
+                f"Allocation exceeds MLX buffer capacity ({buffer.size} elements)"
+            )
 
         # Create zero-copy view - no data movement
         array_view = buffer[start_idx:end_idx]
@@ -815,8 +648,9 @@ class MemoryPool:
 
             # Get dtype information
             dtype_name = str(self.optimal_dtype).split('.')[-1]
-            dtype_bits = 16 if self.optimal_dtype in [torch.float16, torch.bfloat16,
-                                                      mx.float16, getattr(mx, 'bfloat16', mx.float16)] else 32
+            dtype_bits = 16 if self.optimal_dtype in [
+                mx.float16, getattr(mx, 'bfloat16', mx.float16)
+            ] else 32
 
             # Calculate zero-copy statistics
             zero_copy_count = len(self.zero_copy_arrays) if hasattr(self, 'zero_copy_arrays') else 0
@@ -845,8 +679,8 @@ class MemoryPool:
                 "constant_memory_benefit": "15-20% bandwidth improvement for weights"
             }
 
-            # Add zero-copy statistics if MLX with zero-copy enabled
-            if self.device == "mlx" and self.strategy == AllocationStrategy.ZERO_COPY:
+            # Add zero-copy statistics if zero-copy enabled
+            if self.strategy == AllocationStrategy.ZERO_COPY:
                 stats.update({
                     "zero_copy_enabled": True,
                     "zero_copy_arrays": zero_copy_count,
@@ -882,7 +716,5 @@ class MemoryPool:
 
     def __del__(self):
         """Cleanup when pool is destroyed."""
-        if self._mps_buffer is not None:
-            del self._mps_buffer
         if self._mlx_buffer is not None:
             del self._mlx_buffer

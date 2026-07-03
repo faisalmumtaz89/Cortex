@@ -19,6 +19,10 @@ DEFAULT_MODELS: Dict[CloudProvider, List[str]] = {
         "claude-sonnet-4-5",
         "claude-haiku-4-5",
     ],
+    # Azure model ids are deployment names on the configured resource.
+    CloudProvider.AZURE: [
+        "gpt-5.5",
+    ],
 }
 
 
@@ -70,7 +74,7 @@ class CloudModelCatalog:
         """List cloud models, optionally filtered by provider."""
         providers: Sequence[CloudProvider]
         if provider is None:
-            providers = [CloudProvider.OPENAI, CloudProvider.ANTHROPIC]
+            providers = [CloudProvider.OPENAI, CloudProvider.ANTHROPIC, CloudProvider.AZURE]
         else:
             providers = [provider]
 

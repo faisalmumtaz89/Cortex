@@ -2,239 +2,124 @@
 
 ## Overview
 
-Cortex reads configuration from `config.yaml` in the project root. The file uses a flat key structure (no nested sections). If `config.yaml` is missing, defaults from `cortex/config.py` are used.
+Cortex reads configuration from `config.yaml` in the directory it starts in. The file uses a flat key structure (no nested sections) and **every key is optional** — anything omitted falls back to the defaults in `cortex/config.py`. The repository's `config.yaml` is a commented template of the most useful keys.
 
-**Runtime state:** Ephemeral values like `last_used_model`, `last_used_backend`, and `last_used_cloud_*` are stored in `~/.cortex/state.yaml`, not in `config.yaml`. This avoids polluting git diffs when you change models.
+Any flat key can also be overridden with a `CORTEX_<KEY>` environment variable (values parsed as YAML): `CORTEX_TOOLS_MAX_ITERATIONS=80` overrides `tools_max_iterations`, `CORTEX_TOOLS_ENABLED=false` disables tooling. Env overrides beat `config.yaml`. Unknown `CORTEX_*` variables are ignored.
 
-**Permission state:** Tool permission rules are stored in `~/.cortex/tool_permissions.yaml`.
+Files Cortex writes outside the project:
 
-**Runtime split:** The default CLI launches an OpenTUI frontend sidecar and talks to Python backend worker mode over JSON-RPC (`python -m cortex --worker-stdio`).
+- `~/.cortex/state.yaml` — runtime state such as `last_used_model` and the last-used backend, kept out of `config.yaml` so switching models does not pollute git diffs.
+- `~/.cortex/tool_permissions.yaml` — persisted "Allow always" tool permission rules.
+- `~/.cortex/template_config.json` — per-model chat template configuration.
+- `~/.cortex/cloud_models.json` — optional additions to the cloud model catalog.
 
-**Note on wiring:** Cortex accepts a broad set of configuration keys. The CLI currently **reads** these keys directly:
-
-- `compute_backend`, `force_gpu`, `mlx_backend`, `gpu_optimization_level`
-- `batch_size`, `max_batch_size`, `context_length`
-- `temperature`, `top_p`, `top_k`, `repetition_penalty`, `max_tokens`, `stream_output`, `seed`
-- `model_path`, `default_model`, `model_cache_dir`, `quantization_cache`
-- `max_loaded_models`, `auto_quantize`, `default_quantization`, `supported_quantizations`
-- `cloud_enabled`, `cloud_timeout_seconds`, `cloud_max_retries`
-- `cloud_default_openai_model`, `cloud_default_anthropic_model`
-- `tools_enabled`, `tools_profile`, `tools_local_mode`
-- `tools_max_iterations`, `tools_idle_timeout_seconds`, `tools_continue_on_reject`
-- `markdown_rendering`, `syntax_highlighting`
-- `save_directory`, `auto_save`, `max_conversation_history`
-
-Other keys are accepted but may be advisory or not yet wired in the CLI.
-
-## Example Configuration (Excerpt)
+## Template
 
 ```yaml
-# GPU
-compute_backend: metal
-force_gpu: true
-metal_performance_shaders: true
-mlx_backend: true
-gpu_memory_fraction: 0.9
-metal_api_version: 3
-shader_cache: ~/.cortex/metal_shaders
-compile_shaders_on_start: true
-gpu_optimization_level: maximum
-
-# Memory
-unified_memory: true
-max_gpu_memory: auto
-memory_pool_size: auto
-kv_cache_size: 4GB
-activation_memory: 2GB
-
-# Performance
-batch_size: 1
-max_batch_size: 4
-use_flash_attention: true
-use_fused_ops: true
-num_threads: 4
-context_length: 8192
-sliding_window_size: 4096
-
 # Inference
 temperature: 0.7
 top_p: 0.95
-top_k: 40
-repetition_penalty: 1.1
-max_tokens: 2048
-stream_output: true
-seed: -1
+max_tokens: 4096
+context_length: 8192
 
-# Models
+# Local models
 model_path: ~/models
-model_cache_dir: ~/.cortex/models
-quantization_cache: ~/.cortex/quantized_models
-max_loaded_models: 3
-verify_gpu_compatibility: true
 
-# Cloud
-cloud_enabled: true
-cloud_timeout_seconds: 60
-cloud_max_retries: 2
+# Cloud models
 cloud_default_openai_model: gpt-5.1
 cloud_default_anthropic_model: claude-sonnet-4-5
+# cloud_azure_endpoint: https://<resource>.cognitiveservices.azure.com
 
-# Tooling
-tools_enabled: false
-tools_profile: off
-tools_local_mode: disabled
-tools_max_iterations: 4
-tools_idle_timeout_seconds: 45
-tools_continue_on_reject: false
-
-# UI
-markdown_rendering: true
-show_performance_metrics: true
-show_gpu_utilization: true
+# Agent tooling
+tools_enabled: true
+tools_profile: full          # off | read_only | edit | full
+tools_local_mode: experimental
+tools_max_iterations: 25
 
 # Logging
 log_level: INFO
 log_file: ~/.cortex/cortex.log
-
-# Conversation
-auto_save: true
-save_directory: ~/.cortex/conversations
-max_conversation_history: 100
 ```
 
-## Key Settings by Area
+## Key Reference
 
-### GPU
-- **Wired today:** `force_gpu`, `mlx_backend`, `gpu_optimization_level`  
-  Other keys in this section are accepted but not currently wired in the CLI.
-- `compute_backend` (default: `metal`) - Metal backend only
-- `force_gpu` (default: `true`) - required for GPU-only execution
-- `metal_performance_shaders` (default: `true`) - MPS acceleration for PyTorch
-- `mlx_backend` (default: `true`) - MLX backend
-- `gpu_memory_fraction` (default: `0.85`, config.yaml: `0.9`) - advisory fraction of available memory
-- `gpu_cores` (default: `16`) - GPU cores for your chip
-- `metal_api_version` (default: `3`)
-- `shader_cache` (default: `~/.cortex/metal_shaders`)
-- `compile_shaders_on_start` (default: `true`)
-- `gpu_optimization_level` (default: `maximum`)
+### Agent tooling
 
-### Memory
-- **Wired today:** memory pool auto‑sizing is internal; the keys below are currently advisory.
-- `unified_memory` (default: `true`)
-- `max_gpu_memory` (default: `20GB`, config.yaml: `auto`)
-- `memory_pool_size` (default: `20GB`, config.yaml: `auto`)
-- `kv_cache_size` (default: `2GB`, config.yaml: `4GB`)
-- `activation_memory` (default: `2GB`)
-
-### Performance
-- **Wired today:** `batch_size`, `max_batch_size`, `context_length`  
-  Other keys in this section are accepted but not currently wired in the CLI.
-- `batch_size` (default: `8`, config.yaml: `1`)
-- `max_batch_size` (default: `16`, config.yaml: `4`)
-- `use_flash_attention` (default: `true`)
-- `use_fused_ops` (default: `true`)
-- `num_threads` (default: `1`, config.yaml: `4`)
-- `context_length` (default: `32768`, config.yaml: `8192`)
-- `sliding_window_size` (default: `4096`)
+- `tools_enabled` (default: `true`) — master toggle for tool execution.
+- `tools_profile` (default: `full`) — which tools the model may call:
+  - `off`: none
+  - `read_only`: `read_file`, `list_dir`, `search`
+  - `edit`: read-only + `edit_file`, `write_file` (the legacy value `patch` is accepted as an alias)
+  - `full`: edit + `bash`
+- `tools_local_mode` (default: `experimental`) — `experimental` enables the `<tool_calls>` JSON protocol for local models; `disabled` restricts tools to cloud models.
+- `tools_max_iterations` (default: `25`) — maximum tool-loop iterations per turn.
+- `tools_idle_timeout_seconds` (default: `45`) — idle watchdog for cloud event streams.
+- `tools_continue_on_reject` (default: `false`) — reserved toggle for reject handling.
 
 ### Inference
+
 - `temperature` (default: `0.7`)
 - `top_p` (default: `0.95`)
 - `top_k` (default: `40`)
 - `repetition_penalty` (default: `1.1`)
-- `max_tokens` (default: `2048`)
+- `max_tokens` (default: `4096`)
 - `stream_output` (default: `true`)
 - `seed` (default: `-1`)
 
 ### Models
-- `model_path` (default: `~/models`)
-- `default_model` (default: empty)
-- `last_used_model` is persisted to `~/.cortex/state.yaml` (default: empty)
+
+- `model_path` (default: `~/models`) — where `/download` stores models and where local models are discovered.
+- `default_model` (default: empty) — model to load on startup; otherwise the last-used model is restored from `~/.cortex/state.yaml`.
 - `model_cache_dir` (default: `~/.cortex/models`)
-- `preload_models` (default: `[]`)
-- `max_loaded_models` (default: `3`)
-- `lazy_load` (default: `false`)
+- `max_loaded_models` (default: `3`) — oldest model is unloaded past this limit.
 - `verify_gpu_compatibility` (default: `true`)
-- `default_quantization` (default: `Q4_K_M`)
-  - Preferred quantization for MLX conversion. Accepted values include:
-    - `Q4_K_M`, `Q5_K_M`, `Q6_K`, `Q8_0` (mapped to MLX 4/5/8-bit recipes)
-    - `4bit`, `5bit`, `8bit`, `mixed`, `none`, `auto`
-- `supported_quantizations` (default: `Q4_K_M`, `Q5_K_M`, `Q6_K`, `Q8_0`)
-  - Validation list for `default_quantization` (Q* values)
-- `auto_quantize` (default: `true`)
-  - Enables dynamic quantization fallback for PyTorch/SafeTensors models
-- `quantization_cache` (default: `~/.cortex/quantized_models`)
-  - Cache directory for dynamic-quantized PyTorch/SafeTensors models
+- `default_quantization` (default: `Q4_K_M`) and `supported_quantizations` — quantization hints for MLX conversion recipes.
 
 ### Cloud
+
 - `cloud_enabled` (default: `true`)
 - `cloud_timeout_seconds` (default: `60`)
 - `cloud_max_retries` (default: `2`)
 - `cloud_default_openai_model` (default: `gpt-5.1`)
 - `cloud_default_anthropic_model` (default: `claude-sonnet-4-5`)
+- `cloud_azure_endpoint` (default: empty) — Azure OpenAI resource endpoint; `AZURE_OPENAI_ENDPOINT` env var takes precedence. Azure model ids are deployment names (`azure:<deployment>`).
 
-### Tooling
-- `tools_enabled` (default: `false`)
-  - Master toggle for tool execution.
-- `tools_profile` (default: `off`)
-  - One of `off`, `read_only`, `patch`, `full`.
-- `tools_local_mode` (default: `disabled`)
-  - `disabled` or `experimental` for local-model tool loops.
-- `tools_max_iterations` (default: `4`)
-  - Maximum tool loop iterations per turn.
-- `tools_idle_timeout_seconds` (default: `45`)
-  - Idle timeout used by cloud event streaming watchdog.
-- `tools_continue_on_reject` (default: `false`)
-  - Reserved behavior toggle for reject handling (conservative default).
+### Performance
 
-### UI
-- **Wired today:** `markdown_rendering`, `syntax_highlighting` (CLI)  
-  Other UI keys are used only by the Textual UI (not the default CLI).
-- `ui_theme` (default: `default`)
-- `syntax_highlighting` (default: `true`)
-- `markdown_rendering` (default: `true`)
-- `show_performance_metrics` (default: `true`)
-- `show_gpu_utilization` (default: `true`)
-- `auto_scroll` (default: `true`)
-- `copy_on_select` (default: `true`)
-- `mouse_support` (default: `true`)
+- `context_length` (default: `32768`; the template sets `8192`)
+- `batch_size` (default: `8`), `max_batch_size` (default: `16`)
+- `use_flash_attention`, `use_fused_ops`, `num_threads`, `sliding_window_size` — accepted, largely advisory for the MLX/GGUF backends.
 
-### Logging
-- **Wired today:** logging is handled internally; keys below are currently advisory.
-- `log_level` (default: `INFO`)
-- `log_file` (default: `~/.cortex/cortex.log`)
-- `log_rotation` (default: `daily`)
-- `max_log_size` (default: `100MB`)
-- `performance_logging` (default: `true`)
-- `gpu_metrics_interval` (default: `1000` ms)
+### GPU
+
+The Metal backend is mandatory; these keys mostly tune conversion and are otherwise advisory:
+
+- `mlx_backend` (default: `true`) — auto-convert non-MLX HuggingFace models to MLX on load.
+- `gpu_optimization_level` (default: `maximum`) — `maximum` prefers speed-optimized 4-bit MLX conversion.
+- `compute_backend` (`metal` only), `force_gpu` (`true` only), `gpu_memory_fraction`, `gpu_cores`, `metal_api_version`, `shader_cache`, `compile_shaders_on_start`.
+
+### Memory
+
+Advisory hints: `unified_memory`, `max_gpu_memory`, `memory_pool_size`, `kv_cache_size`, `activation_memory`. `cpu_offload` must remain `false`.
 
 ### Conversation
-- `auto_save` (default: `true`)
-- `save_format` (default: `json`)
+
+- `auto_save` (default: `true`) — persist conversations to `~/.cortex/conversations/conversations.db`.
 - `save_directory` (default: `~/.cortex/conversations`)
-- `max_conversation_history` (default: `100`)
-- `enable_branching` (default: `true`)
+- `save_format` (default: `json`), `max_conversation_history` (default: `100`), `enable_branching` (default: `true`).
 
-### System
-- **Wired today:** `auto_update_check` is honored at startup for installer/package installs; other keys below remain advisory.
-- `startup_checks` (default: `verify_metal_support`, `check_gpu_memory`, `validate_models`, `compile_shaders`)
-- `shutdown_timeout` (default: `5`)
-- `crash_recovery` (default: `true`)
-- `auto_update_check` (default: `false`, but update checks run unless explicitly set to `false`)
+### Logging
 
-### Developer
-- **Wired today:** developer toggles are currently advisory.
-- `debug_mode` (default: `false`)
-- `profile_inference` (default: `false`)
-- `metal_capture` (default: `false`)
-- `verbose_gpu_logs` (default: `false`)
+- `log_level` (default: `INFO`)
+- `log_file` (default: `~/.cortex/cortex.log`)
+- `log_rotation`, `max_log_size`, `performance_logging`, `gpu_metrics_interval` — accepted, advisory.
 
-### Paths
-- **Wired today:** template and plugin paths are used by the template registry; other keys are advisory.
-- `templates_dir` (default: `~/.cortex/templates`)
-- `plugins_dir` (default: `~/.cortex/plugins`)
+### UI / System / Developer / Paths
+
+Accepted for compatibility; mostly advisory in the OpenTUI runtime: `ui_theme`, `markdown_rendering`, `syntax_highlighting`, `show_*` toggles, `startup_checks`, `shutdown_timeout`, `crash_recovery`, `auto_update_check`, `debug_mode`, `profile_inference`, `metal_capture`, `verbose_gpu_logs`, `templates_dir`, `plugins_dir`.
 
 ## Notes
 
 - `config.yaml` is flat; do not add nested sections like `gpu:` or `inference:`.
-- If you want to reset to defaults, remove `config.yaml` and restart Cortex.
+- Malformed tooling values are normalized rather than fatal (e.g. `tools_profile: readonly` → `read_only`, booleans coerced).
+- To reset to defaults, remove `config.yaml` and restart Cortex.

@@ -1,5 +1,7 @@
 """Model management for GPU-accelerated inference."""
 
+from __future__ import annotations
+
 import json
 import logging
 import multiprocessing
@@ -11,32 +13,39 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
-import mlx.core as mx
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 from cortex.config import Config
 from cortex.gpu_validator import GPUValidator
-from cortex.metal.memory_pool import AllocationStrategy, MemoryPool
-from cortex.metal.mlx_accelerator import MLXAccelerator, MLXConfig
-from cortex.metal.mlx_converter import (
-    ConversionConfig,
-    ConversionFormat,
-    MLXConverter,
-    QuantizationRecipe,
-)
-from cortex.quantization.dynamic_quantizer import (
-    DynamicQuantizer,
-    QuantizationConfig,
-    QuantizationMode,
-)
 
-# Import MLX LM functions safely
-mlx_load: Optional[Callable[..., Tuple[Any, Any] | Tuple[Any, Any, Dict[str, Any]]]]
+# Local inference is optional: on machines without MLX (e.g. Linux containers)
+# Cortex still runs cloud-only. All MLX/Metal machinery loads only when present.
+mlx_load: Optional[Callable[..., Tuple[Any, Any] | Tuple[Any, Any, Dict[str, Any]]]] = None
 try:
-    from mlx_lm import load as mlx_load
+    import mlx.core as mx
+
+    MLX_AVAILABLE = True
 except ImportError:
-    mlx_load = None
+    mx = None  # type: ignore[assignment]
+    MLX_AVAILABLE = False
+
+if MLX_AVAILABLE:
+    from cortex.metal.memory_pool import AllocationStrategy, MemoryPool
+    from cortex.metal.mlx_accelerator import MLXAccelerator, MLXConfig
+    from cortex.metal.mlx_converter import (
+        ConversionConfig,
+        ConversionFormat,
+        MLXConverter,
+        QuantizationRecipe,
+    )
+
+    try:
+        from mlx_lm import load as mlx_load
+    except ImportError:
+        mlx_load = None
+
+MLX_REQUIRED_MESSAGE = (
+    "Local inference requires MLX (Apple Silicon macOS). "
+    "Select a cloud model with /model or --model."
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -135,38 +144,37 @@ class ModelManager:
         self.model_cache: Dict[str, Any] = {}
         self.tokenizers: Dict[str, Any] = {}
 
-        # Initialize quantizer for memory-efficient loading
-        self.quantizer = DynamicQuantizer(QuantizationConfig(
-            mode=QuantizationMode.DYNAMIC,
-            per_channel=True,
-            cache_quantized=True,
-            cache_dir=self.config.model.quantization_cache
-        ))
-
-        # Initialize MLX converter for native conversion
-        # Use a consistent cache directory
-        mlx_cache_dir = Path.home() / ".cortex" / "mlx_models"
-        self.mlx_converter = MLXConverter(
-            cache_dir=mlx_cache_dir
-        )
-
-        # Initialize MLX accelerator for optimizations
+        # MLX machinery only exists on Apple Silicon; cloud-only mode skips it.
+        self.mlx_converter = None
         self.mlx_accelerator = None
         self._mlx_init_error: Optional[str] = None
-        try:
-            self.mlx_accelerator = MLXAccelerator(MLXConfig(
-                compile_model=True,
-                use_amx=True,
-                fuse_operations=True,
-                rotating_kv_cache=True,
-                quantization_bits=4
-            ))
-        except Exception as e:
-            self._mlx_init_error = str(e)
-            logger.warning("MLX accelerator initialization failed: %s", e, exc_info=True)
+
+        if MLX_AVAILABLE:
+            # Use a consistent cache directory for native MLX conversion.
+            mlx_cache_dir = Path.home() / ".cortex" / "mlx_models"
+            self.mlx_converter = MLXConverter(cache_dir=mlx_cache_dir)
+
+            try:
+                self.mlx_accelerator = MLXAccelerator(MLXConfig(
+                    compile_model=True,
+                    use_amx=True,
+                    fuse_operations=True,
+                    rotating_kv_cache=True,
+                    quantization_bits=4
+                ))
+            except Exception as e:
+                self._mlx_init_error = str(e)
+                logger.warning("MLX accelerator initialization failed: %s", e, exc_info=True)
 
         self._setup_directories()
-        self._initialize_memory_pool()
+        if MLX_AVAILABLE:
+            self._initialize_memory_pool()
+
+    def _require_mlx_converter(self):
+        """Converter for load paths that are only reachable with MLX present."""
+        if self.mlx_converter is None:
+            raise RuntimeError(MLX_REQUIRED_MESSAGE)
+        return self.mlx_converter
 
     def __del__(self):
         """Clean up resources on deletion."""
@@ -181,7 +189,6 @@ class ModelManager:
         """Create necessary directories."""
         self.config.model.model_path.expanduser().mkdir(parents=True, exist_ok=True)
         self.config.model.model_cache_dir.expanduser().mkdir(parents=True, exist_ok=True)
-        self.config.model.quantization_cache.expanduser().mkdir(parents=True, exist_ok=True)
 
     def _initialize_memory_pool(self) -> None:
         """Initialize memory pool if needed."""
@@ -195,7 +202,7 @@ class ModelManager:
                 self.memory_pool = MemoryPool(
                     pool_size=None,
                     strategy=AllocationStrategy.UNIFIED,
-                    device="mps" if torch.backends.mps.is_available() else "mlx",
+                    device="mlx",
                     auto_size=True,
                     silent=True  # Suppress message since InferenceEngine also creates a pool
                 )
@@ -263,6 +270,9 @@ class ModelManager:
         Returns:
             Tuple of (success, message)
         """
+        if not MLX_AVAILABLE:
+            return False, MLX_REQUIRED_MESSAGE
+
         # Check if it's a HuggingFace repo ID
         is_hf_repo = "/" in model_path and not Path(model_path).exists()
 
@@ -454,7 +464,7 @@ class ModelManager:
                     logger.info(f"Converting model to MLX format with {quant_recipe.name} quantization...")
                     print("Converting model to MLX format for optimal performance...")
 
-                    success, msg, mlx_path = self.mlx_converter.convert_model(
+                    success, msg, mlx_path = self._require_mlx_converter().convert_model(
                         model_path,
                         output_name=model_name,
                         config=conversion_config
@@ -528,7 +538,7 @@ class ModelManager:
                 logger.info(f"Converting HF model to MLX format with {quant_recipe.name} quantization...")
                 print("Downloading and converting model to MLX format...")
 
-                success, msg, mlx_path = self.mlx_converter.convert_model(
+                success, msg, mlx_path = self._require_mlx_converter().convert_model(
                     model_path,
                     output_name=model_name,
                     config=conversion_config
@@ -565,7 +575,7 @@ class ModelManager:
                 # Try mlx-community models
                 if model_path.startswith("mlx-community/"):
                     # Download from HuggingFace mlx-community
-                    success, msg, mlx_path = self.mlx_converter.convert_model(
+                    success, msg, mlx_path = self._require_mlx_converter().convert_model(
                         model_path,
                         output_name=model_name,
                         config=ConversionConfig(quantization=QuantizationRecipe.NONE)
@@ -602,61 +612,10 @@ class ModelManager:
         if format_info['format'] == ModelFormat.UNKNOWN:
             return False, f"Unknown model format: {format_info['reason']}"
 
-        # Check GPU compatibility and determine if quantization is needed
+        # Check GPU compatibility
         model_size_gb = self._get_model_size(path) / (1024**3)
         can_load, message = self.gpu_validator.verify_model_compatibility(model_size_gb)
-
-        # Determine if we need quantization (only for non-quantized models)
-        needs_quantization = False
-        quantization_mode = None
-
-        # Only apply dynamic quantization to non-quantized SafeTensors/PyTorch models
-        can_apply_quantization = (
-            format_info['format'] in [ModelFormat.SAFETENSORS, ModelFormat.PYTORCH] and
-            format_info['quantization'] == QuantizationType.NONE
-        )
-
-        if not can_load and can_apply_quantization:
-            if not getattr(self.config.model, "auto_quantize", True):
-                return False, f"GPU incompatible: {message} (auto_quantize disabled)"
-            # Check if quantization would help
-            gpu_status = self.gpu_validator.get_gpu_memory_status()
-            available_gb = gpu_status['available_gb']
-
-            # DEBUG: Uncomment to see memory calculations for quantization decisions
-            # print(f"DEBUG: Model size on disk: {model_size_gb:.1f}GB, Available memory: {available_gb:.1f}GB")
-
-            # Estimate if INT8 quantization would fit
-            # Use same 3.5x multiplier as gpu_validator for consistency
-            # INT8 is more stable than INT4, so prefer it when possible
-            estimated_int8_size = model_size_gb * 0.5 * 2.5  # 50% reduction + 150% overhead (less conservative for INT8)
-
-            # DEBUG: Uncomment to see quantization size estimates
-            # print(f"DEBUG: INT8 estimated size: {estimated_int8_size:.1f}GB")
-
-            if estimated_int8_size <= available_gb:
-                needs_quantization = True
-                quantization_mode = 'int8'
-                required_with_overhead = model_size_gb * 3.5
-                print(f"Model requires {required_with_overhead:.1f}GB (including overhead), only {available_gb:.1f}GB available.")
-                print(f"Will apply INT8 quantization to reduce to ~{estimated_int8_size:.1f}GB")
-            else:
-                # Try INT4 as last resort
-                estimated_int4_size = model_size_gb * 0.25 * 3.5  # 75% reduction + 250% overhead
-
-                # DEBUG: Uncomment to see INT4 quantization estimates
-                # print(f"DEBUG: INT4 estimated size: {estimated_int4_size:.1f}GB")
-
-                if estimated_int4_size <= available_gb:
-                    needs_quantization = True
-                    quantization_mode = 'int4'
-                    required_with_overhead = model_size_gb * 3.5
-                    print(f"Model requires {required_with_overhead:.1f}GB (including overhead), only {available_gb:.1f}GB available.")
-                    print(f"Will apply INT4 quantization to reduce to ~{estimated_int4_size:.1f}GB")
-                else:
-                    return False, f"Model too large even with quantization: {message}"
-        elif not can_load:
-            # Can't apply quantization to this format
+        if not can_load:
             return False, f"GPU incompatible: {message}"
 
         # Load based on format
@@ -665,24 +624,16 @@ class ModelManager:
             return False, f"Unsupported format metadata: {format_value}"
 
         try:
-            # Pass quantization info to loaders that support it
-            if format_value in [ModelFormat.SAFETENSORS, ModelFormat.PYTORCH]:
-                if format_value == ModelFormat.SAFETENSORS:
-                    success, result = self._load_safetensors(
-                        path, model_name, format_info, needs_quantization, quantization_mode
-                    )
-                else:
-                    success, result = self._load_pytorch(
-                        path, model_name, format_info, needs_quantization, quantization_mode
-                    )
-            elif format_value == ModelFormat.MLX:
+            if format_value == ModelFormat.MLX:
                 success, result = self._load_mlx(path, model_name, format_info)
             elif format_value == ModelFormat.GGUF:
                 success, result = self._load_gguf(path, model_name, format_info)
-            elif format_value == ModelFormat.QUANTIZED:
-                success, result = self._load_quantized(path, model_name, format_info)
             else:
-                return False, f"No loader for format: {format_value.value}"
+                return False, (
+                    f"Unsupported model format: {format_value.value}. "
+                    "Cortex runs MLX and GGUF models only. Convert this model to MLX "
+                    "(enable mlx_backend, or download an mlx-community variant) or use a GGUF file."
+                )
 
             if success:
                 self.current_model = model_name
@@ -801,19 +752,17 @@ class ModelManager:
             except Exception:
                 pass
 
-        # Check for quantization-specific files
+        # Check safetensors headers for GPTQ/AWQ tensor names without loading weights
         safetensor_files = list(path.glob('*.safetensors'))
         if safetensor_files:
-            # Load one file to check for quantization tensors
             try:
-                from safetensors.torch import load_file
-                sample = load_file(safetensor_files[0], device='cpu')
-                # Check for GPTQ/AWQ specific tensors
-                has_scales = any('.scales' in k for k in sample.keys())
-                has_qweight = any('.qweight' in k for k in sample.keys())
-
-                if has_scales or has_qweight:
-                    return QuantizationType.GPTQ
+                with open(safetensor_files[0], 'rb') as f:
+                    header_size_bytes = f.read(8)
+                    if len(header_size_bytes) == 8:
+                        header_size = struct.unpack('<Q', header_size_bytes)[0]
+                        header = json.loads(f.read(header_size).decode('utf-8'))
+                        if any('.scales' in k or '.qweight' in k for k in header.keys()):
+                            return QuantizationType.GPTQ
             except Exception:
                 pass
 
@@ -1032,433 +981,6 @@ class ModelManager:
         except Exception as e:
             return False, f"Failed to load GGUF model: {str(e)}"
 
-    def _load_safetensors(
-        self,
-        path: Path,
-        model_name: str,
-        format_info: Dict,
-        needs_quantization: bool = False,
-        quantization_mode: Optional[str] = None
-    ) -> Tuple[bool, str]:
-        """Load standard SafeTensors model with optional quantization."""
-        try:
-            device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-
-            # Check for cached quantized model first BEFORE loading anything
-            if needs_quantization and self.quantizer.config.cache_quantized:
-                cached = self.quantizer.load_cached_model(path, self.quantizer.config)
-                if cached:
-                    print("Loading cached quantized model...")
-                    # Load to CPU first with minimal memory usage
-                    print("Creating model structure...")
-                    with torch.device('cpu'):
-                        model = AutoModelForCausalLM.from_pretrained(
-                            str(path),
-                            torch_dtype=torch.float16,
-                            low_cpu_mem_usage=True,
-                            trust_remote_code=True,
-                            device_map={'': 'cpu'}  # Force CPU loading
-                        )
-
-                    print("Applying cached quantized weights...")
-                    model.load_state_dict(cached[0])
-
-                    # Now move to target device
-                    print(f"Moving to {device}...")
-                    model = cast(Any, model).to(device)
-                    quantization_info = cached[1]
-                    print("Quantized model loaded from cache")
-                else:
-                    # Load and quantize
-                    print("Loading model for quantization...")
-                    model = AutoModelForCausalLM.from_pretrained(
-                        str(path),
-                        torch_dtype=torch.float16,
-                        low_cpu_mem_usage=True,
-                        trust_remote_code=True
-                    )
-
-                    if needs_quantization:
-                        print(f"Applying {quantization_mode} quantization...")
-                        gpu_status = self.gpu_validator.get_gpu_memory_status()
-                        quantized_model, quantization_info = self.quantizer.quantize_model(
-                            model,
-                            target_dtype=quantization_mode,
-                            available_memory_gb=gpu_status['available_gb'],
-                            model_size_gb=self._get_model_size(path) / (1024**3),
-                            target_device=device  # Pass the target device (MPS)
-                        )
-                        model = cast(Any, quantized_model)
-
-                        # Cache the quantized model
-                        if self.quantizer.config.cache_quantized:
-                            self.quantizer.cache_quantized_model(model, path, quantization_info)
-                            print("Cached quantized model for faster future loads")
-
-                    model = cast(Any, model).to(device)
-            else:
-                # Normal loading without quantization
-                model = AutoModelForCausalLM.from_pretrained(
-                    str(path),
-                    torch_dtype=torch.float16,
-                    low_cpu_mem_usage=True,
-                    trust_remote_code=True
-                )
-                model = cast(Any, model).to(device)
-                model.eval()  # Set model to evaluation mode
-
-            # Load tokenizer
-            tokenizer = AutoTokenizer.from_pretrained(str(path), use_fast=True)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-
-            self.model_cache[model_name] = model
-            self.tokenizers[model_name] = tokenizer
-
-            # Load config
-            config = {}
-            config_path = path / 'config.json'
-            if config_path.exists():
-                with open(config_path) as f:
-                    config = json.load(f)
-
-            # Create model info with quantization details if applicable
-            if needs_quantization:
-                # Update quantization type based on what was applied
-                actual_quantization = QuantizationType.INT8 if quantization_mode == 'int8' else QuantizationType.INT4
-                # Calculate actual memory used after quantization
-                memory_used = sum(
-                    p.numel() * 1 if hasattr(p, 'numel') else 0  # Quantized uses less bytes per element
-                    for p in model.parameters()
-                )
-            else:
-                actual_quantization = format_info['quantization']
-                memory_used = sum(p.element_size() * p.numel() for p in model.parameters())
-
-            # Use smart parameter detection instead of counting loaded model parameters
-            parameters = int(self.get_model_parameters_smart(path) * 1e9)
-
-            model_info = ModelInfo(
-                name=model_name,
-                path=path,
-                format=ModelFormat.SAFETENSORS,
-                quantization=actual_quantization,
-                size_bytes=self._get_model_size(path),
-                parameters=parameters,
-                context_length=config.get('max_position_embeddings', 4096),
-                loaded_at=datetime.now(),
-                gpu_memory_used=memory_used,
-                tokenizer_path=path / 'tokenizer.json',
-                config=config
-            )
-
-            self.loaded_models[model_name] = model_info
-            return True, "SafeTensors model loaded successfully"
-
-        except Exception as e:
-            return False, f"Failed to load SafeTensors model: {str(e)}"
-
-    def _load_pytorch(
-        self,
-        path: Path,
-        model_name: str,
-        format_info: Dict,
-        needs_quantization: bool = False,
-        quantization_mode: Optional[str] = None
-    ) -> Tuple[bool, str]:
-        """Load PyTorch format model with optional quantization."""
-        try:
-            device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-
-            # Check for cached quantized model first
-            if needs_quantization and self.quantizer.config.cache_quantized:
-                cached = self.quantizer.load_cached_model(path, self.quantizer.config)
-                if cached:
-                    print("Loading cached quantized model...")
-                    model = AutoModelForCausalLM.from_pretrained(
-                        str(path),
-                        torch_dtype=torch.float16,
-                        low_cpu_mem_usage=True,
-                        trust_remote_code=True
-                    )
-                    model.load_state_dict(cached[0])
-                    model = cast(Any, model).to(device)
-                    quantization_info = cached[1]
-                else:
-                    # Load and quantize
-                    print("Loading model for quantization...")
-                    model = AutoModelForCausalLM.from_pretrained(
-                        str(path),
-                        torch_dtype=torch.float16,
-                        low_cpu_mem_usage=True,
-                        trust_remote_code=True
-                    )
-
-                    if needs_quantization:
-                        print(f"Applying {quantization_mode} quantization...")
-                        gpu_status = self.gpu_validator.get_gpu_memory_status()
-                        quantized_model, quantization_info = self.quantizer.quantize_model(
-                            model,
-                            target_dtype=quantization_mode,
-                            available_memory_gb=gpu_status['available_gb'],
-                            model_size_gb=self._get_model_size(path) / (1024**3),
-                            target_device=device  # Pass the target device (MPS)
-                        )
-                        model = cast(Any, quantized_model)
-
-                        # Cache the quantized model
-                        if self.quantizer.config.cache_quantized:
-                            self.quantizer.cache_quantized_model(model, path, quantization_info)
-                            print("Cached quantized model for faster future loads")
-
-                    model = cast(Any, model).to(device)
-            else:
-                # Normal loading without quantization
-                model = AutoModelForCausalLM.from_pretrained(
-                    str(path),
-                    torch_dtype=torch.float16,
-                    low_cpu_mem_usage=True,
-                    trust_remote_code=True
-                )
-                model = cast(Any, model).to(device)
-                model.eval()  # Set model to evaluation mode
-
-            # Load tokenizer
-            tokenizer = AutoTokenizer.from_pretrained(str(path), use_fast=True)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-
-            self.model_cache[model_name] = model
-            self.tokenizers[model_name] = tokenizer
-
-            # Get config
-            config = model.config.to_dict() if hasattr(model, 'config') else {}
-
-            # Create model info with quantization details if applicable
-            if needs_quantization:
-                # Update quantization type based on what was applied
-                actual_quantization = QuantizationType.INT8 if quantization_mode == 'int8' else QuantizationType.INT4
-                # Calculate actual memory used after quantization
-                memory_used = sum(
-                    p.numel() * 1 if hasattr(p, 'numel') else 0  # Quantized uses less bytes per element
-                    for p in model.parameters()
-                )
-            else:
-                actual_quantization = format_info['quantization']
-                memory_used = sum(p.element_size() * p.numel() for p in model.parameters())
-
-            # Use smart parameter detection instead of counting loaded model parameters
-            parameters = int(self.get_model_parameters_smart(path) * 1e9)
-
-            model_info = ModelInfo(
-                name=model_name,
-                path=path,
-                format=ModelFormat.PYTORCH,
-                quantization=actual_quantization,
-                size_bytes=self._get_model_size(path),
-                parameters=parameters,
-                context_length=config.get('max_position_embeddings', 4096),
-                loaded_at=datetime.now(),
-                gpu_memory_used=memory_used,
-                tokenizer_path=None,
-                config=config
-            )
-
-            self.loaded_models[model_name] = model_info
-            return True, "PyTorch model loaded successfully"
-
-        except Exception as e:
-            return False, f"Failed to load PyTorch model: {str(e)}"
-
-    def _load_quantized(self, path: Path, model_name: str, format_info: Dict) -> Tuple[bool, str]:
-        """Load quantized model (GPTQ/AWQ/etc) using appropriate libraries."""
-        quant_type = format_info['quantization']
-        device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-
-        print(f"Loading {quant_type.value} quantized model...")
-
-        # Try different quantization libraries based on detected type
-        if quant_type in [QuantizationType.GPTQ, QuantizationType.INT4]:
-            # Try GPTQ loader first
-            try:
-                from auto_gptq import AutoGPTQForCausalLM
-
-                model = AutoGPTQForCausalLM.from_quantized(
-                    str(path),
-                    device="cuda:0" if torch.cuda.is_available() else "cpu",  # GPTQ doesn't support MPS directly
-                    use_safetensors=True,
-                    trust_remote_code=True,
-                    inject_fused_attention=False,  # Disable for compatibility
-                    inject_fused_mlp=False
-                )
-
-                # Move to MPS if needed
-                if device.type == "mps" and not torch.cuda.is_available():
-                    model = model.cpu()  # GPTQ models may need CPU fallback on Mac
-                    print("Note: GPTQ model loaded on CPU (MPS not fully supported)")
-
-                tokenizer = AutoTokenizer.from_pretrained(str(path), use_fast=True)
-                if tokenizer.pad_token is None:
-                    tokenizer.pad_token = tokenizer.eos_token
-
-                self.model_cache[model_name] = model
-                self.tokenizers[model_name] = tokenizer
-
-                config = self._load_config(path)
-                model_info = self._create_model_info(
-                    model_name, path, ModelFormat.QUANTIZED, quant_type,
-                    model, config
-                )
-
-                self.loaded_models[model_name] = model_info
-                return True, "GPTQ quantized model loaded successfully"
-
-            except ImportError:
-                print("GPTQ library not available, trying alternative methods...")
-            except Exception as e:
-                print(f"GPTQ loading failed: {str(e)[:100]}")
-
-        if quant_type == QuantizationType.AWQ:
-            # Try AWQ loader
-            try:
-                from awq import AutoAWQForCausalLM
-
-                model = AutoAWQForCausalLM.from_quantized(
-                    str(path),
-                    fuse_layers=False,  # Disable for compatibility
-                    trust_remote_code=True
-                )
-
-                tokenizer = AutoTokenizer.from_pretrained(str(path), use_fast=True)
-                if tokenizer.pad_token is None:
-                    tokenizer.pad_token = tokenizer.eos_token
-
-                self.model_cache[model_name] = model
-                self.tokenizers[model_name] = tokenizer
-
-                config = self._load_config(path)
-                model_info = self._create_model_info(
-                    model_name, path, ModelFormat.QUANTIZED, quant_type,
-                    model, config
-                )
-
-                self.loaded_models[model_name] = model_info
-                return True, "AWQ quantized model loaded successfully"
-
-            except ImportError:
-                print("AWQ library not available, trying alternative methods...")
-            except Exception as e:
-                print(f"AWQ loading failed: {str(e)[:100]}")
-
-        # Try using accelerate for general quantized models
-        try:
-            from accelerate import init_empty_weights, load_checkpoint_and_dispatch
-            from transformers import AutoConfig
-
-            print("Attempting to load with accelerate library...")
-
-            # Load config first
-            config = AutoConfig.from_pretrained(str(path), trust_remote_code=True)
-
-            # Initialize model with empty weights
-            with init_empty_weights():
-                model = AutoModelForCausalLM.from_config(
-                    config,
-                    torch_dtype=torch.float16,
-                    trust_remote_code=True
-                )
-
-            # Determine the checkpoint files
-            checkpoint_files = list(path.glob("*.safetensors"))
-            if not checkpoint_files:
-                checkpoint_files = list(path.glob("pytorch_model*.bin"))
-
-            if not checkpoint_files:
-                raise ValueError("No model files found")
-
-            # Create proper device map for MPS
-            device_map: Any
-            if device.type == "mps":
-                device_map = {"": "cpu"}  # Load to CPU first for MPS compatibility
-            else:
-                device_map = "auto"
-
-            # Load and dispatch to device
-            model = load_checkpoint_and_dispatch(
-                model,
-                checkpoint=str(path),  # Directory containing the model files
-                device_map=device_map,
-                dtype=torch.float16,
-                offload_folder=str(self.config.model.model_cache_dir / "offload")
-            )
-
-            # Move to MPS if needed
-            if device.type == "mps" and device_map == {"": "cpu"}:
-                model = cast(Any, model).to(device)
-
-            tokenizer = AutoTokenizer.from_pretrained(str(path))
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-
-            self.model_cache[model_name] = model
-            self.tokenizers[model_name] = tokenizer
-
-            config_dict = self._load_config(path)
-            model_info = self._create_model_info(
-                model_name, path, ModelFormat.QUANTIZED, quant_type,
-                model, config_dict
-            )
-
-            self.loaded_models[model_name] = model_info
-            return True, "Quantized model loaded with accelerate"
-
-        except Exception as e:
-            print(f"Accelerate loading failed: {str(e)[:100]}")
-
-        # Try bitsandbytes for 4-bit/8-bit models
-        try:
-            from transformers import BitsAndBytesConfig
-
-            print("Attempting to load with bitsandbytes quantization...")
-
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True if quant_type == QuantizationType.INT4 else False,
-                load_in_8bit=True if quant_type == QuantizationType.INT8 else False,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4"
-            )
-
-            model = AutoModelForCausalLM.from_pretrained(
-                str(path),
-                quantization_config=bnb_config,
-                torch_dtype=torch.float16,
-                trust_remote_code=True,
-                device_map="auto" if torch.cuda.is_available() else {"": device}
-            )
-
-            tokenizer = AutoTokenizer.from_pretrained(str(path))
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-
-            self.model_cache[model_name] = model
-            self.tokenizers[model_name] = tokenizer
-
-            config = self._load_config(path)
-            model_info = self._create_model_info(
-                model_name, path, ModelFormat.QUANTIZED, quant_type,
-                model, config
-            )
-
-            self.loaded_models[model_name] = model_info
-            return True, "Quantized model loaded with bitsandbytes"
-
-        except Exception as e:
-            print(f"Bitsandbytes loading failed: {str(e)[:100]}")
-
-        # If all methods fail, provide guidance
-        return False, f"Failed to load {quant_type.value} quantized model. The model format may not be compatible with Apple Silicon."
-
     def _load_config(self, path: Path) -> Dict[str, Any]:
         """Load config.json from model path."""
         config_path = path / 'config.json'
@@ -1563,17 +1085,11 @@ class ModelManager:
             if self.current_model == model_name:
                 self.current_model = None
 
-            # Clear GPU cache
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            elif torch.backends.mps.is_available():
-                # Clear MPS cache on Apple Silicon
-                try:
-                    torch.mps.empty_cache()
-                except Exception:
-                    pass  # MPS cache clearing might not be available in all versions
-
-            # Force garbage collection for thorough cleanup
+            # Clear MLX cache and force garbage collection for thorough cleanup
+            try:
+                mx.clear_cache()
+            except Exception:
+                pass
             import gc
             gc.collect()
 
@@ -1598,7 +1114,7 @@ class ModelManager:
         mlx_path = Path.home() / ".cortex" / "mlx_models"
 
         # First, get all MLX converted models to check for optimized versions
-        mlx_models = self.mlx_converter.list_converted_models()
+        mlx_models = self.mlx_converter.list_converted_models() if self.mlx_converter else {}
         mlx_cache_map = {}  # Map original paths to MLX versions
 
         # Build a map of original model paths to their MLX versions

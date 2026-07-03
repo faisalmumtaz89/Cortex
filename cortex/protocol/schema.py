@@ -33,7 +33,7 @@ class HandshakeResult(BaseModel):
 
     protocol_version: str = PROTOCOL_VERSION
     server_name: str = "cortex-worker"
-    supported_profiles: List[str] = ["off", "read_only", "patch", "full"]
+    supported_profiles: List[str] = ["off", "read_only", "edit", "full"]
     features: Dict[str, bool] = {"events": True, "permissions": True, "tooling": True}
 
 

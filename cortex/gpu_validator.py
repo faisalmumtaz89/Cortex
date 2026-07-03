@@ -13,7 +13,6 @@ import psutil
 class GPUInfo:
     """GPU information and capabilities."""
     has_metal: bool
-    has_mps: bool
     has_mlx: bool
     gpu_cores: int
     total_memory: int
@@ -43,7 +42,6 @@ class GPUInfo:
 
         return (
             self.has_metal and
-            self.has_mps and
             self.has_mlx and
             self.gpu_cores >= min_cores and
             self.available_memory >= min_memory
@@ -57,8 +55,6 @@ class GPUInfo:
 
         if not self.has_metal:
             errors.append("Metal support not available")
-        if not self.has_mps:
-            errors.append("Metal Performance Shaders (MPS) not available")
         if not self.has_mlx:
             errors.append("MLX framework not available (install with: pip install mlx)")
         if self.gpu_cores < min_cores:
@@ -76,14 +72,15 @@ class GPUValidator:
         """Initialize GPU validator."""
         self.config = config  # Store config if provided
         self.gpu_info: Optional[GPUInfo] = None
-        self._torch_available = False
         self._mlx_available = False
         self._validate_imports()
 
     def _validate_imports(self) -> None:
         """Validate that required GPU libraries are available."""
-        self._torch_available = find_spec("torch") is not None
-        self._mlx_available = find_spec("mlx.core") is not None
+        try:
+            self._mlx_available = find_spec("mlx.core") is not None
+        except ModuleNotFoundError:
+            self._mlx_available = False
 
     def validate(self) -> Tuple[bool, Optional[GPUInfo], list[str]]:
         """
@@ -117,7 +114,6 @@ class GPUValidator:
         memory_info = self._get_memory_info()
 
         has_metal = self._check_metal_support()
-        has_mps = self._check_mps_support()
         has_mlx = self._check_mlx_support()
         metal_version = self._get_metal_version()
 
@@ -127,7 +123,6 @@ class GPUValidator:
 
         return GPUInfo(
             has_metal=has_metal,
-            has_mps=has_mps,
             has_mlx=has_mlx,
             gpu_cores=gpu_cores,
             total_memory=int(memory_info['total']),
@@ -161,26 +156,19 @@ class GPUValidator:
             return "Unknown"
 
     def _get_gpu_cores(self, chip_name: str) -> int:
-        """Get number of GPU cores based on chip."""
-        gpu_core_map = {
-            "M4": 16,
-            "M4 Pro": 20,
-            "M4 Max": 40,
-            "M3": 10,
-            "M3 Pro": 18,
-            "M3 Max": 40,
-            "M2": 10,
-            "M2 Pro": 19,
-            "M2 Max": 38,
-            "M1": 8,
-            "M1 Pro": 16,
-            "M1 Max": 32,
-        }
-
-        for chip, cores in gpu_core_map.items():
-            if chip in chip_name:
-                return cores
-
+        """Read the GPU core count reported by the system."""
+        try:
+            result = subprocess.run(
+                ["system_profiler", "SPDisplaysDataType"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            for line in result.stdout.splitlines():
+                if "Total Number of Cores" in line:
+                    return int(line.split(":", 1)[1].strip())
+        except (subprocess.CalledProcessError, ValueError, IndexError):
+            pass
         return 0
 
     def _get_memory_info(self) -> Dict[str, float]:
@@ -204,17 +192,6 @@ class GPUValidator:
             )
             return "Metal" in result.stdout
         except subprocess.CalledProcessError:
-            return False
-
-    def _check_mps_support(self) -> bool:
-        """Check if MPS (Metal Performance Shaders) is available."""
-        if not self._torch_available:
-            return False
-
-        try:
-            import torch
-            return torch.backends.mps.is_available()
-        except Exception:
             return False
 
     def _check_mlx_support(self) -> bool:
@@ -349,7 +326,6 @@ class GPUValidator:
         print(f"  Total Memory: {self.gpu_info.total_memory / (1024**3):.1f} GB")
         print(f"  Available Memory: {self.gpu_info.available_memory / (1024**3):.1f} GB")
         print(f"  Metal: {'✅' if self.gpu_info.has_metal else '❌'}")
-        print(f"  MPS: {'✅' if self.gpu_info.has_mps else '❌'}")
         print(f"  MLX: {'✅' if self.gpu_info.has_mlx else '❌'}")
         print(f"  Metal Version: {self.gpu_info.metal_version or 'Unknown'}")
         print(f"  Unified Memory: {'✅' if self.gpu_info.unified_memory else '❌'}")

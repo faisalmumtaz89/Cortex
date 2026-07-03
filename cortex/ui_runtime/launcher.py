@@ -86,6 +86,10 @@ def _build_worker_env() -> dict:
                 env.pop(key, None)
     env["CORTEX_WORKER_CMD"] = sys.executable
     env["CORTEX_WORKER_ARGS"] = "-m cortex --worker-stdio"
+    # The sidecar process runs from the repo/frontend dir; the worker (and so
+    # the agent's tool sandbox) must run in the directory the user launched
+    # Cortex from.
+    env["CORTEX_PROJECT_DIR"] = os.getcwd()
     return env
 
 

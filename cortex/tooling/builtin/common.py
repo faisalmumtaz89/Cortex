@@ -14,15 +14,18 @@ def resolve_repo_path(*, root: Path, relative_path: str) -> Path:
     if "\x00" in raw:
         raise ValueError("path contains null byte")
     if raw.startswith("~"):
-        raise ValueError("path must be repo-relative")
+        raise ValueError("path must be inside the working directory")
 
     candidate = Path(raw)
     if candidate.is_absolute():
-        raise ValueError("path must be repo-relative")
-
-    resolved = (root / candidate).resolve()
+        resolved = candidate.resolve()
+    else:
+        resolved = (root / candidate).resolve()
     if not resolved.is_relative_to(root):
-        raise ValueError("path escapes repo root")
+        raise ValueError(
+            f"path is outside the working directory {root}; file tools are "
+            "sandboxed to it (use bash for files elsewhere)"
+        )
     return resolved
 
 

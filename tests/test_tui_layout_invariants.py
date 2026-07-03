@@ -55,9 +55,17 @@ def test_prompt_panel_contract_is_bottom_anchor_stable() -> None:
     )
     assert "minHeight={1}" in source
     assert "maxHeight={6}" in source
-    assert "Enter submit | Esc reject permission | type /setup /model /download" in source
+    # Hint bar is adaptive (sheds segments to never overlap the status at narrow
+    # widths) rather than a single fixed string.
+    assert '{ text: "Enter send"' in source
+    assert '{ text: "Ctrl+C quit"' in source
+    assert "buildHint(" in source
     assert 'vertical: "┃"' in source
-    assert 'bottomLeft: "╹"' in source
+    # Input band: symmetric padding (pad / text / pad) centers the cursor; the
+    # dark-gray background provides the edges — no ▀ floor row.
+    assert "PROMPT_TOP_SPACER_ROWS = 1" in source
+    assert "PROMPT_BOTTOM_SPACER_ROWS = 1" in source
+    assert "▀" not in source
 
 
 def test_index_startup_uses_full_screen_alt_buffer() -> None:
@@ -72,7 +80,9 @@ def test_index_startup_uses_full_screen_alt_buffer() -> None:
 def test_model_hint_copy_uses_ascii_safe_separators() -> None:
     source = _read("frontend/cortex-tui/src/routes/session.tsx")
 
-    assert "Model:" in source
+    # Single-line header: branch + path left, model · status right.
+    assert "readGitBranch(" in source
+    assert "headerModel()" in source
     assert "Type: setup | model | download" not in source
     assert "Type: setup · model · download" not in source
 
@@ -114,7 +124,10 @@ def test_message_components_render_panel_metadata_rows() -> None:
     assistant_source = _read("frontend/cortex-tui/src/components/messages/assistant_message.tsx")
     system_source = _read("frontend/cortex-tui/src/components/messages/system_message.tsx")
 
-    assert "formatTimestamp(props.message.createdTsMs)" in user_source
+    # User turn: a single accent "spine" (┃) + subtle panel fill, no role label
+    # or timestamp (opencode-style cleanliness). The metadata footer on the
+    # assistant identifies turns instead.
+    assert 'vertical: "┃"' in user_source
     assert "backgroundColor={UI_PALETTE.panel}" in user_source
     assert "▣ " in assistant_source
     assert "modeLabel()" in assistant_source

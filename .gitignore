@@ -14,7 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# Root-anchored: a bare "lib/" would also swallow frontend/cortex-tui/src/lib/.
+/lib/
 lib64/
 parts/
 sdist/
@@ -200,3 +201,5 @@ frontend/cortex-tui/dist/
 frontend/cortex-tui/dist-node/
 cortex/ui_runtime/bin/cortex-tui
 frontend/cortex-tui/bun.lock
+benchmark/dist/
+benchmark/vendor/
