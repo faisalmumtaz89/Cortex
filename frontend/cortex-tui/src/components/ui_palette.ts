@@ -5,12 +5,33 @@ export const UI_PALETTE = {
   text: RGBA.fromHex("#abb2bf"),
   textMuted: RGBA.fromHex("#5c6370"),
   panel: RGBA.fromHex("#21252b"),
+  codeBackground: RGBA.fromHex("#1b1f27"),
+  heading: RGBA.fromHex("#61afef"),
   statusIdle: RGBA.fromHex("#98c379"),
   statusBusy: RGBA.fromHex("#e5c07b"),
   statusRetry: RGBA.fromHex("#c678dd"),
   statusError: RGBA.fromHex("#e06c75"),
-  promptBackground: RGBA.fromHex("#000000"),
+  promptBackground: RGBA.fromHex("#21252b"), // dark gray input band (matches panel)
   promptText: RGBA.fromHex("#ffffff"),
+  // Diff bands — tuned dark so they read on the near-black theme while keeping
+  // One Dark syntax tokens legible on top. GitHub-style vivid gutter pair.
+  diffAddBg: RGBA.fromHex("#12321f"),
+  diffDelBg: RGBA.fromHex("#3a1a1d"),
+  diffAddGutter: RGBA.fromHex("#3fb950"),
+  diffDelGutter: RGBA.fromHex("#f85149"),
+  diffDelFg: RGBA.fromHex("#e5a5a9"),
+} as const
+
+// One Dark syntax palette for the code-block highlighter.
+export const SYNTAX_PALETTE = {
+  keyword: RGBA.fromHex("#c678dd"),
+  string: RGBA.fromHex("#98c379"),
+  number: RGBA.fromHex("#d19a66"),
+  comment: RGBA.fromHex("#5c6370"),
+  functionName: RGBA.fromHex("#61afef"),
+  builtin: RGBA.fromHex("#e5c07b"),
+  operator: RGBA.fromHex("#56b6c2"),
+  plain: RGBA.fromHex("#abb2bf"),
 } as const
 
 type SessionStatusColorInput = "idle" | "busy" | "retry" | string

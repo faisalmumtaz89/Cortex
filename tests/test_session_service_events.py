@@ -7,7 +7,7 @@ from uuid import uuid4
 from cortex.app.session_service import SessionService
 from cortex.cloud.types import ActiveModelTarget
 from cortex.conversation_manager import MessageRole
-from cortex.tooling.types import AssistantTurnResult, FinishEvent
+from cortex.tooling.types import AssistantTurnResult, FinishEvent, TextDeltaEvent
 
 
 class _FakeConversation:
@@ -124,6 +124,73 @@ def test_session_service_emits_single_idle_transition_after_finish_event(tmp_pat
     assert final_assistant.get("model_label") == "test-model"
     assert isinstance(final_assistant.get("elapsed_ms"), int)
     assert isinstance(final_assistant.get("completed_ts_ms"), int)
+
+
+def test_interrupt_mid_turn_finalizes_partial_text(tmp_path: Path) -> None:
+    conversation_manager = _FakeConversationManager()
+    model_service = _FakeModelService()
+
+    class _StreamingOrchestrator:
+        def __init__(self) -> None:
+            self.service: SessionService | None = None
+
+        def run_turn(self, *_args, **kwargs):
+            on_event = kwargs["on_event"]
+            on_event(TextDeltaEvent(delta="partial "))
+            on_event(TextDeltaEvent(delta="answer"))
+            assert self.service is not None
+            assert self.service.request_interrupt("session-3") is True
+            # Next event hits the interrupt flag and unwinds the turn.
+            on_event(TextDeltaEvent(delta=" that never lands"))
+            raise AssertionError("interrupt should have unwound the turn")
+
+    orchestrator = _StreamingOrchestrator()
+    service = SessionService(
+        config=SimpleNamespace(conversation=SimpleNamespace(save_directory=tmp_path)),
+        conversation_manager=conversation_manager,
+        tooling_orchestrator=orchestrator,
+        model_service=model_service,
+        tooling_bridge=_FakeBridge(),
+    )
+    orchestrator.service = service
+
+    session_id = "session-3"
+    service.create_or_resume(session_id=session_id, conversation_id=None)
+
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def emit_event(*, session_id: str, event_type: str, payload: dict[str, object]) -> None:
+        events.append((event_type, payload))
+
+    result = service.submit_user_input(
+        session_id=session_id,
+        user_input="hello",
+        active_target_input=None,
+        stop_sequences=None,
+        emit_event=emit_event,
+    )
+
+    assert result["ok"] is True
+    assert result["interrupted"] is True
+    assert result["assistant_text"] == "partial answer"
+
+    final = next(
+        payload
+        for event_type, payload in events
+        if event_type == "message.updated" and payload.get("final") and payload.get("role") == "assistant"
+    )
+    assert final.get("interrupted") is True
+    assert final.get("content") == "partial answer"
+
+    idle = next(
+        payload
+        for event_type, payload in events
+        if event_type == "session.status" and payload.get("status") == "idle"
+    )
+    assert idle.get("interrupted") is True
+
+    # A finished turn no longer accepts interrupts.
+    assert service.request_interrupt(session_id) is False
 
 
 def test_session_service_turn_failure_returns_structured_result_without_raise(tmp_path: Path) -> None:

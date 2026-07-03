@@ -1,8 +1,8 @@
-import { Show } from "solid-js"
 import type { MessageRecord } from "../../context/store"
-import { UI_PALETTE, formatTimestamp } from "../ui_palette"
+import { UI_PALETTE } from "../ui_palette"
 
-const USER_BORDER = {
+// A single left "spine" (┃) instead of a full box — one consistent role marker.
+const SPINE_BORDER = {
   topLeft: "",
   bottomLeft: "",
   vertical: "┃",
@@ -18,33 +18,24 @@ const USER_BORDER = {
 
 export function UserMessage(props: { message: MessageRecord; index: number }) {
   const text = () => props.message.content
-  const metadata = () => formatTimestamp(props.message.createdTsMs)
 
   if (!text()) {
     return <></>
   }
 
+  // The accent spine + subtle panel fill distinguish the user's turn; no role
+  // label or timestamp keeps it quiet. Content lands on the shared left rail.
   return (
     <box
       flexDirection="column"
+      flexShrink={0}
       marginTop={props.index === 0 ? 0 : 1}
       border={["left"]}
       borderColor={UI_PALETTE.accent}
-      customBorderChars={USER_BORDER}
+      customBorderChars={SPINE_BORDER}
     >
-      <box
-        flexDirection="column"
-        paddingTop={1}
-        paddingBottom={1}
-        paddingLeft={2}
-        paddingRight={2}
-        backgroundColor={UI_PALETTE.panel}
-      >
-        <text fg={UI_PALETTE.accent}>You</text>
+      <box flexShrink={0} paddingLeft={2} paddingRight={2} backgroundColor={UI_PALETTE.panel}>
         <text fg={UI_PALETTE.text}>{text()}</text>
-        <Show when={metadata()}>
-          <text fg={UI_PALETTE.textMuted}>{metadata()}</text>
-        </Show>
       </box>
     </box>
   )

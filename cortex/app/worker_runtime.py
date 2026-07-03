@@ -1134,7 +1134,7 @@ class WorkerRuntime:
         return {
             "protocol_version": PROTOCOL_VERSION,
             "server_name": "cortex-worker",
-            "supported_profiles": ["off", "read_only", "patch", "full"],
+            "supported_profiles": ["off", "read_only", "edit", "full"],
             "features": {
                 "events": True,
                 "permissions": True,
@@ -1149,19 +1149,16 @@ class WorkerRuntime:
             session_id=session_id,
             conversation_id=params.conversation_id,
         )
+        # One compact startup notice instead of a stack of boxes.
+        notice_parts = ["Session ready"]
+        if not self._startup_notices_emitted:
+            self._startup_notices_emitted = True
+            notice_parts.extend(self._startup_notices)
         self._emit_event(
             session_id=session_id,
             event_type="system.notice",
-            payload={"message": "Session ready"},
+            payload={"message": " · ".join(notice_parts)},
         )
-        if not self._startup_notices_emitted:
-            self._startup_notices_emitted = True
-            for message in self._startup_notices:
-                self._emit_event(
-                    session_id=session_id,
-                    event_type="system.notice",
-                    payload={"message": message},
-                )
         return result
 
     def _rpc_session_submit_user_input(self, params: SessionSubmitUserInputParams):
@@ -1174,15 +1171,18 @@ class WorkerRuntime:
         )
 
     def _rpc_session_interrupt(self, params: SessionInterruptParams):
+        turn_was_active = self.session_service.request_interrupt(params.session_id)
         cancel = getattr(self.inference_engine, "cancel_generation", None)
         if callable(cancel):
             cancel()
-        self._emit_event(
-            session_id=params.session_id,
-            event_type="session.status",
-            payload={"status": "idle", "interrupted": True},
-        )
-        return {"ok": True}
+        if not turn_was_active:
+            # No live turn to unwind; report idle directly.
+            self._emit_event(
+                session_id=params.session_id,
+                event_type="session.status",
+                payload={"status": "idle", "interrupted": True},
+            )
+        return {"ok": True, "turn_was_active": turn_was_active}
 
     def _rpc_permission_reply(self, params: PermissionReplyParams):
         accepted = self.permission_service.reply(

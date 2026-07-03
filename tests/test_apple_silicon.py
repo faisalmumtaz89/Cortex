@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Apple Silicon GPU Acceleration Validation Script for Cortex
-Thoroughly validates Metal, MLX, MPS, and unified memory capabilities
+Thoroughly validates Metal, MLX, and unified memory capabilities
 """
 
 import json
@@ -134,7 +134,6 @@ def validate_metal() -> Dict[str, Any]:
     results = {
         "metal_available": False,
         "metal_version": None,
-        "mps_available": False
     }
 
     # Check Metal framework
@@ -174,22 +173,6 @@ def validate_metal() -> Dict[str, Any]:
     except Exception:
         print_status("Metal Shader Compiler", False, "Not found")
 
-    # Check MetalPerformanceShaders
-    try:
-        result = subprocess.run(
-            ["xcrun", "--show-sdk-path"],
-            capture_output=True, text=True, check=True
-        )
-        sdk_path = result.stdout.strip()
-        mps_path = Path(sdk_path) / "System/Library/Frameworks/MetalPerformanceShaders.framework"
-        if mps_path.exists():
-            results["mps_available"] = True
-            print_status("MetalPerformanceShaders", True, "Framework found")
-        else:
-            print_status("MetalPerformanceShaders", False, "Framework not found")
-    except Exception:
-        print_status("MetalPerformanceShaders", False, "Could not verify")
-
     return results
 
 # ============================================================================
@@ -201,39 +184,10 @@ def validate_python_packages() -> Dict[str, Any]:
     print_header("PYTHON PACKAGE VALIDATION")
 
     results = {
-        "torch_mps": False,
         "mlx": False,
         "mlx_device": None,
         "packages": {}
     }
-
-    # Check PyTorch with MPS
-    try:
-        import torch
-        has_mps = torch.backends.mps.is_available()
-        built_mps = torch.backends.mps.is_built()
-
-        results["torch_mps"] = has_mps and built_mps
-        results["packages"]["torch"] = torch.__version__
-
-        print_status("PyTorch", True, f"v{torch.__version__}")
-        print_status("MPS Backend Available", has_mps, "")
-        print_status("MPS Backend Built", built_mps, "")
-
-        if has_mps:
-            # Test MPS allocation
-            try:
-                device = torch.device("mps")
-                test_tensor = torch.randn(100, 100, device=device)
-                _ = torch.matmul(test_tensor, test_tensor)
-                print_status("MPS Tensor Operations", True, "Working")
-            except Exception as e:
-                print_status("MPS Tensor Operations", False, str(e))
-                results["torch_mps"] = False
-    except ImportError:
-        print_status("PyTorch", False, "Not installed")
-    except Exception as e:
-        print_status("PyTorch", False, str(e))
 
     # Check MLX
     try:
@@ -270,7 +224,7 @@ def validate_python_packages() -> Dict[str, Any]:
         print_status("MLX Framework", False, str(e))
 
     # Check other packages
-    packages_to_check = ["llama-cpp-python", "transformers", "safetensors"]
+    packages_to_check = ["llama-cpp-python", "mlx-lm"]
     for package in packages_to_check:
         try:
             module = __import__(package.replace("-", "_"))
@@ -299,7 +253,6 @@ def validate_cortex_modules() -> Dict[str, Any]:
     modules_to_check = [
         ("cortex.metal", "Base Metal Module"),
         ("cortex.metal.memory_pool", "Memory Pool"),
-        ("cortex.metal.mps_optimizer", "MPS Optimizer"),
         ("cortex.metal.mlx_accelerator", "MLX Accelerator"),
         ("cortex.metal.performance_profiler", "Performance Profiler")
     ]
@@ -317,7 +270,7 @@ def validate_cortex_modules() -> Dict[str, Any]:
                     pool = MemoryPool(
                         pool_size=None,
                         strategy=AllocationStrategy.UNIFIED,
-                        device="mps",
+                        device="mlx",
                         auto_size=True,
                         silent=True
                     )
@@ -372,7 +325,6 @@ def validate_configuration() -> Dict[str, Any]:
         critical_settings = [
             ("compute_backend", "metal", "Should be 'metal'"),
             ("force_gpu", True, "Should be True"),
-            ("metal_performance_shaders", True, "Should be True"),
             ("mlx_backend", True, "Should be True"),
             ("unified_memory", True, "Should be True for Apple Silicon"),
             ("cpu_offload", False, "Should be False for GPU-only")
@@ -414,54 +366,14 @@ def run_gpu_performance() -> Dict[str, Any]:
 
     results = {
         "tests_run": False,
-        "mps_performance": {},
         "mlx_performance": {},
         "memory_bandwidth": 0
     }
 
-    # Test MPS Performance
-    try:
-        import torch
-        if torch.backends.mps.is_available():
-            print("Running MPS performance test...")
-            device = torch.device("mps")
-
-            # Matrix multiplication test
-            sizes = [(1024, 1024), (2048, 2048), (4096, 4096)]
-            for size in sizes:
-                a = torch.randn(size, device=device, dtype=torch.float32)
-                b = torch.randn(size, device=device, dtype=torch.float32)
-
-                # Warmup
-                for _ in range(3):
-                    c = torch.matmul(a, b)
-
-                # Time it
-                torch.mps.synchronize()
-                start = time.perf_counter()
-                for _ in range(10):
-                    c = torch.matmul(a, b)
-                torch.mps.synchronize()
-                end = time.perf_counter()
-
-                avg_time = (end - start) / 10
-                gflops = (2 * size[0] * size[1] * size[1]) / (avg_time * 1e9)
-
-                results["mps_performance"][f"{size[0]}x{size[1]}"] = {
-                    "time_ms": avg_time * 1000,
-                    "gflops": gflops
-                }
-
-                print_info(f"MPS MatMul {size[0]}x{size[1]}", f"{gflops:.1f} GFLOPS")
-
-            results["tests_run"] = True
-    except Exception as e:
-        print_warning(f"MPS test failed: {str(e)}")
-
     # Test MLX Performance
     try:
         import mlx.core as mx
-        if str(mx.default_device()).lower() == "gpu":
+        if "gpu" in str(mx.default_device()).lower():
             print("Running MLX performance test...")
 
             sizes = [(1024, 1024), (2048, 2048), (4096, 4096)]
@@ -490,23 +402,6 @@ def run_gpu_performance() -> Dict[str, Any]:
                 }
 
                 print_info(f"MLX MatMul {size[0]}x{size[1]}", f"{gflops:.1f} GFLOPS")
-
-            # Memory bandwidth test
-            print("Testing memory bandwidth...")
-            size = 100 * 1024 * 1024 // 4  # 100MB of float32
-            data = mx.random.normal((size,))
-
-            start = time.perf_counter()
-            for _ in range(100):
-                result = mx.copy(data)
-                mx.eval(result)
-            end = time.perf_counter()
-
-            total_bytes = size * 4 * 100 * 2  # read + write
-            bandwidth_gb = total_bytes / (end - start) / 1e9
-            results["memory_bandwidth"] = bandwidth_gb
-
-            print_info("Memory Bandwidth", f"{bandwidth_gb:.1f} GB/s")
 
             results["tests_run"] = True
     except Exception as e:
@@ -554,7 +449,6 @@ def main():
     critical_checks = [
         ("Apple Silicon", all_results["system"]["is_apple_silicon"]),
         ("Metal Framework", all_results["metal"]["metal_available"]),
-        ("MPS Backend", all_results["packages"]["torch_mps"]),
         ("MLX GPU", all_results["packages"]["mlx"] and "gpu" in str(all_results["packages"]["mlx_device"]).lower()),
         ("Cortex Modules", all(all_results["cortex_modules"]["modules_found"].values())),
         ("Configuration", len(all_results["configuration"]["issues"]) == 0),
@@ -582,7 +476,7 @@ def main():
     print(f"\n{Colors.BOLD}{'=' * 60}{Colors.END}")
     if all_passed:
         print(f"{Colors.GREEN}{Colors.BOLD}✅ VALIDATION PASSED: Cortex is fully optimized for Apple Silicon!{Colors.END}")
-    elif all_results["packages"]["torch_mps"] or all_results["packages"]["mlx"]:
+    elif all_results["packages"]["mlx"]:
         print(f"{Colors.YELLOW}{Colors.BOLD}⚠️  VALIDATION PARTIAL: Cortex is using GPU but not fully optimized{Colors.END}")
         print(f"{Colors.YELLOW}   Some GPU optimizations may not be active{Colors.END}")
     else:

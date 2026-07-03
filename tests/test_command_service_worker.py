@@ -36,6 +36,9 @@ class _FakeModelService:
         self.load_calls.append(model_name_or_path)
         return {"ok": True, "message": "loaded", "active_model": "demo-model"}
 
+    def get_active_model_label(self) -> str:
+        return "cloud-model" if self.active_target.backend == "cloud" else "demo-model"
+
     def status_summary(self):
         return {"active_model": "demo-model"}
 
@@ -254,7 +257,14 @@ def test_template_status_requires_loaded_model() -> None:
     service = _service(model_service=_FakeModelService(current_model=""))
     result = service.execute(session_id="s1", command="/template status")
     assert result["ok"] is False
-    assert result["message"] == "No model loaded."
+    assert result["message"] == "No local model loaded."
+
+
+def test_template_under_cloud_model_reports_local_only() -> None:
+    service = _service(model_service=_FakeModelService(current_model="", backend="cloud"))
+    result = service.execute(session_id="s1", command="/template status")
+    assert result["ok"] is False
+    assert "local models only" in str(result["message"])
 
 
 def test_template_status_returns_configuration() -> None:
@@ -420,10 +430,8 @@ def test_setup_requires_any_installed_local_model() -> None:
         "/help",
         "/status",
         "/gpu",
-        "/models",
         "/model",
         "/login openai",
-        "/finetune status",
         "/benchmark",
         "/clear",
         "/save",
@@ -434,22 +442,6 @@ def test_core_slash_commands_emit_transcript_ready_message(command: str) -> None
     service = _service(model_service=_FakeModelService(current_model=""))
     result = service.execute(session_id="s1", command=command)
     assert bool(str(result.get("message", "")).strip())
-
-
-def test_finetune_help_for_worker_mode() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/finetune")
-    assert result["ok"] is True
-    assert "Usage: /finetune status" in str(result["message"])
-
-
-def test_finetune_status_payload_shape() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/finetune status")
-    assert "finetune" in result
-    assert isinstance(result["finetune"], dict)
-    assert "mlx_available" in result["finetune"]
-    assert result["finetune"]["available_local_models"] == 1
 
 
 def test_execute_rejects_empty_command() -> None:
@@ -478,7 +470,7 @@ def test_execute_save_sets_default_message_from_path() -> None:
     service = _service()
     result = service.execute(session_id="s1", command="/save")
     assert result["ok"] is True
-    assert result["message"] == "Saved conversation: /tmp/x.json"
+    assert result["message"] == "Saved conversation: /tmp/x.json."
 
 
 def test_execute_unknown_command_returns_error() -> None:
@@ -641,26 +633,11 @@ def test_benchmark_rejects_when_engine_returns_none() -> None:
     assert result["message"] == "Benchmark failed to produce metrics."
 
 
-def test_finetune_rejects_invalid_shell_syntax() -> None:
+def test_unknown_command_returns_error() -> None:
     service = _service()
-    result = service.execute(session_id="s1", command='/finetune "unterminated')
+    result = service.execute(session_id="s1", command="/finetune")
     assert result["ok"] is False
-    assert "Invalid finetune arguments:" in str(result["message"])
-
-
-@pytest.mark.parametrize("command", ["/finetune --help", "/finetune -h", "/finetune help"])
-def test_finetune_help_variants_are_supported(command: str) -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command=command)
-    assert result["ok"] is True
-    assert "Usage: /finetune status" in str(result["message"])
-
-
-def test_finetune_unknown_subcommand_returns_actionable_error() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/finetune train")
-    assert result["ok"] is False
-    assert "Run `/finetune status`" in str(result["message"])
+    assert "Unknown command" in str(result["message"])
 
 
 def test_model_list_and_ls_aliases_route_to_model_list() -> None:
@@ -681,7 +658,7 @@ def test_model_select_local_routes_to_model_service() -> None:
     assert model_service.load_calls == ["/tmp/foo.gguf"]
 
 
-def test_model_select_local_by_index_routes_to_model_service() -> None:
+def test_model_select_local_by_unique_prefix_routes_to_model_service() -> None:
     model_service = _FakeModelService()
     model_service.list_models = lambda: {
         "local": [
@@ -692,9 +669,25 @@ def test_model_select_local_by_index_routes_to_model_service() -> None:
     }
     service = _service(model_service=model_service)
 
-    result = service.execute(session_id="s1", command="/model 2")
+    # Numeric selection is removed; selection is by name (the picker/frontend
+    # sends the resolved name). A unique partial still resolves.
+    result = service.execute(session_id="s1", command="/model second-model")
     assert result["ok"] is True
     assert model_service.load_calls == ["mlx-community--second-model"]
+
+
+def test_model_numeric_arg_is_not_an_index() -> None:
+    model_service = _FakeModelService()
+    model_service.list_models = lambda: {
+        "local": [{"name": "mlx-community--first-model"}],
+        "cloud": [],
+    }
+    service = _service(model_service=model_service)
+
+    # "/model 1" is treated as a name, not an index — it must NOT load model #1.
+    result = service.execute(session_id="s1", command="/model 1")
+    assert result["ok"] is False
+    assert model_service.load_calls == []
 
 
 def test_model_list_and_index_selection_use_stable_sorted_order() -> None:
@@ -715,18 +708,16 @@ def test_model_list_and_index_selection_use_stable_sorted_order() -> None:
     listed = service.execute(session_id="s1", command="/model")
     assert listed["ok"] is True
     message = str(listed["message"])
-    assert "- [1] Alpha-model" in message
-    assert "- [2] beta-model" in message
-    assert "- [3] zeta-model" in message
-    assert "- [4] anthropic:claude-sonnet-4-5 (login required)" in message
-    assert "- [5] openai:gpt-5.1 (login required)" in message
-    assert (
-        "Use /model <number> to select from this list, or /model <local-name|provider:model>."
-        in message
-    )
-    assert "<partial-local-name>" not in message
+    # De-numbered rows (no [N]), stable sorted order preserved.
+    assert "- Alpha-model" in message
+    assert "- beta-model" in message
+    assert "- zeta-model" in message
+    assert "- anthropic:claude-sonnet-4-5 (login required)" in message
+    assert "- openai:gpt-5.1 (login required)" in message
+    assert "[1]" not in message and "[2]" not in message
+    assert "<number>" not in message
 
-    selected = service.execute(session_id="s1", command="/model 1")
+    selected = service.execute(session_id="s1", command="/model Alpha-model")
     assert selected["ok"] is True
     assert model_service.load_calls == ["Alpha-model"]
 
@@ -759,34 +750,14 @@ def test_model_select_cloud_by_index_routes_to_cloud_selection() -> None:
     listed = service.execute(session_id="s1", command="/model")
     assert listed["ok"] is True
     message = str(listed["message"])
-    assert "- [1] zeta-model" in message
-    assert "- [2] anthropic:claude-sonnet-4-5 (login required)" in message
-    assert "- [3] openai:gpt-5.1 (ready)" in message
+    assert "- zeta-model" in message
+    assert "- anthropic:claude-sonnet-4-5 (login required)" in message
+    assert "- openai:gpt-5.1 (ready)" in message
+    assert "[1]" not in message
 
-    selected = service.execute(session_id="s1", command="/model 3")
+    selected = service.execute(session_id="s1", command="/model openai:gpt-5.1")
     assert selected["ok"] is True
     assert selected["message"] == "cloud openai:gpt-5.1"
-
-
-def test_model_select_cloud_by_hash_index_routes_to_cloud_selection() -> None:
-    model_service = _FakeModelService()
-    model_service.list_models = lambda: {
-        "local": [],
-        "cloud": [
-            {
-                "provider": "openai",
-                "model_id": "gpt-5-nano",
-                "selector": "openai:gpt-5-nano",
-                "authenticated": True,
-                "active": False,
-            },
-        ],
-    }
-    service = _service(model_service=model_service)
-
-    selected = service.execute(session_id="s1", command="/model #1")
-    assert selected["ok"] is True
-    assert selected["message"] == "cloud openai:gpt-5-nano"
 
 
 def test_model_select_local_by_unique_partial_name_routes_to_model_service() -> None:
@@ -819,11 +790,12 @@ def test_model_select_local_with_ambiguous_partial_name_returns_actionable_error
     result = service.execute(session_id="s1", command="/model llama-3.2")
     assert result["ok"] is False
     assert "Ambiguous local model selector" in str(result["message"])
-    assert "Use /model <number>" in str(result["message"])
+    assert "<number>" not in str(result["message"])
+    assert "open the picker with /model" in str(result["message"])
     assert model_service.load_calls == []
 
 
-def test_model_select_local_with_out_of_range_index_returns_actionable_error() -> None:
+def test_model_select_local_with_no_match_returns_actionable_error() -> None:
     model_service = _FakeModelService()
     model_service.list_models = lambda: {
         "local": [{"name": "mlx-community--only-model"}],
@@ -831,9 +803,9 @@ def test_model_select_local_with_out_of_range_index_returns_actionable_error() -
     }
     service = _service(model_service=model_service)
 
-    result = service.execute(session_id="s1", command="/model 9")
+    result = service.execute(session_id="s1", command="/model nonexistent")
     assert result["ok"] is False
-    assert "Model index out of range" in str(result["message"])
+    assert "No local model matches" in str(result["message"])
     assert model_service.load_calls == []
 
 
@@ -891,7 +863,7 @@ def test_setup_returns_loaded_message_when_model_service_omits_message() -> None
     service = _service(model_service=model_service)
     result = service.execute(session_id="s1", command="/setup")
     assert result["ok"] is True
-    assert result["message"] == "Loaded local model: first-local-model"
+    assert result["message"] == "Setup complete. Active model: first-local-model"
 
 
 def test_setup_returns_failed_message_when_model_service_omits_message() -> None:

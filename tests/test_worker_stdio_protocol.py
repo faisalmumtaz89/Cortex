@@ -681,7 +681,9 @@ def test_worker_command_matrix_covers_all_core_command_paths(tmp_path: Path) -> 
             ("/help", True, "Commands:"),
             ("/status", True, "System status"),
             ("/gpu", True, "GPU status"),
-            ("/models", True, "Active model:"),
+            # /models was consolidated into /model (the TUI picker lists AND
+            # switches); the old name is now an unknown command.
+            ("/models", False, "Unknown command: /models"),
             ("/model", True, "Active model:"),
             ("/model list", True, "Active model:"),
             ("/model ls", True, "Active model:"),
@@ -697,14 +699,11 @@ def test_worker_command_matrix_covers_all_core_command_paths(tmp_path: Path) -> 
             ("/download --force", False, "Unknown option: --force"),
             ("/download user/repo file.gguf extra", False, "Too many arguments"),
             ('/download "unterminated', False, "Invalid download arguments:"),
-            ("/template", False, "No model loaded."),
-            ("/template status", False, "No model loaded."),
-            ("/template list", False, "No model loaded."),
-            ("/template reset", False, "No model loaded."),
-            ("/template nonsense", False, "No model loaded."),
-            ("/finetune", True, "Usage: /finetune status"),
-            ("/finetune train", False, "Interactive fine-tune flow"),
-            ('/finetune "unterminated', False, "Invalid finetune arguments:"),
+            ("/template", False, "No local model loaded."),
+            ("/template status", False, "No local model loaded."),
+            ("/template list", False, "No local model loaded."),
+            ("/template reset", False, "No local model loaded."),
+            ("/template nonsense", False, "No local model loaded."),
             ("/benchmark", False, "No model loaded."),
             ("/benchmark --tokens nope", False, "positive integer"),
             ("/benchmark --prompt", False, "Usage: /benchmark [tokens] [--prompt <text>]"),
@@ -758,17 +757,6 @@ def test_worker_command_matrix_covers_all_core_command_paths(tmp_path: Path) -> 
                     )
 
             next_id += 1
-
-        send(next_id, "command.execute", {"session_id": session_id, "command": "/finetune status"})
-        finetune_response, finetune_events = recv_until(next_id)
-        assert "result" in finetune_response
-        assert isinstance(finetune_response["result"].get("finetune"), dict)
-        assert "mlx_available" in finetune_response["result"]["finetune"]
-        assert any(
-            event["params"]["event_type"] == "system.notice"
-            and "Fine-tuning" in str(event["params"]["payload"].get("message", ""))
-            for event in finetune_events
-        )
     finally:
         process.terminate()
         process.wait(timeout=5)

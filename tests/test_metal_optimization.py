@@ -6,7 +6,6 @@ from pathlib import Path
 
 import mlx.core as mx
 import pytest
-import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -16,7 +15,6 @@ from cortex.metal import (
 )
 from cortex.metal.memory_pool import AllocationStrategy, MemoryPool
 from cortex.metal.mlx_accelerator import MLXAccelerator, MLXConfig
-from cortex.metal.mps_optimizer import MPSConfig, MPSOptimizer
 from cortex.metal.performance_profiler import PerformanceProfiler
 
 
@@ -57,14 +55,12 @@ class TestMemoryPool:
 
     def setup_method(self):
         """Setup test memory pool."""
-        if torch.backends.mps.is_available():
-            self.pool = MemoryPool(
-                pool_size=1024 * 1024 * 100,  # 100MB
-                strategy=AllocationStrategy.UNIFIED,
-                device="mps"
-            )
-        else:
-            pytest.skip("MPS not available")
+        self.pool = MemoryPool(
+            pool_size=1024 * 1024 * 100,  # 100MB
+            strategy=AllocationStrategy.UNIFIED,
+            device="mlx",
+            silent=True,
+        )
 
     def test_memory_allocation(self):
         """Test memory allocation from pool."""
@@ -89,7 +85,8 @@ class TestMemoryPool:
             pool = MemoryPool(
                 pool_size=1024 * 1024 * 10,
                 strategy=strategy,
-                device="mps"
+                device="mlx",
+                silent=True,
             )
 
             tensor = pool.allocate(1024 * 100)
@@ -104,52 +101,11 @@ class TestMemoryPool:
         assert "free_memory" in stats
         assert "fragmentation" in stats
 
-class TestMPSOptimizer:
-    """Test MPS backend optimization."""
+    def test_rejects_non_mlx_device(self):
+        """Only the MLX device is supported."""
+        with pytest.raises(ValueError):
+            MemoryPool(pool_size=1024 * 1024, device="mps", silent=True)
 
-    def setup_method(self):
-        """Setup test MPS optimizer."""
-        if torch.backends.mps.is_available():
-            self.optimizer = MPSOptimizer()
-        else:
-            pytest.skip("MPS not available")
-
-    def test_optimize_model(self):
-        """Test model optimization."""
-        model = torch.nn.Sequential(
-            torch.nn.Linear(100, 50),
-            torch.nn.ReLU(),
-            torch.nn.Linear(50, 10)
-        )
-
-        optimized = self.optimizer.optimize_model(model)
-
-        assert optimized is not None
-        assert next(optimized.parameters()).device.type == "mps"
-
-    def test_fp16_conversion(self):
-        """Test FP16 conversion."""
-        config = MPSConfig(use_fp16=True)
-        optimizer = MPSOptimizer(config)
-
-        model = torch.nn.Linear(10, 10)
-        optimized = optimizer.optimize_model(model)
-
-        assert next(optimized.parameters()).dtype == torch.float16
-
-    def test_channels_last_conversion(self):
-        """Test channels_last memory format."""
-        model = torch.nn.Conv2d(3, 16, 3)
-        optimized = self.optimizer.optimize_model(model)
-
-        assert optimized is not None
-
-    def test_mps_info(self):
-        """Test MPS information retrieval."""
-        info = MPSOptimizer.get_mps_info()
-
-        assert info["available"] is True
-        assert info["built"] is True
 
 class TestMLXAccelerator:
     """Test MLX framework acceleration."""
@@ -249,6 +205,7 @@ class TestPerformanceProfiler:
         assert isinstance(suggestions, list)
         assert len(suggestions) > 0
 
+
 @pytest.mark.integration
 class TestMetalIntegration:
     """Integration tests for Metal optimization components."""
@@ -258,16 +215,14 @@ class TestMetalIntegration:
         if sys.platform != "darwin":
             pytest.skip("Metal only available on macOS")
 
-        # GPU acceleration uses MLX/MPS backends
-
         # Test memory pool
-        if torch.backends.mps.is_available():
-            pool = MemoryPool(
-                pool_size=1024 * 1024 * 100,
-                device="mps"
-            )
-            tensor = pool.allocate(1024 * 1024)
-            assert tensor is not None
+        pool = MemoryPool(
+            pool_size=1024 * 1024 * 100,
+            device="mlx",
+            silent=True,
+        )
+        tensor = pool.allocate(1024 * 1024)
+        assert tensor is not None
 
         # Test performance profiling
         profiler = PerformanceProfiler()

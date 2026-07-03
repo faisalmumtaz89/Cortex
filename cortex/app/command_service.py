@@ -287,9 +287,19 @@ class CommandService:
         return result
 
     def _handle_template(self, args: str) -> Dict[str, object]:
+        active_target = getattr(self.model_service, "active_target", None)
+        if getattr(active_target, "backend", None) == "cloud":
+            label = self.model_service.get_active_model_label()
+            return {
+                "ok": False,
+                "message": (
+                    f"Chat templates apply to local models only; the active model is cloud ({label})."
+                ),
+            }
+
         model_name = (self.model_service.model_manager.current_model or "").strip()
         if not model_name:
-            return {"ok": False, "message": "No model loaded."}
+            return {"ok": False, "message": "No local model loaded."}
 
         tokenizer = self.model_service.model_manager.tokenizers.get(model_name)
         parts = args.strip().split()
@@ -423,58 +433,6 @@ class CommandService:
             "benchmark": payload,
         }
 
-    def _handle_finetune(self, args: str) -> Dict[str, object]:
-        ok, parsed = self._parse_command_args(args)
-        if not ok:
-            return {"ok": False, "message": f"Invalid finetune arguments: {parsed}"}
-        parsed_args = parsed if isinstance(parsed, list) else []
-
-        if not parsed_args or parsed_args[0] in {"help", "--help", "-h"}:
-            return {
-                "ok": True,
-                "message": (
-                    "Usage: /finetune status\n"
-                    "Interactive fine-tune flow is not yet ported to OpenTUI worker mode."
-                ),
-            }
-
-        subcommand = parsed_args[0].lower()
-        if subcommand == "status":
-            from cortex.fine_tuning.mlx_lora_trainer import MLXLoRATrainer
-
-            discover_fn = getattr(
-                self.model_service.model_manager, "discover_available_models", None
-            )
-            local_models = discover_fn() if callable(discover_fn) else []
-            available = bool(MLXLoRATrainer.is_available())
-            current_model = (self.model_service.model_manager.current_model or "").strip()
-
-            payload = {
-                "mlx_available": available,
-                "current_model": current_model or None,
-                "available_local_models": len(local_models),
-                "interactive_worker_support": False,
-            }
-            if available:
-                return {
-                    "ok": True,
-                    "message": "Fine-tuning prerequisites look good. Interactive worker flow is pending migration.",
-                    "finetune": payload,
-                }
-            return {
-                "ok": False,
-                "message": "Fine-tuning is unavailable because the MLX stack is not available in this environment.",
-                "finetune": payload,
-            }
-
-        return {
-            "ok": False,
-            "message": (
-                "Interactive fine-tune flow is not yet ported to OpenTUI worker mode. "
-                "Run `/finetune status` for readiness checks."
-            ),
-        }
-
     def _handle_model_list(self) -> Dict[str, object]:
         models = self.model_service.list_models()
         active = models.get("active_target", {}) if isinstance(models, dict) else {}
@@ -484,7 +442,6 @@ class CommandService:
 
         local_models = self._sorted_local_models(models if isinstance(models, dict) else {})
         lines.append("Local models:")
-        next_index = 1
         if local_models:
             for item in local_models:
                 name = str(item.get("name", "unknown"))
@@ -494,8 +451,7 @@ class CommandService:
                 if bool(item.get("loaded")):
                     tags.append("loaded")
                 suffix = f" ({', '.join(tags)})" if tags else ""
-                lines.append(f"- [{next_index}] {name}{suffix}")
-                next_index += 1
+                lines.append(f"- {name}{suffix}")
         else:
             lines.append("- none")
 
@@ -512,14 +468,14 @@ class CommandService:
                     cloud_tags.append("ready")
                 else:
                     cloud_tags.append("login required")
-                lines.append(f"- [{next_index}] {selector} ({', '.join(cloud_tags)})")
-                next_index += 1
+                lines.append(f"- {selector} ({', '.join(cloud_tags)})")
         else:
             lines.append("- none")
 
         lines.append("")
         lines.append(
-            "Use /model <number> to select from this list, or /model <local-name|provider:model>."
+            "Open the picker with /model, or select directly with "
+            "/model <name> or /model provider:model."
         )
         return {"ok": True, "message": "\n".join(lines), "models": models}
 
@@ -550,94 +506,6 @@ class CommandService:
         cloud_models = [item for item in raw_cloud_models if isinstance(item, dict)]
         return sorted(cloud_models, key=lambda item: cls._cloud_selector(item).lower())
 
-    @classmethod
-    def _build_model_index_entries(cls, models_payload: Dict[str, object]) -> list[Dict[str, str]]:
-        entries: list[Dict[str, str]] = []
-        for item in cls._sorted_local_models(models_payload):
-            name = str(item.get("name", "")).strip()
-            if not name:
-                continue
-            entries.append(
-                {
-                    "backend": "local",
-                    "model_name_or_path": name,
-                }
-            )
-
-        for item in cls._sorted_cloud_models(models_payload):
-            selector = cls._cloud_selector(item)
-            provider = str(item.get("provider", "")).strip()
-            model_id = str(item.get("model_id", "")).strip()
-            if not provider or not model_id:
-                if ":" in selector:
-                    derived_provider, derived_model_id = selector.split(":", 1)
-                    provider = provider or derived_provider.strip()
-                    model_id = model_id or derived_model_id.strip()
-            if not provider or not model_id:
-                continue
-            entries.append(
-                {
-                    "backend": "cloud",
-                    "provider": provider,
-                    "model_id": model_id,
-                }
-            )
-        return entries
-
-    @staticmethod
-    def _parse_numeric_model_selector(selector: str) -> int | None:
-        normalized = selector.strip()
-        if not normalized:
-            return None
-        if normalized.startswith("#"):
-            normalized = normalized[1:].strip()
-        if not normalized or not normalized.isdigit():
-            return None
-        return int(normalized)
-
-    def _resolve_model_index_selector(
-        self, *, selector: str, models_payload: Dict[str, object]
-    ) -> Dict[str, object]:
-        parsed_index = self._parse_numeric_model_selector(selector)
-        if parsed_index is None:
-            return {"ok": False, "message": f"Invalid model index: {selector}"}
-
-        entries = self._build_model_index_entries(models_payload)
-        if parsed_index < 1 or parsed_index > len(entries):
-            return {
-                "ok": False,
-                "message": f"Model index out of range: {selector}. Run /model to list available models.",
-            }
-
-        entry = entries[parsed_index - 1]
-        backend = entry.get("backend", "")
-        if backend == "cloud":
-            provider = str(entry.get("provider", "")).strip()
-            model_id = str(entry.get("model_id", "")).strip()
-            if not provider or not model_id:
-                return {
-                    "ok": False,
-                    "message": f"Model index out of range: {selector}. Run /model to list available models.",
-                }
-            return {
-                "ok": True,
-                "backend": "cloud",
-                "provider": provider,
-                "model_id": model_id,
-            }
-
-        local_model = str(entry.get("model_name_or_path", "")).strip()
-        if not local_model:
-            return {
-                "ok": False,
-                "message": f"Model index out of range: {selector}. Run /model to list available models.",
-            }
-        return {
-            "ok": True,
-            "backend": "local",
-            "model_name_or_path": local_model,
-        }
-
     @staticmethod
     def _extract_local_model_names(models_payload: Dict[str, object]) -> list[str]:
         names: list[str] = []
@@ -657,7 +525,7 @@ class CommandService:
         if not normalized:
             return {
                 "ok": False,
-                "message": "Usage: /model <number|local-name|local-path|provider:model>",
+                "message": "Usage: /model <name | path | provider:model>",
             }
 
         looks_like_path = normalized.startswith(("/", "./", "../", "~"))
@@ -692,7 +560,7 @@ class CommandService:
             ]
             for name in preview:
                 lines.append(f"- {name}")
-            lines.append("Use /model <number> from `/model` list for exact selection.")
+            lines.append("Type the full name, or open the picker with /model.")
             return {"ok": False, "message": "\n".join(lines)}
 
         return {
@@ -731,7 +599,7 @@ class CommandService:
             )
             if "message" not in load_result or not str(load_result.get("message", "")).strip():
                 if bool(load_result.get("ok")):
-                    load_result["message"] = f"Loaded local model: {first_local}"
+                    load_result["message"] = f"Setup complete. Active model: {first_local}"
                 else:
                     load_result["message"] = f"Failed to load local model: {first_local}"
             return load_result
@@ -766,8 +634,8 @@ class CommandService:
             return {
                 "ok": True,
                 "message": (
-                    "Commands: /help /status /gpu /model [/selector] /models /clear /save /login "
-                    "/download /template /finetune /benchmark /setup /quit"
+                    "Commands: /help /status /gpu /model [name | provider:model] /clear /save "
+                    "/login /download /template /benchmark /setup /quit"
                 ),
             }
         if cmd == "/status":
@@ -783,9 +651,9 @@ class CommandService:
             if "message" not in result:
                 path = str(result.get("path", "")).strip()
                 if path:
-                    result["message"] = f"Saved conversation: {path}"
+                    result["message"] = f"Saved conversation: {path}."
             return result
-        if cmd in {"/download", "/template", "/finetune", "/benchmark"}:
+        if cmd in {"/download", "/template", "/benchmark"}:
             if cmd == "/download":
                 return self._handle_download(
                     args,
@@ -796,13 +664,11 @@ class CommandService:
                 return self._handle_template(args)
             if cmd == "/benchmark":
                 return self._handle_benchmark(args)
-            if cmd == "/finetune":
-                return self._handle_finetune(args)
         if cmd == "/setup":
             return self._handle_setup()
-        if cmd == "/models":
-            return self._handle_model_list()
         if cmd == "/model":
+            # The TUI opens its interactive picker for bare /model; this text
+            # list is the headless/worker fallback (also `/model list`).
             if not args or args.lower() in {"list", "ls"}:
                 return self._handle_model_list()
             selector = args.strip()
@@ -820,7 +686,7 @@ class CommandService:
                 except ValueError:
                     return {
                         "ok": False,
-                        "message": "Unsupported cloud provider. Use openai or anthropic.",
+                        "message": "Unsupported cloud provider. Use openai, anthropic, or azure.",
                     }
                 return cast(
                     Dict[str, object],
@@ -830,34 +696,6 @@ class CommandService:
                 )
 
             models = self.model_service.list_models()
-            if self._parse_numeric_model_selector(selector) is not None:
-                indexed_selector = self._resolve_model_index_selector(
-                    selector=selector, models_payload=models
-                )
-                if not bool(indexed_selector.get("ok")):
-                    return {
-                        "ok": False,
-                        "message": str(
-                            indexed_selector.get("message", "Failed to resolve model selector.")
-                        ),
-                    }
-                if str(indexed_selector.get("backend", "")) == "cloud":
-                    provider_name = str(indexed_selector.get("provider", "")).strip()
-                    model_id = str(indexed_selector.get("model_id", "")).strip()
-                    if not provider_name or not model_id:
-                        return {
-                            "ok": False,
-                            "message": f"Model index out of range: {selector}. Run /model to list available models.",
-                        }
-                    return cast(
-                        Dict[str, object],
-                        self.model_service.select_cloud_model(
-                            provider=provider_name, model_id=model_id
-                        ),
-                    )
-                resolved = str(indexed_selector.get("model_name_or_path", "")).strip()
-                return cast(Dict[str, object], self.model_service.select_local_model(resolved))
-
             local_selector = self._resolve_local_model_selector(selector, models_payload=models)
             if not bool(local_selector.get("ok")):
                 return {
@@ -872,7 +710,7 @@ class CommandService:
             if not args:
                 return {
                     "ok": False,
-                    "message": "Usage: /login openai|anthropic <api_key> OR /login huggingface",
+                    "message": "Usage: /login openai|anthropic|azure <api_key> OR /login huggingface",
                 }
             login_parts = args.split(maxsplit=1)
             provider_name = login_parts[0].strip().lower()
@@ -893,7 +731,7 @@ class CommandService:
             except ValueError:
                 return {
                     "ok": False,
-                    "message": "Unsupported provider. Use /login openai, /login anthropic, or /login huggingface.",
+                    "message": "Unsupported provider. Use /login openai, /login anthropic, /login azure, or /login huggingface.",
                 }
 
             if len(login_parts) == 1:

@@ -12,6 +12,7 @@ def format_prompt_with_chat_template(
     template_registry,
     user_input: str,
     include_user: bool = True,
+    system_prompt: str | None = None,
     logger=None,
 ) -> str:
     """Format the prompt with the appropriate chat template for the model."""
@@ -24,6 +25,8 @@ def format_prompt_with_chat_template(
 
     # Build messages list from conversation history
     messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
     if conversation and conversation.messages:
         for msg in conversation.messages[-20:]:
             messages.append({

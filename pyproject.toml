@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cortex-llm"
 version = "1.0.18"
-description = "GPU-Accelerated LLM Terminal for Apple Silicon"
+description = "Terminal AI coding agent for Apple Silicon — local MLX/GGUF models and cloud APIs"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -24,42 +24,31 @@ classifiers = [
     "Environment :: Console",
     "Environment :: GPU",
 ]
-keywords = ["llm", "gpu", "metal", "mps", "apple-silicon", "ai", "machine-learning", "terminal", "mlx", "pytorch"]
+keywords = ["llm", "coding-agent", "gpu", "metal", "apple-silicon", "ai", "terminal", "mlx", "gguf"]
 
-# Core dependencies only
+# Cloud-only core: runs anywhere (Linux containers included).
 dependencies = [
-    # Core ML/AI Libraries
-    "torch>=2.1.0",
-    "mlx>=0.30.4",
-    "mlx-lm>=0.30.5",
-    "transformers>=4.36.0",
-    "safetensors>=0.4.0",
-    "huggingface-hub>=0.19.0",
-    "accelerate>=0.25.0",
-    
-    # Model format support (GGUF is essential)
-    "llama-cpp-python>=0.2.0",
-    
-    # Configuration and CLI
     "pyyaml>=6.0",
     "pydantic>=2.5.0",
-    
-    # Performance and Utilities
     "psutil>=5.9.0",
-    "numpy>=1.24.0",
-    "packaging>=23.0",
-    "requests>=2.31.0",
     "openai>=1.54.0",
     "anthropic>=0.42.0",
     "keyring>=24.3.0",
+    "huggingface-hub>=0.19.0",
 ]
 
 [project.optional-dependencies]
+# Local inference on Apple Silicon (MLX + GGUF)
+local = [
+    "mlx>=0.30.4",
+    "mlx-lm>=0.30.5",
+    "llama-cpp-python>=0.2.0",
+    "numpy>=1.24.0",
+]
+
 # Development tools
 dev = [
     "pytest>=7.4.0",
-    "pytest-asyncio>=0.21.0",
-    "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.8.0",
     "types-PyYAML>=6.0.12.20250915",
@@ -69,12 +58,6 @@ dev = [
 # Optional model format support
 optional = [
     "sentencepiece>=0.1.99",     # For certain tokenizers (needs cmake to build)
-    "auto-gptq>=0.7.0",          # GPTQ quantized models
-    "autoawq>=0.2.0",            # AWQ quantized models
-    "bitsandbytes>=0.41.0",      # 8-bit and 4-bit quantization
-    "optimum>=1.16.0",           # HuggingFace optimization
-    "torchvision>=0.16.0",       # Vision models
-    "torchaudio>=2.1.0",         # Audio models
 ]
 
 [project.scripts]
@@ -86,15 +69,11 @@ Homepage = "https://github.com/faisalmumtaz89/Cortex"
 Documentation = "https://github.com/faisalmumtaz89/Cortex/wiki"
 
 [tool.setuptools]
-packages = ["cortex", "cortex.app", "cortex.protocol", "cortex.cloud", "cortex.cloud.clients", "cortex.metal", "cortex.ui", "cortex.ui_runtime", "cortex.fine_tuning", "cortex.quantization", "cortex.template_registry", "cortex.template_registry.template_profiles", "cortex.template_registry.template_profiles.complex", "cortex.template_registry.template_profiles.standard", "cortex.tooling", "cortex.tooling.builtin"]
+packages = ["cortex", "cortex.app", "cortex.protocol", "cortex.cloud", "cortex.cloud.clients", "cortex.metal", "cortex.ui", "cortex.ui_runtime", "cortex.template_registry", "cortex.template_registry.template_profiles", "cortex.template_registry.template_profiles.complex", "cortex.template_registry.template_profiles.standard", "cortex.tooling", "cortex.tooling.builtin"]
 include-package-data = true
 
 [tool.setuptools.package-data]
 cortex = ["config.yaml", "ui_runtime/bin/*"]
-
-[tool.black]
-line-length = 100
-target-version = ['py311', 'py312']
 
 [tool.ruff]
 line-length = 100
@@ -105,22 +84,14 @@ select = ["E", "F", "I", "N", "W"]
 ignore = ["E501", "N805"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["textual", "textual.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
 module = ["sentencepiece"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["auto_gptq", "awq", "accelerate", "accelerate.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

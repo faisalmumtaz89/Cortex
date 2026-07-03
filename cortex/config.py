@@ -1,5 +1,6 @@
 """Configuration management for Cortex."""
 
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -91,8 +92,6 @@ class ModelConfig(BaseModel):
     supported_quantizations: List[str] = Field(
         default_factory=lambda: ["Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"]
     )
-    auto_quantize: bool = True
-    quantization_cache: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "quantized_models")
 
 
 class CloudConfig(BaseModel):
@@ -103,15 +102,16 @@ class CloudConfig(BaseModel):
     cloud_max_retries: int = Field(default=2, ge=0, le=10)
     cloud_default_openai_model: str = Field(default="gpt-5.1")
     cloud_default_anthropic_model: str = Field(default="claude-sonnet-4-5")
+    cloud_azure_endpoint: str = Field(default="")
 
 
 class ToolsConfig(BaseModel):
     """Tooling runtime configuration."""
 
-    tools_enabled: bool = False
-    tools_profile: Literal["off", "read_only", "patch", "full"] = "off"
-    tools_local_mode: Literal["disabled", "experimental"] = "disabled"
-    tools_max_iterations: int = Field(default=4, ge=1, le=20)
+    tools_enabled: bool = True
+    tools_profile: Literal["off", "read_only", "edit", "full"] = "full"
+    tools_local_mode: Literal["disabled", "experimental"] = "experimental"
+    tools_max_iterations: int = Field(default=25, ge=1, le=100)
     tools_idle_timeout_seconds: int = Field(default=45, ge=1, le=600)
     tools_continue_on_reject: bool = False
 
@@ -200,20 +200,56 @@ class Config:
         self._load_state()
 
     def load(self) -> None:
-        """Load configuration from YAML file."""
-        if not self.config_path.exists():
-            self._use_defaults()
-            return
+        """Load configuration from YAML file plus CORTEX_* env overrides."""
+        if self.config_path.exists():
+            try:
+                with open(self.config_path, 'r') as f:
+                    self._raw_config = yaml.safe_load(f) or {}
+            except Exception as e:
+                print(f"Warning: Failed to load config from {self.config_path}: {e}")
+                self._raw_config = {}
+        else:
+            self._raw_config = {}
 
-        try:
-            with open(self.config_path, 'r') as f:
-                self._raw_config = yaml.safe_load(f) or {}
-        except Exception as e:
-            print(f"Warning: Failed to load config from {self.config_path}: {e}")
+        self._raw_config.update(self._env_overrides())
+        if not self._raw_config:
             self._use_defaults()
             return
 
         self._parse_config()
+
+    @staticmethod
+    def _known_keys() -> set:
+        """All flat config keys across section models."""
+        sections: List[type[BaseModel]] = [
+            GPUConfig, MemoryConfig, PerformanceConfig, InferenceConfig,
+            ModelConfig, CloudConfig, ToolsConfig, UIConfig, LoggingConfig,
+            ConversationConfig, SystemConfig, DeveloperConfig, PathsConfig,
+        ]
+        keys: set = set()
+        for section in sections:
+            keys.update(section.model_fields.keys())
+        return keys
+
+    def _env_overrides(self) -> Dict[str, Any]:
+        """Read CORTEX_<KEY> environment overrides for known config keys.
+
+        Example: CORTEX_TOOLS_MAX_ITERATIONS=80 overrides tools_max_iterations.
+        Unknown CORTEX_* variables (e.g. CORTEX_WORKER_MODE) are ignored.
+        """
+        known = self._known_keys()
+        overrides: Dict[str, Any] = {}
+        for name, raw in os.environ.items():
+            if not name.startswith("CORTEX_"):
+                continue
+            key = name[len("CORTEX_"):].lower()
+            if key not in known:
+                continue
+            try:
+                overrides[key] = yaml.safe_load(raw)
+            except Exception:
+                overrides[key] = raw
+        return overrides
 
     def _use_defaults(self) -> None:
         """Use default configuration values."""
@@ -266,7 +302,7 @@ class Config:
                 if k in ["model_path", "default_model", "last_used_model", "model_cache_dir",
                         "preload_models", "max_loaded_models", "lazy_load",
                         "verify_gpu_compatibility", "default_quantization",
-                        "supported_quantizations", "auto_quantize", "quantization_cache"]
+                        "supported_quantizations"]
             }))
 
             self.cloud = CloudConfig(**self._get_section({
@@ -277,6 +313,7 @@ class Config:
                     "cloud_max_retries",
                     "cloud_default_openai_model",
                     "cloud_default_anthropic_model",
+                    "cloud_azure_endpoint",
                 ]
             }))
 
@@ -357,6 +394,7 @@ class Config:
                 "readonly": "read_only",
                 "read-only": "read_only",
                 "true": "read_only",
+                "patch": "edit",
             }
             data["tools_profile"] = aliases.get(normalized, normalized)
 

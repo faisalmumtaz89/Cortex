@@ -66,14 +66,24 @@ class _WorkerToolingBridge:
             return PermissionDecision.REJECT
         return self.permission_service.ask(session_id=session_id, request=request, emit_event=emitter)
 
-    def _format_prompt_with_chat_template(self, user_input: str, include_user: bool = True) -> str:
+    def _format_prompt_with_chat_template(
+        self,
+        user_input: str,
+        include_user: bool = True,
+        system_prompt: Optional[str] = None,
+    ) -> str:
         return format_prompt_with_chat_template(
             conversation_manager=self.conversation_manager,
             model_manager=self.model_manager,
             template_registry=self.template_registry,
             user_input=user_input,
             include_user=include_user,
+            system_prompt=system_prompt,
         )
+
+
+class TurnInterruptedError(RuntimeError):
+    """Raised inside a running turn when the user requests an interrupt."""
 
 
 class SessionService:
@@ -94,7 +104,17 @@ class SessionService:
         self.model_service = model_service
         self.tooling_bridge = tooling_bridge
         self._session_to_conversation: Dict[str, str] = {}
+        self._interrupts: Dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+
+    def request_interrupt(self, session_id: str) -> bool:
+        """Signal the session's active turn to stop. True if a turn was live."""
+        with self._lock:
+            event = self._interrupts.get(session_id)
+        if event is None:
+            return False
+        event.set()
+        return True
 
     @staticmethod
     def _now_ms() -> int:
@@ -180,6 +200,10 @@ class SessionService:
         active_model_label = self.model_service.get_active_model_label()
         turn_started_ms = self._now_ms()
 
+        interrupt_event = threading.Event()
+        with self._lock:
+            self._interrupts[session_id] = interrupt_event
+
         user_message = self.conversation_manager.add_message(
             MessageRole.USER,
             user_input,
@@ -222,6 +246,8 @@ class SessionService:
         )
 
         def on_event(event: ModelEvent) -> None:
+            if interrupt_event.is_set():
+                raise TurnInterruptedError()
             if isinstance(event, TextDeltaEvent):
                 delta = event.delta or ""
                 if not delta:
@@ -323,6 +349,48 @@ class SessionService:
                     on_wait=on_wait,
                     on_retry=on_retry,
                 )
+            except TurnInterruptedError:
+                completed_ms = self._now_ms()
+                partial_text = "".join(assistant_chunks)
+                assistant_message = self.conversation_manager.add_message(
+                    MessageRole.ASSISTANT,
+                    partial_text,
+                    conversation_id=conversation.conversation_id,
+                    message_id=assistant_message_id,
+                )
+                emit_event(
+                    session_id=session_id,
+                    event_type="message.updated",
+                    payload={
+                        "message_id": assistant_message.message_id,
+                        "role": "assistant",
+                        "content": partial_text,
+                        "parts": [],
+                        "final": True,
+                        "interrupted": True,
+                        "created_ts_ms": assistant_started_ms,
+                        "completed_ts_ms": completed_ms,
+                        "elapsed_ms": max(1, completed_ms - assistant_started_ms),
+                        "parent_id": user_message.message_id,
+                        "mode": "chat",
+                        "model_label": active_model_label,
+                    },
+                )
+                emit_event(
+                    session_id=session_id,
+                    event_type="session.status",
+                    payload={"status": "idle", "interrupted": True},
+                )
+                return {
+                    "session_id": session_id,
+                    "assistant_message_id": assistant_message_id,
+                    "assistant_text": partial_text,
+                    "token_count": 0,
+                    "elapsed_seconds": max(0.001, (completed_ms - assistant_started_ms) / 1000),
+                    "active_model_label": active_model_label,
+                    "ok": True,
+                    "interrupted": True,
+                }
             except Exception as exc:
                 completed_ms = self._now_ms()
                 partial_text = "".join(assistant_chunks)
@@ -365,6 +433,8 @@ class SessionService:
                 }
         finally:
             self.tooling_bridge.unbind_turn()
+            with self._lock:
+                self._interrupts.pop(session_id, None)
 
         final_text = turn_result.text or "".join(assistant_chunks)
         assistant_message = self.conversation_manager.add_message(

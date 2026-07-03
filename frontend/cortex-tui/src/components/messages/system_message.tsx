@@ -1,6 +1,20 @@
 import type { DownloadProgressRecord, MessageRecord } from "../../context/store"
 import { UI_PALETTE } from "../ui_palette"
 
+const SPINE_BORDER = {
+  topLeft: "",
+  bottomLeft: "",
+  vertical: "┃",
+  topRight: "",
+  bottomRight: "",
+  horizontal: " ",
+  bottomT: "",
+  topT: "",
+  cross: "",
+  leftT: "",
+  rightT: "",
+}
+
 function formatBytes(value: number | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return "0 B"
@@ -133,25 +147,26 @@ export function SystemMessage(props: { message: MessageRecord; index: number }) 
     return <></>
   }
 
+  // Quiet by design: a dim spine + muted text on the shared rail, no "System"
+  // label, no filled card. System notices should recede, not compete.
   return (
     <box
       flexDirection="column"
+      flexShrink={0}
       marginTop={props.index === 0 ? 0 : 1}
       border={["left"]}
       borderColor={UI_PALETTE.textMuted}
-      paddingLeft={2}
-      paddingTop={1}
-      paddingBottom={1}
-      backgroundColor={UI_PALETTE.panel}
+      customBorderChars={SPINE_BORDER}
     >
-      <text fg={UI_PALETTE.textMuted}>System</text>
-      {showPrimaryContent && <text fg={UI_PALETTE.textMuted}>{props.message.content}</text>}
-      {!showPrimaryContent && terminalFallbackMessage && (
-        <text fg={UI_PALETTE.textMuted}>{terminalFallbackMessage}</text>
-      )}
-      {showLiveProgress && progress && <text fg={UI_PALETTE.textMuted}>{progressHeadline(progress)}</text>}
-      {showLiveProgress && progress && <text fg={UI_PALETTE.textMuted}>{progressDetail(progress)}</text>}
-      {showLiveProgress && footer && <text fg={UI_PALETTE.textMuted}>{footer}</text>}
+      <box flexShrink={0} paddingLeft={2}>
+        {showPrimaryContent && <text fg={UI_PALETTE.textMuted}>{props.message.content}</text>}
+        {!showPrimaryContent && terminalFallbackMessage && (
+          <text fg={UI_PALETTE.textMuted}>{terminalFallbackMessage}</text>
+        )}
+        {showLiveProgress && progress && <text fg={UI_PALETTE.textMuted}>{progressHeadline(progress)}</text>}
+        {showLiveProgress && progress && <text fg={UI_PALETTE.textMuted}>{progressDetail(progress)}</text>}
+        {showLiveProgress && footer && <text fg={UI_PALETTE.textMuted}>{footer}</text>}
+      </box>
     </box>
   )
 }

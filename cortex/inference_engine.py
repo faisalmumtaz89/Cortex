@@ -1,9 +1,10 @@
 """GPU-only inference engine for Cortex."""
 # ruff: noqa: E402
 
+from __future__ import annotations
+
 import asyncio
 import logging
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -15,28 +16,35 @@ from typing import Any, AsyncGenerator, Callable, Dict, Generator, Iterator, Lis
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-import mlx.core as mx
-import torch
-
-# Import MLX LM functions safely
-mlx_generate: Optional[Callable[..., str]]
-mlx_stream_generate: Optional[Callable[..., Generator[Any, None, None]]]
+# Local inference is optional: without MLX (e.g. Linux containers) this module
+# still imports so GenerationRequest and cloud-only turns keep working.
+mlx_generate: Optional[Callable[..., str]] = None
+mlx_stream_generate: Optional[Callable[..., Generator[Any, None, None]]] = None
 try:
-    from mlx_lm import generate as mlx_generate
-    from mlx_lm import stream_generate as mlx_stream_generate
-except ImportError:
-    mlx_generate = None
-    mlx_stream_generate = None
-from cortex.metal.mlx_compat import patch_mlx_lm_device_info
+    import mlx.core as mx
 
-patch_mlx_lm_device_info()
+    MLX_AVAILABLE = True
+except ImportError:
+    mx = None  # type: ignore[assignment]
+    MLX_AVAILABLE = False
+
+if MLX_AVAILABLE:
+    try:
+        from mlx_lm import generate as mlx_generate
+        from mlx_lm import stream_generate as mlx_stream_generate
+    except ImportError:
+        mlx_generate = None
+        mlx_stream_generate = None
+    from cortex.metal.mlx_compat import patch_mlx_lm_device_info
+
+    patch_mlx_lm_device_info()
+
+    from cortex.metal.memory_pool import AllocationStrategy, MemoryPool
+    from cortex.metal.mlx_accelerator import MLXAccelerator, MLXConfig
 
 from cortex.config import Config
-from cortex.metal.memory_pool import AllocationStrategy, MemoryPool
-from cortex.metal.mlx_accelerator import MLXAccelerator, MLXConfig
-from cortex.metal.mps_optimizer import MPSConfig, MPSOptimizer
 from cortex.metal.performance_profiler import PerformanceProfiler
-from cortex.model_manager import ModelFormat, ModelManager
+from cortex.model_manager import MLX_REQUIRED_MESSAGE, ModelFormat, ModelManager
 from cortex.tooling.types import FinishEvent, TextDeltaEvent
 
 
@@ -147,6 +155,9 @@ class InferenceEngine:
 
     def __init__(self, config: Config, model_manager: ModelManager):
         """Initialize inference engine."""
+        if not MLX_AVAILABLE:
+            raise RuntimeError(MLX_REQUIRED_MESSAGE)
+
         self.config = config
         self.model_manager = model_manager
         self.status = InferenceStatus.IDLE
@@ -156,7 +167,6 @@ class InferenceEngine:
 
         # Initialize Metal optimizations
         self.memory_pool: Optional[MemoryPool] = None
-        self.mps_optimizer: Optional[MPSOptimizer] = None
         self.mlx_accelerator: Optional[MLXAccelerator] = None
         self.profiler = PerformanceProfiler(sample_interval=0.1)
 
@@ -165,16 +175,10 @@ class InferenceEngine:
 
     def _ensure_gpu_backend(self) -> None:
         """Ensure GPU backend is available."""
-        if not torch.backends.mps.is_available():
-            print("❌ MPS backend not available. GPU acceleration required.")
-            sys.exit(1)
-
         try:
             mx.default_device()
-        except Exception as e:
-            print(f"❌ MLX not available: {e}")
-            print("GPU acceleration via MLX is required.")
-            sys.exit(1)
+        except Exception as exc:
+            raise RuntimeError(f"MLX GPU backend unavailable: {exc}") from exc
 
     def _initialize_metal_optimizations(self) -> None:
         """Initialize Metal-specific optimizations."""
@@ -184,23 +188,13 @@ class InferenceEngine:
             self.memory_pool = MemoryPool(
                 pool_size=None,  # Will auto-size based on available memory
                 strategy=AllocationStrategy.UNIFIED,
-                device="mps" if torch.backends.mps.is_available() else "mlx",
+                device="mlx",
                 auto_size=True  # Enable auto-sizing
             )
 
             # Share the pool with model manager to avoid duplication
             if hasattr(self.model_manager, 'memory_pool') and self.model_manager.memory_pool is None:
                 self.model_manager.memory_pool = self.memory_pool
-
-        # Initialize MPS optimizer
-        if torch.backends.mps.is_available():
-            mps_config = MPSConfig(
-                use_fp16=True,
-                use_channels_last=True,
-                optimize_memory=True,
-                max_batch_size=self.config.performance.max_batch_size
-            )
-            self.mps_optimizer = MPSOptimizer(mps_config)
 
         # Initialize MLX accelerator with AMX and advanced features
         try:
@@ -217,12 +211,10 @@ class InferenceEngine:
                 quantization_bits=4
             )
             self.mlx_accelerator = MLXAccelerator(mlx_config)
-            print("✓ MLX accelerator initialized with AMX support")
+            logger.info("MLX accelerator initialized with AMX support")
         except Exception as e:
-            print(f"Warning: MLX accelerator initialization failed: {e}")
+            logger.warning(f"MLX accelerator initialization failed: {e}")
             self.mlx_accelerator = None
-
-        # GPU acceleration handled by MLX and MPS backends
 
     def generate(
         self,
@@ -260,17 +252,13 @@ class InferenceEngine:
 
                 if model_info.format == ModelFormat.MLX:
                     yield from self._generate_mlx(model, tokenizer, request)
-                elif model_info.format == ModelFormat.PYTORCH:
-                    yield from self._generate_pytorch(model, tokenizer, request)
-                elif model_info.format == ModelFormat.SAFETENSORS:
-                    yield from self._generate_safetensors(model, tokenizer, request)
-                elif model_info.format == ModelFormat.QUANTIZED:
-                    # Quantized models are loaded as PyTorch-compatible modules
-                    yield from self._generate_pytorch(model, tokenizer, request)
                 elif model_info.format == ModelFormat.GGUF:
                     yield from self._generate_gguf(model, tokenizer, request)
                 else:
-                    raise RuntimeError(f"Unsupported format: {model_info.format}")
+                    raise RuntimeError(
+                        f"Unsupported format: {model_info.format}. "
+                        "Only MLX and GGUF models are supported."
+                    )
 
                 if self.current_metrics is None:
                     return GenerationMetrics(
@@ -491,167 +479,6 @@ class InferenceEngine:
             self.profiler.stop_profiling()
             raise e
 
-    def _generate_pytorch(
-        self,
-        model: Any,
-        tokenizer: Any,
-        request: GenerationRequest
-    ) -> Generator[str, None, None]:
-        """Generate using PyTorch model on MPS with Metal optimizations."""
-        stop_sequences = request.stop_sequences or []
-        # Apply MPS optimizations if available
-        if self.mps_optimizer:
-            model = self.mps_optimizer.optimize_model(model)
-
-        # Start profiling
-        self.profiler.start_profiling("pytorch_generation", {
-            "model_type": "pytorch",
-            "max_tokens": request.max_tokens
-        })
-
-        start_time = time.time()
-        tokens_generated = 0
-        first_token_time = None
-        last_metrics_update = time.time()
-
-        try:
-            # Use the model's device when available (quantized models may be CPU-only on macOS)
-            device = None
-            try:
-                first_param = next(model.parameters())
-                device = first_param.device
-            except Exception:
-                device = None
-
-            if device is None or str(device) == "meta":
-                device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-            elif device.type == "mps" and not torch.backends.mps.is_available():
-                device = torch.device("cpu")
-
-            inputs = tokenizer(request.prompt, return_tensors="pt").to(device)
-
-            generation_config = {
-                'max_new_tokens': request.max_tokens,
-                'temperature': request.temperature,
-                'top_p': request.top_p,
-                'top_k': request.top_k,
-                'repetition_penalty': request.repetition_penalty,
-                'do_sample': request.temperature > 0,
-                'pad_token_id': tokenizer.pad_token_id,
-                'eos_token_id': tokenizer.eos_token_id,
-            }
-
-            if request.seed is not None and request.seed >= 0:
-                torch.manual_seed(request.seed)
-
-            with torch.no_grad():
-                if request.stream:
-                    from transformers import TextIteratorStreamer
-
-                    normalizer = StreamDeltaNormalizer()
-                    streamer = TextIteratorStreamer(
-                        tokenizer,
-                        skip_prompt=True,
-                        skip_special_tokens=True
-                    )
-
-                    generation_kwargs = dict(
-                        inputs,
-                        streamer=streamer,
-                        **generation_config
-                    )
-
-                    thread = threading.Thread(
-                        target=model.generate,
-                        kwargs=generation_kwargs
-                    )
-                    thread.start()
-
-                    for token in streamer:
-                        if self._cancel_event.is_set():
-                            self.status = InferenceStatus.CANCELLED
-                            break
-
-                        delta = normalizer.normalize(token)
-                        if not delta:
-                            continue
-
-                        if first_token_time is None:
-                            first_token_time = time.time() - start_time
-
-                        tokens_generated += 1
-
-                        # Update metrics less frequently to reduce overhead
-                        # Only update every 50 tokens or 1 second for better performance
-                        current_time = time.time()
-                        if current_time - last_metrics_update > 1.0 or tokens_generated % 50 == 0:
-                            elapsed_time = current_time - start_time
-
-                            # Skip expensive GPU queries during generation for better performance
-                            # These will be calculated once at the end
-                            self.current_metrics = GenerationMetrics(
-                                tokens_generated=tokens_generated,
-                                time_elapsed=elapsed_time,
-                                tokens_per_second=tokens_generated / elapsed_time if elapsed_time > 0 else 0,
-                                gpu_utilization=0.0,  # Skip during generation
-                                memory_used_gb=0.0,   # Skip during generation
-                                first_token_latency=first_token_time or 0
-                            )
-                            last_metrics_update = current_time
-
-                        yield delta
-
-                        if any(stop in token for stop in stop_sequences):
-                            break
-
-                    thread.join()
-
-                else:
-                    outputs = model.generate(
-                        **inputs,
-                        **generation_config
-                    )
-
-                    generated_text = tokenizer.decode(
-                        outputs[0][inputs['input_ids'].shape[1]:],
-                        skip_special_tokens=True
-                    )
-
-                    tokens_generated = outputs.shape[1] - inputs['input_ids'].shape[1]
-                    first_token_time = (time.time() - start_time) / tokens_generated if tokens_generated > 0 else 0
-
-                    yield generated_text
-
-            elapsed_time = time.time() - start_time
-
-            # Stop profiling and get final results
-            profile_result = self.profiler.stop_profiling()
-
-            # Update final metrics
-            self.current_metrics = GenerationMetrics(
-                tokens_generated=tokens_generated,
-                time_elapsed=elapsed_time,
-                tokens_per_second=tokens_generated / elapsed_time if elapsed_time > 0 else 0,
-                gpu_utilization=profile_result.gpu_utilization,
-                memory_used_gb=profile_result.memory_used_mb / 1024,
-                first_token_latency=first_token_time or 0
-            )
-
-        except Exception as e:
-            self.status = InferenceStatus.ERROR
-            self.profiler.stop_profiling()
-            raise e
-
-    def _generate_safetensors(
-        self,
-        model: Any,
-        tokenizer: Any,
-        request: GenerationRequest
-    ) -> Generator[str, None, None]:
-        """Generate using SafeTensors model (loaded as PyTorch) on MPS."""
-        # SafeTensors models are loaded as PyTorch models, so use the same generation logic
-        yield from self._generate_pytorch(model, tokenizer, request)
-
     def _generate_gguf(
         self,
         model: Any,
@@ -783,10 +610,8 @@ class InferenceEngine:
     def _get_memory_usage(self) -> float:
         """Get current GPU memory usage in GB."""
         try:
-            if torch.backends.mps.is_available():
-                allocated = torch.mps.current_allocated_memory()
-                return allocated / (1024**3)
-            return 0.0
+            active = mx.get_active_memory()
+            return active / (1024**3)
         except Exception:
             return 0.0
 

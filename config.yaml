@@ -1,90 +1,27 @@
-compute_backend: metal
-force_gpu: true
-metal_performance_shaders: true
-mlx_backend: true
-gpu_memory_fraction: 0.9
-gpu_cores: 16
-metal_api_version: 3
-shader_cache: ~/.cortex/metal_shaders
-compile_shaders_on_start: true
-gpu_optimization_level: maximum
-unified_memory: true
-max_gpu_memory: auto
-cpu_offload: false
-memory_pool_size: auto
-kv_cache_size: 4GB
-activation_memory: 2GB
-batch_size: 1
-max_batch_size: 4
-use_flash_attention: true
-use_fused_ops: true
-num_threads: 4
-context_length: 8192
-sliding_window_size: 4096
+# Cortex configuration.
+# Every key is optional; anything omitted falls back to the built-in defaults
+# (cortex/config.py). This file is read from the directory Cortex starts in.
+
+# Inference
 temperature: 0.7
 top_p: 0.95
-top_k: 40
-repetition_penalty: 1.1
 max_tokens: 4096
-stream_output: true
-seed: -1
+context_length: 8192
+
+# Local models
 model_path: ~/models
-default_model: ''
-last_used_model: ''
-model_cache_dir: ~/.cortex/models
-preload_models: []
-max_loaded_models: 3
-lazy_load: false
-verify_gpu_compatibility: true
-default_quantization: Q4_K_M
-supported_quantizations:
-- Q4_K_M
-- Q5_K_M
-- Q6_K
-- Q8_0
-auto_quantize: true
-quantization_cache: ~/.cortex/quantized_models
-cloud_enabled: true
-cloud_timeout_seconds: 60
-cloud_max_retries: 2
+
+# Cloud models
 cloud_default_openai_model: gpt-5.1
 cloud_default_anthropic_model: claude-sonnet-4-5
-tools_enabled: false
-tools_profile: off
-tools_local_mode: disabled
-tools_max_iterations: 4
-tools_idle_timeout_seconds: 45
-tools_continue_on_reject: false
-ui_theme: default
-syntax_highlighting: true
-markdown_rendering: true
-show_performance_metrics: true
-show_gpu_utilization: true
-auto_scroll: true
-copy_on_select: true
-mouse_support: true
+# cloud_azure_endpoint: https://<resource>.cognitiveservices.azure.com
+
+# Agent tooling
+tools_enabled: true
+tools_profile: full          # off | read_only | edit | full
+tools_local_mode: experimental
+tools_max_iterations: 25
+
+# Logging
 log_level: INFO
 log_file: ~/.cortex/cortex.log
-log_rotation: daily
-max_log_size: 100MB
-performance_logging: true
-gpu_metrics_interval: 1000
-auto_save: true
-save_format: json
-save_directory: ~/.cortex/conversations
-max_conversation_history: 100
-enable_branching: true
-startup_checks:
-- verify_metal_support
-- check_gpu_memory
-- validate_models
-- compile_shaders
-shutdown_timeout: 5
-crash_recovery: true
-auto_update_check: true
-debug_mode: false
-profile_inference: false
-metal_capture: false
-verbose_gpu_logs: false
-templates_dir: ~/.cortex/templates
-plugins_dir: ~/.cortex/plugins

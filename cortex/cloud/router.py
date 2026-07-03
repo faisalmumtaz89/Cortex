@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import threading
 import uuid
 from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from cortex.cloud.clients import AnthropicClient, OpenAIClient
-from cortex.cloud.credentials import CloudCredentialStore
+from cortex.cloud.credentials import ENV_KEY_MAP, CloudCredentialStore
 from cortex.cloud.types import CloudModelRef, CloudProvider
 from cortex.tooling.types import FinishEvent, TextDeltaEvent
 
@@ -35,10 +36,36 @@ class CloudRouter:
         retries = int(getattr(cloud_cfg, "cloud_max_retries", 2))
         return max(0, retries)
 
+    def _azure_endpoint(self) -> str:
+        """Azure resource endpoint: env, then config, then persisted state."""
+        endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip()
+        if not endpoint:
+            cloud_cfg = getattr(self.config, "cloud", None)
+            endpoint = str(getattr(cloud_cfg, "cloud_azure_endpoint", "") or "").strip()
+        if not endpoint:
+            get_state = getattr(self.config, "get_state_value", None)
+            if callable(get_state):
+                endpoint = str(get_state("azure_endpoint", "") or "").strip()
+        return endpoint.rstrip("/")
+
     def _build_client(self, provider: CloudProvider, api_key: str):
         timeout_seconds = self._timeout_seconds()
         if provider == CloudProvider.OPENAI:
             return OpenAIClient(api_key=api_key, timeout_seconds=timeout_seconds)
+        if provider == CloudProvider.AZURE:
+            endpoint = self._azure_endpoint()
+            if not endpoint:
+                raise RuntimeError(
+                    "Azure OpenAI endpoint not configured. Set AZURE_OPENAI_ENDPOINT "
+                    "or cloud_azure_endpoint in config.yaml."
+                )
+            # Azure's OpenAI-compatible v1 surface accepts Bearer auth, so the
+            # standard OpenAI client works with a rebased URL.
+            return OpenAIClient(
+                api_key=api_key,
+                timeout_seconds=timeout_seconds,
+                base_url=f"{endpoint}/openai/v1/",
+            )
         if provider == CloudProvider.ANTHROPIC:
             return AnthropicClient(api_key=api_key, timeout_seconds=timeout_seconds)
         raise ValueError(f"Unsupported cloud provider: {provider}")
@@ -143,16 +170,33 @@ class CloudRouter:
         tools=None,
         tool_choice: str = "auto",
         tool_executor=None,
+        max_tool_iterations: int = 25,
         on_wait: Optional[Callable[[int, int, int], None]] = None,
         on_retry: Optional[Callable[[int, int, str], None]] = None,
     ):
         """Yield normalized events from selected cloud provider."""
+        script_path = os.environ.get("CORTEX_SCRIPTED_MODEL", "").strip()
+        if script_path:
+            # Deterministic scripted backend for end-to-end runtime validation.
+            from cortex.cloud.clients.scripted_client import ScriptedClient
+
+            client = ScriptedClient(script_path)
+            yield from client.stream_events(
+                model_id=model_ref.model_id,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                tools=tools,
+                tool_choice=tool_choice,
+                tool_executor=tool_executor,
+                max_tool_iterations=max_tool_iterations,
+            )
+            return
+
         api_key, source = self.credential_store.get_api_key_with_source(model_ref.provider)
         if not api_key:
-            env_name = {
-                CloudProvider.OPENAI: "OPENAI_API_KEY",
-                CloudProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
-            }[model_ref.provider]
+            env_name = ENV_KEY_MAP[model_ref.provider]
             raise RuntimeError(
                 f"No API key configured for {model_ref.provider.value}. "
                 f"Run /login {model_ref.provider.value} or set {env_name}."
@@ -190,6 +234,7 @@ class CloudRouter:
                         tools=tools,
                         tool_choice=tool_choice,
                         tool_executor=tool_executor,
+                        max_tool_iterations=max_tool_iterations,
                     )
                 else:
                     # Backward compatibility for older test doubles.
