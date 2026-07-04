@@ -66,7 +66,14 @@ def format_key_value_block(*, title: str, values: Mapping[str, Any], include_emp
 
 
 def format_status_summary(status: Mapping[str, Any]) -> str:
-    return format_key_value_block(title="System status", values=status)
+    # Render the model with its origin ("local · X" / "cloud · Y") — the same
+    # wording every surface uses — instead of a separate Backend line.
+    values = dict(status)
+    backend = str(values.pop("backend", "") or "").strip()
+    label = str(values.get("active_model", "") or "").strip()
+    if backend and label and label != "No model loaded":
+        values["active_model"] = f"{backend} · {label}"
+    return format_key_value_block(title="System status", values=values)
 
 
 def format_gpu_status(status: Mapping[str, Any]) -> str:

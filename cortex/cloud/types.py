@@ -13,6 +13,9 @@ class CloudProvider(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     AZURE = "azure"
+    # Internal provider for the managed local Lumen server (OpenAI-compatible).
+    # Not a login target and never listed in the cloud catalog.
+    LUMEN = "lumen"
 
     @classmethod
     def from_value(cls, value: Union[str, "CloudProvider"]) -> "CloudProvider":

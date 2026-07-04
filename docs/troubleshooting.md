@@ -19,7 +19,6 @@ Cortex uses a split runtime:
 | `/download` | Download a model from HuggingFace |
 | `/setup` | Load the first local model if none is active |
 | `/benchmark` | Run performance benchmark (local models) |
-| `/template` | Configure chat template for the current local model |
 | `/login` | Manage OpenAI/Anthropic/HuggingFace credentials |
 | `/save` | Save current conversation |
 | `/clear` | Clear conversation history |
@@ -123,15 +122,14 @@ curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.
 
 If you see "No model loaded" after starting Cortex:
 
-1. `/download mlx-community/Nanbeige4.1-3B-bf16 --load` to fetch and load a local model.
+1. `/download qwen3-5-9b:q4_0` to fetch a local model, then `/model qwen3-5-9b:q4_0`.
 2. `/model` to list and load models that are already downloaded.
 3. Or select a cloud model: `/model openai:gpt-5.1` or `/model anthropic:claude-sonnet-4-5` (configure keys with `/login`).
 
-For gated HuggingFace models (like Llama), run `huggingface-cli login` in your shell and check with `/login huggingface`.
 
 ### Model format not supported
 
-Cortex loads **MLX** and **GGUF** models only. Plain HuggingFace safetensors models are converted to MLX automatically on load. Bare PyTorch checkpoints and GPTQ/AWQ-quantized models are not supported — download an `mlx-community` variant or a GGUF file instead.
+Local models run exclusively through the Lumen engine. Only Lumen-supported models load (`/model` lists them); download with `/download <model:quant>`. Server logs: `~/.cortex/lumen-server.log`.
 
 ### Model too large for available memory
 
@@ -166,7 +164,6 @@ Lines like `ggml_metal_init: skipping kernel_xxx_bf16 (not supported)` are expec
 
 ### Poor response quality
 
-- Ensure the right chat template with `/template` (local models).
 - Try a larger model, or a cloud model for harder tasks.
 - Tune flat keys in `config.yaml` (`temperature`, `top_p`, `repetition_penalty`).
 
@@ -228,7 +225,7 @@ chmod -R 755 ~/.cortex/
 | "No model loaded" | No model selected | `/model`, `/setup`, or `/download ... --load` |
 | "Missing API key for openai/anthropic" | Cloud model selected without credentials | `/login openai <key>` or `/login anthropic <key>` |
 | "Failed to load model" | Corrupted, unsupported format, or insufficient memory | Check `/gpu`, use an MLX or GGUF variant |
-| "Unsupported model format" | PyTorch/GPTQ/AWQ model | Use an `mlx-community` or GGUF variant |
+| "Not downloaded" (local model) | Model not in the Lumen cache | `/download <model:quant>` first |
 | "MLX not available" | MLX not installed or not on Apple Silicon | `pip install "mlx>=0.30.4" "mlx-lm>=0.30.5" --upgrade` |
 | "Permission denied by rule" / rejected tool calls | Headless without `--full-auto`, or a persisted deny rule | Pass `--full-auto`, or edit `~/.cortex/tool_permissions.yaml` |
 | "Unknown command" | Typo in slash command | `/help` |

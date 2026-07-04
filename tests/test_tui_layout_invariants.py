@@ -133,17 +133,24 @@ def test_message_components_render_panel_metadata_rows() -> None:
     assert "modeLabel()" in assistant_source
     assert "modelLabel()" in assistant_source
     assert "formatDuration(props.message.elapsedMs)" in assistant_source
-    assert (
-        "const showLiveProgress = hasProgress && !props.message.final && !isTerminalPhase"
-        in system_source
-    )
-    assert "Download complete:" in system_source
-    assert "100.0% (finalizing)" in system_source
-    assert 'phase !== "finalizing" && !transferComplete' in system_source
-    assert (
-        "{showLiveProgress && progress && <text fg={UI_PALETTE.textMuted}>{progressHeadline(progress)}</text>}"
-        in system_source
-    )
+    # Live/resolved gating MUST be reactive accessors: plain component-body
+    # consts run once in Solid and froze the indicator forever (the stale
+    # "Loading… 58s" row that outlived its own completion).
+    assert "const showLiveProgress = () =>" in system_source
+    assert "const progress = () =>" in system_source
+    # Minimal one-line indicators: spinner + "Loading X…" — no GPU verbiage,
+    # no duration coaching, no elapsed timers; downloads show bytes only.
+    assert "Loading ${progress.repoID}…" in system_source
+    assert "into GPU memory" not in system_source
+    assert "large models" not in system_source
+    assert "elapsedSeconds" not in system_source
+    assert "Downloading ${progress.repoID}" in system_source
+    assert 'progress()?.kind === "model-load"' in system_source
+    assert 'progress()?.kind === "download"' in system_source
+    # The fake-fullness artifacts are gone: no empty progress bar, no
+    # hardcoded "N downloaded" byte line.
+    assert "progressBar(" not in system_source
+    assert "downloaded`" not in system_source
 
 
 def test_store_merge_logic_protects_streamed_content_and_dedupes_per_message() -> None:
@@ -229,3 +236,28 @@ expect eof
     transcript = f"{completed.stdout}\n{completed.stderr}"
     assert completed.returncode == 0
     assert "Traceback" not in transcript
+
+
+def test_model_picker_tabs_and_origin_labels() -> None:
+    """Picker separates origins into Local/Cloud TABS (one origin visible at a
+    time); Tab and arrow keys switch; the session header and turn footer keep
+    the origin wording."""
+    session = _read("frontend/cortex-tui/src/routes/session.tsx")
+    assert 'labels: ["Local", "Cloud"]' in session
+    assert "modelPickerTab" in session
+    assert "switchPickerTab" in session
+    # Downloaded local rows carry their on-disk size next to the name.
+    assert "entry.size" in session
+    # Opening tab follows the active backend ("local · x" / "cloud · y").
+    assert "store.state.activeBackend" in session
+    assert "stepPickerIndex" in session  # Up/Down skip the divider row
+    # The old mixed-list section headers are gone.
+    assert "Local — downloaded" not in session
+    assert "Local — available to download" not in session
+
+    selection = _read("frontend/cortex-tui/src/components/selection_list.tsx")
+    assert "SelectionTabs" in selection  # tab bar rendered by the shared list
+    assert "isHeader" in selection  # divider rows stay non-selectable
+
+    footer = _read("frontend/cortex-tui/src/components/messages/assistant_message.tsx")
+    assert "props.message.backend" in footer

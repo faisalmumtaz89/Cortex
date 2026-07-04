@@ -107,6 +107,10 @@ class ErrorEvent:
 class FinishEvent:
     type: Literal["finish"] = "finish"
     reason: str = "stop"
+    # Response-side identity proof, attached by the client that actually
+    # answered: {client_kind, reported_model, response_id, endpoint}. The
+    # orchestrator verifies it against the requested target after every turn.
+    provenance: Optional[Dict[str, Any]] = None
 
 
 ModelEvent = Union[
@@ -128,3 +132,9 @@ class AssistantTurnResult:
     token_count: int = 0
     elapsed_seconds: float = 0.0
     first_token_latency_seconds: Optional[float] = None
+    # Verified per-turn provenance: set only after the response-side identity
+    # was checked against the requested target (see tooling/provenance.py).
+    provenance: Optional[Dict[str, Any]] = None
+    provenance_verified: bool = False
+    served_backend: Optional[str] = None  # "local" | "cloud"
+    served_model_label: Optional[str] = None  # e.g. "qwen3-5-9b:q4_0" / "openai:gpt-5.1"

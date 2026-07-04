@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 class AnthropicClient:
     """Anthropic streaming and key validation wrapper."""
 
+    # Class-level defaults: some tests construct via __new__ and skip __init__.
+    endpoint: str = "https://api.anthropic.com"
+    last_provenance: Optional[Dict[str, Any]] = None
+
     def __init__(self, api_key: str, timeout_seconds: int = 60):
         try:
             from anthropic import Anthropic  # type: ignore
@@ -30,6 +34,19 @@ class AnthropicClient:
             ) from exc
 
         self.client = Anthropic(api_key=api_key, timeout=timeout_seconds)
+        self.endpoint = str(getattr(self.client, "base_url", "") or "https://api.anthropic.com")
+        self.last_provenance: Optional[Dict[str, Any]] = None
+
+    def _provenance(self, reported_model: Any, response_id: Any) -> Dict[str, Any]:
+        """Response-side identity proof for post-turn verification."""
+        record: Dict[str, Any] = {
+            "client_kind": "anthropic",
+            "reported_model": str(reported_model or ""),
+            "response_id": str(response_id or "")[:40],
+            "endpoint": self.endpoint,
+        }
+        self.last_provenance = record
+        return record
 
     def validate_key(self) -> Tuple[bool, str]:
         """Validate API key using models list call."""
@@ -119,6 +136,8 @@ class AnthropicClient:
 
         if tools and tool_executor is not None:
             history = list(normalized_messages)
+            reported_model: Any = ""
+            reported_id: Any = ""
             for _ in range(max_tool_iterations):
                 kwargs: Dict[str, Any] = {
                     "model": model_id,
@@ -151,6 +170,9 @@ class AnthropicClient:
                 if response is None:
                     response = self.client.messages.create(**kwargs)
 
+                reported_model = self._item_get(response, "model", None) or reported_model
+                reported_id = self._item_get(response, "id", None) or reported_id
+
                 content = self._item_get(response, "content", [])
                 if not isinstance(content, list):
                     content = []
@@ -178,7 +200,10 @@ class AnthropicClient:
                     yield TextDeltaEvent(delta="".join(text_parts))
 
                 if not tool_calls:
-                    yield FinishEvent(reason="stop")
+                    yield FinishEvent(
+                        reason="stop",
+                        provenance=self._provenance(reported_model, reported_id),
+                    )
                     return
 
                 tool_result_blocks: List[Dict[str, object]] = []
@@ -219,12 +244,24 @@ class AnthropicClient:
         if system_text:
             final_kwargs["system"] = system_text
 
+        final_message = None
         with self.client.messages.stream(**final_kwargs) as stream:
             for text in stream.text_stream:
                 if text:
                     yield TextDeltaEvent(delta=str(text))
+            if hasattr(stream, "get_final_message"):
+                try:
+                    final_message = stream.get_final_message()
+                except Exception:  # pragma: no cover - SDK-specific edge
+                    final_message = None
 
-        yield FinishEvent(reason="stop")
+        yield FinishEvent(
+            reason="stop",
+            provenance=self._provenance(
+                self._item_get(final_message, "model", None) if final_message is not None else None,
+                self._item_get(final_message, "id", None) if final_message is not None else None,
+            ),
+        )
 
     def stream(
         self,
@@ -275,6 +312,9 @@ class AnthropicClient:
             kwargs["system"] = system_text
 
         response = self.client.messages.create(**kwargs)
+        self._provenance(
+            self._item_get(response, "model", None), self._item_get(response, "id", None)
+        )
         content = getattr(response, "content", None)
         if isinstance(content, list):
             parts: List[str] = []

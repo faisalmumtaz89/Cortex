@@ -1,4 +1,5 @@
 import type { DownloadProgressRecord, MessageRecord } from "../../context/store"
+import { spinnerFrame } from "../../lib/spinner"
 import { UI_PALETTE } from "../ui_palette"
 
 const SPINE_BORDER = {
@@ -39,111 +40,62 @@ function formatRate(value: number | undefined): string | null {
   return `${formatBytes(value)}/s`
 }
 
-function formatETA(value: number | undefined): string | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return null
-  }
-  const rounded = Math.max(1, Math.round(value))
-  if (rounded < 60) {
-    return `${rounded}s`
-  }
-  const minutes = Math.floor(rounded / 60)
-  const seconds = rounded % 60
-  if (minutes < 60) {
-    return `${minutes}m ${String(seconds).padStart(2, "0")}s`
-  }
-  const hours = Math.floor(minutes / 60)
-  const remainderMinutes = minutes % 60
-  return `${hours}h ${String(remainderMinutes).padStart(2, "0")}m`
+const TERMINAL_PHASES = new Set(["complete", "completed", "ready", "failed", "cancelled"])
+
+/** GPU-memory load: exactly one minimal line. */
+function loadIndicatorLine(progress: DownloadProgressRecord): string {
+  return `${spinnerFrame()} Loading ${progress.repoID}…`
 }
 
-function progressBar(percent: number | undefined, width = 24): string {
-  const normalized = typeof percent === "number" && Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0
-  const filled = Math.round((normalized / 100) * width)
-  const left = "#".repeat(Math.max(filled, 0))
-  const right = "-".repeat(Math.max(width - filled, 0))
-  return `[${left}${right}]`
-}
-
-function progressHeadline(progress: DownloadProgressRecord): string {
-  const percent = typeof progress.percent === "number" && Number.isFinite(progress.percent) ? progress.percent : undefined
-  const phase = progress.phase.trim().toLowerCase()
-  if (phase === "finalizing") {
-    return `${progressBar(100)} 100.0% (finalizing)`
+/** Download: one minimal line — transferred bytes (and rate) are the only
+ * progress signal worth words. */
+function downloadIndicatorLine(progress: DownloadProgressRecord): string {
+  const parts: string[] = [`${spinnerFrame()} Downloading ${progress.repoID}…`]
+  if (progress.bytesDownloaded > 0) {
+    let bytesPart = formatBytes(progress.bytesDownloaded)
+    if (typeof progress.bytesTotal === "number" && progress.bytesTotal > 0) {
+      bytesPart += ` / ${formatBytes(progress.bytesTotal)}`
+    }
+    const rate = formatRate(progress.speedBps)
+    if (rate) {
+      bytesPart += ` (${rate})`
+    }
+    parts.push(bytesPart)
   }
-  if (percent !== undefined) {
-    return `${progressBar(percent)} ${percent.toFixed(1)}%`
-  }
-  return `${progressBar(undefined)} preparing`
-}
-
-function progressDetail(progress: DownloadProgressRecord): string {
-  const parts: string[] = []
-  const downloaded = formatBytes(progress.bytesDownloaded)
-  if (typeof progress.bytesTotal === "number" && progress.bytesTotal > 0) {
-    parts.push(`${downloaded} / ${formatBytes(progress.bytesTotal)}`)
-  } else {
-    parts.push(`${downloaded} downloaded`)
-  }
-  const rate = formatRate(progress.speedBps)
-  if (rate) {
-    parts.push(rate)
-  }
-  const phase = progress.phase.trim().toLowerCase()
-  const transferComplete =
-    typeof progress.bytesTotal === "number" &&
-    progress.bytesTotal > 0 &&
-    progress.bytesDownloaded >= progress.bytesTotal
-  const eta = formatETA(progress.etaSeconds)
-  if (eta && phase !== "finalizing" && !transferComplete) {
-    parts.push(`ETA ${eta}`)
-  }
-  return parts.join(" | ")
-}
-
-function progressFooter(progress: DownloadProgressRecord): string | null {
-  const parts: string[] = []
-  if (typeof progress.filesCompleted === "number" && typeof progress.filesTotal === "number" && progress.filesTotal > 0) {
-    parts.push(`${progress.filesCompleted.toFixed(1)}/${progress.filesTotal.toFixed(1)} files`)
-  }
-  if (progress.stalled) {
-    parts.push("waiting for transfer")
-  }
-  if (parts.length === 0) {
-    return null
-  }
-  return parts.join(" | ")
+  return parts.join(" · ")
 }
 
 export function SystemMessage(props: { message: MessageRecord; index: number }) {
-  const progress = props.message.downloadProgress
-  const footer = progress ? progressFooter(progress) : null
-  const phase = progress?.phase?.trim().toLowerCase() ?? ""
-  const hasProgress = Boolean(progress)
-  const isTerminalPhase = phase === "completed" || phase === "failed" || phase === "cancelled"
-  const showLiveProgress = hasProgress && !props.message.final && !isTerminalPhase
-  const showPrimaryContent =
+  // Everything below is a reactive accessor ON PURPOSE: component bodies run
+  // once in Solid, so plain consts here would freeze the live/resolved gating
+  // at mount — the exact bug where a "Loading …" row kept spinning forever
+  // after its final frame had already arrived.
+  const progress = () => props.message.downloadProgress
+  const phase = () => progress()?.phase?.trim().toLowerCase() ?? ""
+  const isTerminalPhase = () => TERMINAL_PHASES.has(phase())
+  const showLiveProgress = () =>
+    Boolean(progress()) && !props.message.final && !isTerminalPhase()
+  // While an operation is live, the scenario-specific indicator IS the
+  // message; the plain content line takes over on the final frame.
+  const showPrimaryContent = () =>
     typeof props.message.content === "string" &&
     props.message.content.length > 0 &&
-    (
-      !showLiveProgress ||
-      props.message.final ||
-      phase === "completed" ||
-      phase === "failed" ||
-      phase === "cancelled"
-    )
-  const terminalFallbackMessage =
-    progress && (props.message.final || isTerminalPhase)
-      ? phase === "completed"
-        ? `Download complete: ${progress.repoID}`
-        : phase === "failed"
-          ? `Download failed: ${progress.repoID}`
-          : phase === "cancelled"
-            ? `Download cancelled: ${progress.repoID}`
-            : "Download update complete."
-      : null
+    !showLiveProgress()
+  const terminalFallbackMessage = () => {
+    const record = progress()
+    if (!record || !(props.message.final || isTerminalPhase()) || showPrimaryContent()) {
+      return null
+    }
+    if (phase() === "failed") {
+      return `Failed: ${record.repoID}`
+    }
+    if (phase() === "cancelled") {
+      return `Cancelled: ${record.repoID}`
+    }
+    return `Done: ${record.repoID}`
+  }
 
-  if (!props.message.content && !progress) {
+  if (!props.message.content && !progress()) {
     return <></>
   }
 
@@ -159,13 +111,16 @@ export function SystemMessage(props: { message: MessageRecord; index: number }) 
       customBorderChars={SPINE_BORDER}
     >
       <box flexShrink={0} paddingLeft={2}>
-        {showPrimaryContent && <text fg={UI_PALETTE.textMuted}>{props.message.content}</text>}
-        {!showPrimaryContent && terminalFallbackMessage && (
-          <text fg={UI_PALETTE.textMuted}>{terminalFallbackMessage}</text>
+        {showPrimaryContent() && <text fg={UI_PALETTE.textMuted}>{props.message.content}</text>}
+        {!showPrimaryContent() && terminalFallbackMessage() && (
+          <text fg={UI_PALETTE.textMuted}>{terminalFallbackMessage()}</text>
         )}
-        {showLiveProgress && progress && <text fg={UI_PALETTE.textMuted}>{progressHeadline(progress)}</text>}
-        {showLiveProgress && progress && <text fg={UI_PALETTE.textMuted}>{progressDetail(progress)}</text>}
-        {showLiveProgress && footer && <text fg={UI_PALETTE.textMuted}>{footer}</text>}
+        {showLiveProgress() && progress()?.kind === "model-load" && (
+          <text fg={UI_PALETTE.textMuted}>{loadIndicatorLine(progress()!)}</text>
+        )}
+        {showLiveProgress() && progress()?.kind === "download" && (
+          <text fg={UI_PALETTE.textMuted}>{downloadIndicatorLine(progress()!)}</text>
+        )}
       </box>
     </box>
   )

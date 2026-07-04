@@ -1,5 +1,13 @@
 # Configuration System
 
+## Lumen (local inference)
+
+- `lumen_binary` / `lumen_server_binary` (default: `lumen` / `lumen-server` on PATH)
+- `lumen_port` (default `0` = pick a free port)
+- `lumen_context_len` (default `0` = Lumen's default, 8192)
+- `lumen_startup_timeout_seconds` (default `180`)
+- `lumen_log_level` (default `warn`)
+
 ## Overview
 
 Cortex reads configuration from `config.yaml` in the directory it starts in. The file uses a flat key structure (no nested sections) and **every key is optional** — anything omitted falls back to the defaults in `cortex/config.py`. The repository's `config.yaml` is a commented template of the most useful keys.
@@ -10,7 +18,6 @@ Files Cortex writes outside the project:
 
 - `~/.cortex/state.yaml` — runtime state such as `last_used_model` and the last-used backend, kept out of `config.yaml` so switching models does not pollute git diffs.
 - `~/.cortex/tool_permissions.yaml` — persisted "Allow always" tool permission rules.
-- `~/.cortex/template_config.json` — per-model chat template configuration.
 - `~/.cortex/cloud_models.json` — optional additions to the cloud model catalog.
 
 ## Template
@@ -23,7 +30,6 @@ max_tokens: 4096
 context_length: 8192
 
 # Local models
-model_path: ~/models
 
 # Cloud models
 cloud_default_openai_model: gpt-5.1
@@ -68,12 +74,9 @@ log_file: ~/.cortex/cortex.log
 
 ### Models
 
-- `model_path` (default: `~/models`) — where `/download` stores models and where local models are discovered.
 - `default_model` (default: empty) — model to load on startup; otherwise the last-used model is restored from `~/.cortex/state.yaml`.
-- `model_cache_dir` (default: `~/.cortex/models`)
 - `max_loaded_models` (default: `3`) — oldest model is unloaded past this limit.
 - `verify_gpu_compatibility` (default: `true`)
-- `default_quantization` (default: `Q4_K_M`) and `supported_quantizations` — quantization hints for MLX conversion recipes.
 
 ### Cloud
 

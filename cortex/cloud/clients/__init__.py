@@ -1,6 +1,7 @@
 """Provider-specific cloud clients."""
 
 from cortex.cloud.clients.anthropic_client import AnthropicClient
+from cortex.cloud.clients.lumen_client import LumenClient
 from cortex.cloud.clients.openai_client import OpenAIClient
 
-__all__ = ["OpenAIClient", "AnthropicClient"]
+__all__ = ["OpenAIClient", "AnthropicClient", "LumenClient"]

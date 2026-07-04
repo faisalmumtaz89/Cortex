@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -36,7 +37,14 @@ pytestmark = [
 class TuiSession:
     """Drives the real TUI inside a detached tmux session."""
 
-    def __init__(self, *, project_dir: Path, home_dir: Path, script_path: Path):
+    def __init__(
+        self,
+        *,
+        project_dir: Path,
+        home_dir: Path,
+        script_path: Path,
+        extra_env: dict | None = None,
+    ):
         self.name = f"cortex-tui-test-{uuid.uuid4().hex[:8]}"
         env = {
             "HOME": str(home_dir),
@@ -48,6 +56,7 @@ class TuiSession:
             "CORTEX_TUI_FORCE_BUNDLED": "1",
             "TERM": os.environ.get("TERM", "xterm-256color"),
         }
+        env.update(extra_env or {})
         env_prefix = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
         launch = (
             f"cd {shlex.quote(str(project_dir))} && "
@@ -111,10 +120,12 @@ def tui_project(tmp_path: Path):
 
     sessions: list[TuiSession] = []
 
-    def start(responses) -> TuiSession:
+    def start(responses, *, extra_env: dict | None = None) -> TuiSession:
         script = tmp_path / "script.json"
         script.write_text(json.dumps({"responses": responses}), encoding="utf-8")
-        session = TuiSession(project_dir=project, home_dir=home, script_path=script)
+        session = TuiSession(
+            project_dir=project, home_dir=home, script_path=script, extra_env=extra_env
+        )
         sessions.append(session)
         return session
 
@@ -124,11 +135,114 @@ def tui_project(tmp_path: Path):
         session.close()
 
 
+def _fake_lumen_env(tmp_path: Path) -> dict:
+    """Deterministic local catalog for picker tests: one cached model (with a
+    size), two available-to-download — no host lumen cache or network."""
+    listing = (
+        "Cached models:\n\n"
+        "  qwen3-5-9b-Q4_0                          5.4 GB\n\n"
+        "Available to download:\n"
+        "  qwen3-5-9b           Qwen3.5 9B Q8_0\n"
+        "  qwen3-6-27b          Qwen3.6 27B Q4_0\n\n"
+        "Download with: lumen pull <model-name> [--quant Q8_0]\n"
+    )
+    fixture = tmp_path / "tui-lumen-models.txt"
+    fixture.write_text(listing, encoding="utf-8")
+    stub = tmp_path / "tui-fake-lumen"
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "if sys.argv[1:2] == ['models']:\n"
+        f"    print(open({str(fixture)!r}).read(), end='')\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return {"CORTEX_LUMEN_BINARY": str(stub)}
+
+
+def _full_fake_lumen_env(tmp_path: Path, *, boot_delay: float = 4.0) -> dict:
+    """A pull-capable fake `lumen` CLI + a fake `lumen-server` that becomes
+    ready after `boot_delay` seconds — enough to observe the load indicator.
+    `pull` streams output lines while growing a real `.part` file inside a
+    scratch LUMEN_CACHE_DIR (exercising Cortex's byte polling), then rewrites
+    the listing so the selector resolves as cached for the chained auto-load."""
+    cache_dir = tmp_path / "lumen-cache"
+    cache_dir.mkdir(exist_ok=True)
+    listing_start = (
+        "Cached models:\n\n"
+        "  qwen3-5-9b-Q4_0                          5.4 GB\n\n"
+        "Available to download:\n"
+        "  qwen3-5-9b           Qwen3.5 9B Q8_0\n\n"
+        "Download with: lumen pull <model-name> [--quant Q8_0]\n"
+    )
+    listing_after = (
+        "Cached models:\n\n"
+        "  qwen3-5-9b-Q4_0                          5.4 GB\n"
+        "  qwen3-5-9b-Q8_0                          8.9 GB\n\n"
+        "Available to download:\n\n"
+        "Download with: lumen pull <model-name> [--quant Q8_0]\n"
+    )
+    fixture = tmp_path / "flow-lumen-models.txt"
+    fixture.write_text(listing_start, encoding="utf-8")
+    after_fixture = tmp_path / "flow-lumen-models-after.txt"
+    after_fixture.write_text(listing_after, encoding="utf-8")
+
+    cli = tmp_path / "flow-fake-lumen"
+    cli.write_text(
+        "#!/usr/bin/env python3\n"
+        "import shutil, sys, time\n"
+        "if sys.argv[1:2] == ['models']:\n"
+        f"    print(open({str(fixture)!r}).read(), end='')\n"
+        "elif sys.argv[1:2] == ['pull']:\n"
+        "    print('Downloading: https://huggingface.co/example.gguf', flush=True)\n"
+        f"    part = {str(cache_dir)!r} + '/example.gguf.part'\n"
+        "    with open(part, 'wb') as fh:\n"
+        "        for _ in range(3):\n"
+        "            fh.write(b'x' * 1024 * 1024)\n"
+        "            fh.flush()\n"
+        "            time.sleep(1.1)\n"
+        "    import os\n"
+        "    os.remove(part)\n"
+        "    print('Saved: example.gguf (SHA-256: abc)', flush=True)\n"
+        f"    shutil.copyfile({str(after_fixture)!r}, {str(fixture)!r})\n",
+        encoding="utf-8",
+    )
+    cli.chmod(0o755)
+
+    server = tmp_path / "flow-fake-lumen-server"
+    server.write_text(
+        "#!/usr/bin/env python3\n"
+        "import http.server, json, sys, time\n"
+        "args = sys.argv[1:]\n"
+        "port = int(args[args.index('--port') + 1])\n"
+        "model = args[args.index('--model') + 1]\n"
+        f"time.sleep({boot_delay})\n"
+        "class H(http.server.BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        body = json.dumps({'object': 'list', 'data': [{'id': model}]}).encode()\n"
+        "        self.send_response(200 if self.path == '/v1/models' else 404)\n"
+        "        self.send_header('Content-Length', str(len(body)))\n"
+        "        self.end_headers()\n"
+        "        self.wfile.write(body)\n"
+        "    def log_message(self, *a):\n"
+        "        pass\n"
+        "http.server.HTTPServer(('127.0.0.1', port), H).serve_forever()\n",
+        encoding="utf-8",
+    )
+    server.chmod(0o755)
+
+    return {
+        "CORTEX_LUMEN_BINARY": str(cli),
+        "CORTEX_LUMEN_SERVER_BINARY": str(server),
+        "LUMEN_CACHE_DIR": str(cache_dir),
+    }
+
+
 def _select_scripted_model(session: TuiSession) -> None:
     # "Session ready" is the bootstrap-complete signal (worker handshake done).
     session.wait_for("Session ready")
     session.send_line("/model azure:scripted")
-    session.wait_for("Active cloud model set to azure:scripted")
+    session.wait_for("cloud · azure:scripted — now active.")
 
 
 def test_tools_fold_and_answer_renders_after_them(tui_project) -> None:
@@ -280,35 +394,192 @@ def test_slash_palette_opens_filters_executes_without_polluting_transcript(tui_p
     assert "Exit Cortex" not in cleared
 
 
-def test_model_command_opens_interactive_picker_no_numbers(tui_project) -> None:
+def test_cached_model_load_shows_load_indicator_not_download_bar(tui_project, tmp_path) -> None:
+    """Scenario A + C + G: selecting a CACHED model shows the GPU-load
+    indicator (spinner + 'Loading … into GPU memory'), never download
+    artifacts and never the generic turn spinner; re-selecting the serving
+    model answers instantly with a non-empty 'already active' panel."""
     project, start = tui_project
-    session = start([[{"text": "IGNORED"}]])
+    session = start([[{"text": "IGNORED"}]], extra_env=_full_fake_lumen_env(tmp_path))
     session.wait_for("Session ready")
 
-    # Bare /model opens the interactive picker (not a numbered list).
+    session.send_line("/model qwen3-5-9b:q4_0")
+    loading = session.wait_until(
+        lambda frame: "Loading qwen3-5-9b:q4_0…" in frame,
+        description="minimal load indicator visible during the boot",
+        timeout=15,
+    )
+    # Minimal-line spec: spinner + "Loading <selector>…" and NOTHING else.
+    assert "into GPU memory" not in loading
+    assert "large models" not in loading
+    assert not re.search(r"Loading qwen3-5-9b:q4_0…[^\n]*\d+s", loading), "no elapsed timer"
+    # Wrong-artifact guards: no download language, no bytes, no turn spinner.
+    assert "Downloading" not in loading
+    assert "downloaded" not in loading
+    assert "0 B" not in loading
+    assert "Working…" not in loading
+    assert "Esc to interrupt" not in loading
+
+    # Exactly ONE live indicator row (spinner-prefixed); the result panel may
+    # additionally echo the response text, which is a different surface.
+    spinner_rows = [
+        line
+        for line in loading.splitlines()
+        if "Loading qwen3-5-9b:q4_0…" in line and any(ch in line for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+    ]
+    assert len(spinner_rows) == 1, spinner_rows
+
+    session.wait_for("local · qwen3-5-9b:q4_0 ready — now active.", timeout=30)
+    session.send_key("Escape")  # dismiss the /model result panel
+    # RESOLVE IN PLACE: the live indicator row must be GONE — one operation,
+    # one transcript message (this is the stale-"Loading… 58s"-row regression).
+    resolved = session.wait_until(
+        lambda frame: "Loading qwen3-5-9b:q4_0…" not in frame
+        and "local · qwen3-5-9b:q4_0 ready — now active." in frame,
+        description="loading indicator resolved into the ready line",
+        timeout=10,
+    )
+    assert resolved.count("ready — now active.") == 1, "exactly one resolved row (no duplicate notice)"
+
+    # Scenario C: re-selecting the serving model is instant and explicit.
+    session.send_line("/model qwen3-5-9b:q4_0")
+    result = session.wait_for("local · qwen3-5-9b:q4_0 is already active.", timeout=15)
+    assert "✓ /model qwen3-5-9b:q4_0" in result
+    session.send_key("Escape")
+
+
+def test_uncached_select_shows_download_then_load_transition(tui_project, tmp_path) -> None:
+    """Scenario B/D: an uncached select streams REAL transferred bytes during
+    the pull, then flips the SAME message to the GPU-load indicator — never
+    '0 B downloaded', never a byte bar during the load phase."""
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]], extra_env=_full_fake_lumen_env(tmp_path, boot_delay=2.5))
+    session.wait_for("Session ready")
+
+    session.send_line("/model qwen3-5-9b:q8_0")
+    session.wait_for("Downloading qwen3-5-9b:q8_0 — loads automatically when done", timeout=15)
+
+    # Download stage: the indicator carries real cache-side bytes.
+    downloading = session.wait_until(
+        lambda frame: "Downloading qwen3-5-9b:q8_0" in frame and "MB" in frame,
+        description="download indicator with live byte count",
+        timeout=20,
+    )
+    assert "0 B downloaded" not in downloading
+    assert "Working…" not in downloading
+
+    # Phase transition: same operation, now the minimal load indicator.
+    load_stage = session.wait_until(
+        lambda frame: "Loading qwen3-5-9b:q8_0…" in frame,
+        description="transition to the load indicator after the pull",
+        timeout=25,
+    )
+    assert "0 B" not in load_stage
+    assert "into GPU memory" not in load_stage
+    assert "large models" not in load_stage
+
+    session.wait_for("local · qwen3-5-9b:q8_0 ready — now active.", timeout=30)
+    # Resolve in place: no lingering live indicator after completion.
+    session.wait_until(
+        lambda frame: "Loading qwen3-5-9b:q8_0…" not in frame
+        and "Downloading qwen3-5-9b:q8_0…" not in frame,
+        description="indicators resolved after download+load completes",
+        timeout=10,
+    )
+
+
+def test_model_picker_tabs_split_local_and_cloud(tui_project, tmp_path) -> None:
+    """The picker shows ONE origin at a time: a Local tab (downloaded models
+    with sizes first, then download candidates) and a Cloud tab; Tab/←→
+    switch; it opens on the active backend's tab; no numbered selection."""
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]], extra_env=_fake_lumen_env(tmp_path))
+    session.wait_for("Session ready")
+
+    # Palette Tab still completes commands (picker tab-switching must not
+    # steal it): "/mod" + Tab → arg-hint for /model.
+    session.send_key("/mod")
+    time.sleep(0.8)
+    session.send_key("Tab")
+    session.wait_for("<name | provider:model>", timeout=10)
+    session.send_key("Escape")
+    time.sleep(0.8)
+
+    # Bare /model opens the picker. No model is active → Local tab first.
     session.send_key("/model")
     time.sleep(1)
     session.send_key("Enter")
     picker = session.wait_for("Select a model", timeout=10)
-    assert "azure:gpt-5.5" in picker
-    assert "↑↓ select · Enter load · Esc cancel" in picker
+    assert "Local" in picker and "Cloud" in picker  # tab bar
+    assert "qwen3-5-9b:q4_0" in picker  # downloaded row…
+    assert "5.4 GB" in picker  # …with its on-disk size
+    assert "select to download" in picker  # download candidates below
+    assert "azure:gpt-5.5" not in picker  # cloud rows live on the OTHER tab
+    assert "Tab cloud" in picker  # footer names the other tab
     # No numbered rows anywhere.
     assert "[1]" not in picker and "- [1]" not in picker
-    # A status tag is shown, not an index.
-    assert "ready" in picker or "login required" in picker
 
-    # Up from the top wraps to the last entry (azure:gpt-5.5, the only "ready"
-    # one); load it via Enter — no typing a number.
+    # Tab → Cloud tab: cloud rows appear, local rows disappear.
+    session.send_key("Tab")
+    cloud_tab = session.wait_for("azure:gpt-5.5", timeout=10)
+    assert "qwen3-5-9b:q4_0" not in cloud_tab
+    assert "Tab local" in cloud_tab
+    assert "ready" in cloud_tab or "login required" in cloud_tab
+
+    # Left arrow flips back to Local; Right returns to Cloud.
+    session.send_key("Left")
+    session.wait_until(
+        lambda frame: "qwen3-5-9b:q4_0" in frame and "azure:gpt-5.5" not in frame,
+        description="left arrow returns to the Local tab",
+        timeout=10,
+    )
+    session.send_key("Right")
+    session.wait_for("azure:gpt-5.5", timeout=10)
+
+    # Up from the top wraps to the last cloud entry (azure:gpt-5.5, the only
+    # "ready" one); select it via Enter — no typing a number.
     session.send_key("Up")
     time.sleep(0.5)
     session.send_key("Enter")
-    result = session.wait_for("Active cloud model set to azure:gpt-5.5", timeout=10)
+    result = session.wait_for("cloud · azure:gpt-5.5 — now active.", timeout=10)
     assert "✓" in result
-
-    # Esc dismisses the result; picker leaves nothing behind.
     session.send_key("Escape")
     time.sleep(1)
     assert "Select a model" not in session.capture()
+
+    # Reopen: the active backend is cloud, so the picker opens on Cloud.
+    session.send_key("/model")
+    time.sleep(1)
+    session.send_key("Enter")
+    reopened = session.wait_for("Select a model", timeout=10)
+    assert "azure:gpt-5.5" in reopened
+    assert "qwen3-5-9b:q4_0" not in reopened
+    session.send_key("Escape")
+    time.sleep(1)
+    assert "Select a model" not in session.capture()
+
+
+def test_single_ctrl_c_exits_cleanly(tui_project) -> None:
+    """ONE Ctrl+C must exit the whole TUI. Regression: OpenTUI's exitOnCtrlC
+    only destroyed the renderer — the spinner interval and worker pipes kept
+    the sidecar alive, so the pane looked dead until a second Ctrl+C."""
+    project, start = tui_project
+    session = start([[{"text": "hi"}]])
+    session.wait_for("Session ready")
+
+    session.send_key("C-c")
+
+    # The launch command IS the pane: when python -m cortex exits, the tmux
+    # session dies and capture() returns "". Old behavior: the pane lingered
+    # indefinitely. Give the teardown a generous-but-bounded window.
+    deadline = time.time() + 8
+    alive = True
+    while time.time() < deadline:
+        if session.capture() == "":
+            alive = False
+            break
+        time.sleep(0.25)
+    assert not alive, "TUI still running 8s after a single Ctrl+C"
 
 
 def test_slash_palette_esc_clears_input_entirely(tui_project) -> None:

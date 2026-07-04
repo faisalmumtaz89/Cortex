@@ -7,10 +7,9 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, cast
 
-from cortex.conversation_manager import MessageRole
-from cortex.inference_engine import GenerationRequest
+from cortex.cloud.types import CloudModelRef, CloudProvider
+from cortex.lumen_runtime import parse_selector
 from cortex.tooling.agent_prompt import build_system_prompt
-from cortex.tooling.local_protocol import format_tool_results, parse_tool_calls, strip_tool_blocks
 from cortex.tooling.permissions import (
     PermissionDecision,
     PermissionDeniedError,
@@ -18,6 +17,7 @@ from cortex.tooling.permissions import (
     PermissionRequest,
     default_rules,
 )
+from cortex.tooling.provenance import verify_turn_provenance
 from cortex.tooling.registry import ToolRegistry
 from cortex.tooling.stream_normalizer import merge_stream_text
 from cortex.tooling.types import (
@@ -187,183 +187,9 @@ class ToolingOrchestrator:
 
         if isinstance(event, FinishEvent):
             result.parts.append({"type": "finish", "reason": event.reason})
+            if event.provenance is not None:
+                result.provenance = dict(event.provenance)
             return
-
-    def _build_local_request(
-        self,
-        *,
-        user_input: str,
-        stop_sequences: Optional[List[str]],
-        tools_enabled: bool,
-        registry: Optional[ToolRegistry] = None,
-    ) -> GenerationRequest:
-        if tools_enabled and registry is not None:
-            system_prompt = build_system_prompt(
-                cwd=registry.repo_root,
-                tool_specs=registry.specs(),
-                include_local_protocol=True,
-            )
-        else:
-            system_prompt = NO_TOOLS_SYSTEM_INSTRUCTION
-        prompt = self.cli._format_prompt_with_chat_template(
-            user_input, include_user=False, system_prompt=system_prompt
-        )
-        return GenerationRequest(
-            prompt=prompt,
-            max_tokens=self.cli.config.inference.max_tokens,
-            temperature=self.cli.config.inference.temperature,
-            top_p=self.cli.config.inference.top_p,
-            top_k=self.cli.config.inference.top_k,
-            repetition_penalty=self.cli.config.inference.repetition_penalty,
-            stream=self.cli.config.inference.stream_output,
-            seed=self.cli.config.inference.seed if self.cli.config.inference.seed >= 0 else None,
-            stop_sequences=stop_sequences or [],
-        )
-
-    def _run_local(
-        self,
-        *,
-        user_input: str,
-        conversation,
-        registry: ToolRegistry,
-        tools_enabled: bool,
-        local_tools_experimental: bool,
-        max_iterations: int,
-        stop_sequences: Optional[List[str]],
-        on_event: Optional[Callable[[ModelEvent], None]],
-        result: AssistantTurnResult,
-        first_text_seen: Dict[str, float],
-        started_at: float,
-    ) -> None:
-        session_id = conversation.conversation_id if conversation else "session_local"
-
-        if tools_enabled and local_tools_experimental:
-            iterations = 0
-            while iterations < max_iterations:
-                iterations += 1
-                request = self._build_local_request(
-                    user_input=user_input,
-                    stop_sequences=stop_sequences,
-                    tools_enabled=tools_enabled,
-                    registry=registry,
-                )
-                generated = "".join(self.cli.inference_engine.generate(request))
-
-                calls, parse_error = parse_tool_calls(generated)
-                if parse_error and not calls:
-                    cleaned = strip_tool_blocks(generated)
-                    if cleaned:
-                        self._record_event(
-                            event=TextDeltaEvent(delta=cleaned),
-                            result=result,
-                            on_event=on_event,
-                            first_text_seen=first_text_seen,
-                            started_at=started_at,
-                        )
-                    self._record_event(
-                        event=ErrorEvent(error=f"Local tool parse warning: {parse_error}"),
-                        result=result,
-                        on_event=on_event,
-                        first_text_seen=first_text_seen,
-                        started_at=started_at,
-                    )
-                    self._record_event(
-                        event=FinishEvent(reason="stop"),
-                        result=result,
-                        on_event=on_event,
-                        first_text_seen=first_text_seen,
-                        started_at=started_at,
-                    )
-                    return
-
-                if calls:
-                    if iterations >= max_iterations:
-                        raise RuntimeError("Tool loop limit reached for local model response")
-
-                    tool_results_payload = []
-                    for call in calls:
-                        self._record_event(
-                            event=ToolCallEvent(call=call),
-                            result=result,
-                            on_event=on_event,
-                            first_text_seen=first_text_seen,
-                            started_at=started_at,
-                        )
-                        tool_result = self._execute_tool_call(
-                            registry=registry,
-                            session_id=session_id,
-                            call=call,
-                        )
-                        self._record_event(
-                            event=ToolResultEvent(result=tool_result),
-                            result=result,
-                            on_event=on_event,
-                            first_text_seen=first_text_seen,
-                            started_at=started_at,
-                        )
-                        # The "diff" metadata is a UI-only payload (can be 400
-                        # rows); strip it from the model-facing copy so it never
-                        # bloats the prompt. The UI copy (recorded above) keeps it.
-                        model_metadata = {
-                            key: value for key, value in tool_result.metadata.items() if key != "diff"
-                        }
-                        tool_results_payload.append(
-                            {
-                                "id": tool_result.id,
-                                "name": tool_result.name,
-                                "ok": tool_result.ok,
-                                "result": {
-                                    "output": tool_result.output,
-                                    "metadata": model_metadata,
-                                },
-                                "error": tool_result.error,
-                            }
-                        )
-
-                    conversation.add_message(MessageRole.SYSTEM, format_tool_results(tool_results_payload))
-                    continue
-
-                final_text = strip_tool_blocks(generated)
-                if final_text:
-                    self._record_event(
-                        event=TextDeltaEvent(delta=final_text),
-                        result=result,
-                        on_event=on_event,
-                        first_text_seen=first_text_seen,
-                        started_at=started_at,
-                    )
-                self._record_event(
-                    event=FinishEvent(reason="stop"),
-                    result=result,
-                    on_event=on_event,
-                    first_text_seen=first_text_seen,
-                    started_at=started_at,
-                )
-                return
-
-            raise RuntimeError("Tool loop limit reached")
-
-        request = self._build_local_request(
-            user_input=user_input,
-            stop_sequences=stop_sequences,
-            tools_enabled=tools_enabled,
-        )
-        for token in self.cli.inference_engine.generate(request):
-            self._record_event(
-                event=TextDeltaEvent(delta=str(token)),
-                result=result,
-                on_event=on_event,
-                first_text_seen=first_text_seen,
-                started_at=started_at,
-            )
-
-        self._record_event(
-            event=FinishEvent(reason="stop"),
-            result=result,
-            on_event=on_event,
-            first_text_seen=first_text_seen,
-            started_at=started_at,
-        )
 
     def run_turn(
         self,
@@ -379,7 +205,6 @@ class ToolingOrchestrator:
         """Run one generation turn and return structured output."""
         flags = self._tooling_flags()
         tools_enabled = flags["enabled"]
-        local_tools_experimental = flags["local_mode"] == "experimental"
         max_iterations = flags["max_iterations"]
 
         profile = flags["profile"] if tools_enabled else "off"
@@ -390,69 +215,120 @@ class ToolingOrchestrator:
         started_at = time.time()
         first_text_seen: Dict[str, float] = {}
 
+        local_selector: Optional[str] = None
         if active_target.backend == "cloud":
-            cloud_messages = self._build_message_window(conversation=conversation)
-            if not cloud_messages:
-                cloud_messages = [{"role": "user", "content": user_input}]
-
-            if tools_enabled:
-                cloud_messages = [
-                    {
-                        "role": "system",
-                        "content": build_system_prompt(cwd=registry.repo_root),
-                    },
-                    *cloud_messages,
-                ]
-            else:
-                cloud_messages = [{"role": "system", "content": NO_TOOLS_SYSTEM_INSTRUCTION}, *cloud_messages]
-
-            tool_specs = registry.specs() if tools_enabled else []
-
-            def execute_tool(call: ToolCall) -> ToolResult:
-                return self._execute_tool_call(
-                    registry=registry,
-                    session_id=session_id,
-                    call=call,
-                )
-
-            events = self.cli.cloud_router.stream_events(
-                model_ref=active_target.cloud_model,
-                messages=cloud_messages,
-                max_tokens=self.cli.config.inference.max_tokens,
-                temperature=self.cli.config.inference.temperature,
-                top_p=self.cli.config.inference.top_p,
-                tools=tool_specs,
-                tool_choice="auto",
-                tool_executor=execute_tool if tools_enabled else None,
-                max_tool_iterations=max_iterations,
-                on_wait=on_wait,
-                on_retry=on_retry,
+            model_ref = active_target.cloud_model
+        else:
+            # Local models are served by the managed Lumen engine and speak the
+            # same OpenAI-compatible protocol, so both backends share one loop.
+            selector = active_target.local_model
+            if not selector:
+                raise RuntimeError("No model loaded. Pick one with /model.")
+            ok, message = self.cli.lumen_runtime.ensure_server(selector)
+            if not ok:
+                raise RuntimeError(f"local · {selector} failed to start: {message}")
+            local_selector = selector
+            model_ref = CloudModelRef(
+                provider=CloudProvider.LUMEN, model_id=parse_selector(selector)[0]
             )
 
-            for event in events:
-                self._record_event(
-                    event=event,
-                    result=result,
-                    on_event=on_event,
-                    first_text_seen=first_text_seen,
-                    started_at=started_at,
-                )
+        messages = self._build_message_window(conversation=conversation)
+        if not messages:
+            messages = [{"role": "user", "content": user_input}]
 
+        if tools_enabled:
+            messages = [
+                {
+                    "role": "system",
+                    "content": build_system_prompt(cwd=registry.repo_root),
+                },
+                *messages,
+            ]
         else:
-            self._run_local(
-                user_input=user_input,
-                conversation=conversation,
+            messages = [{"role": "system", "content": NO_TOOLS_SYSTEM_INSTRUCTION}, *messages]
+
+        tool_specs = registry.specs() if tools_enabled else []
+
+        def execute_tool(call: ToolCall) -> ToolResult:
+            return self._execute_tool_call(
                 registry=registry,
-                tools_enabled=tools_enabled,
-                local_tools_experimental=local_tools_experimental,
-                max_iterations=max_iterations,
-                stop_sequences=stop_sequences,
-                on_event=on_event,
+                session_id=session_id,
+                call=call,
+            )
+
+        events = self.cli.cloud_router.stream_events(
+            model_ref=model_ref,
+            messages=messages,
+            max_tokens=self.cli.config.inference.max_tokens,
+            temperature=self.cli.config.inference.temperature,
+            top_p=self.cli.config.inference.top_p,
+            tools=tool_specs,
+            tool_choice="auto",
+            tool_executor=execute_tool if tools_enabled else None,
+            max_tool_iterations=max_iterations,
+            on_wait=on_wait,
+            on_retry=on_retry,
+        )
+
+        for event in events:
+            self._record_event(
+                event=event,
                 result=result,
+                on_event=on_event,
                 first_text_seen=first_text_seen,
                 started_at=started_at,
             )
 
+        self._verify_turn_provenance(
+            result=result,
+            model_ref=model_ref,
+            local_selector=local_selector,
+            on_event=on_event,
+        )
+
         result.elapsed_seconds = time.time() - started_at
         result.first_token_latency_seconds = first_text_seen.get("first")
         return result
+
+    def _verify_turn_provenance(
+        self,
+        *,
+        result: AssistantTurnResult,
+        model_ref: CloudModelRef,
+        local_selector: Optional[str],
+        on_event: Optional[Callable[[ModelEvent], None]],
+    ) -> None:
+        """Fail the turn unless the response proved it came from the
+        requested model (see cortex/tooling/provenance.py)."""
+        is_local = model_ref.provider == CloudProvider.LUMEN
+        expected_endpoint: Optional[str] = None
+        lumen_ready: Optional[bool] = None
+        if is_local:
+            runtime = self.cli.lumen_runtime
+            expected_endpoint = runtime.base_url()
+            lumen_ready = bool(runtime.status().get("ready"))
+
+        verdict = verify_turn_provenance(
+            provider=model_ref.provider,
+            requested_model=model_ref.model_id,
+            provenance=result.provenance,
+            expected_endpoint=expected_endpoint,
+            lumen_ready=lumen_ready,
+        )
+
+        intent_label = (
+            f"local · {local_selector}" if is_local else f"cloud · {model_ref.selector}"
+        )
+        if not verdict.ok:
+            error = (
+                f"Model provenance mismatch: asked {intent_label}, but {verdict.reason} "
+                f"— turn rejected."
+            )
+            if on_event is not None:
+                on_event(ErrorEvent(error=error, metadata={"provenance": result.provenance or {}}))
+            raise RuntimeError(error)
+
+        result.provenance_verified = True
+        result.served_backend = "local" if is_local else "cloud"
+        served = local_selector if is_local else model_ref.selector
+        result.served_model_label = f"{served} (scripted)" if verdict.scripted else str(served)

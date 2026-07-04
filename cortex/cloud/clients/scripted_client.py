@@ -77,6 +77,12 @@ class ScriptedClient:
         max_tool_iterations: int = 25,
     ):
         steps = self._select_response(list(messages))
+        provenance = {
+            "client_kind": "scripted",
+            "reported_model": model_id,
+            "response_id": "scripted",
+            "endpoint": str(self.script_path),
+        }
 
         iterations = 0
         for step in steps:
@@ -95,7 +101,7 @@ class ScriptedClient:
 
             raw_calls = step.get("tool_calls")
             if not isinstance(raw_calls, list) or not raw_calls:
-                yield FinishEvent(reason="stop")
+                yield FinishEvent(reason="stop", provenance=provenance)
                 return
 
             if tool_executor is None:
@@ -111,4 +117,4 @@ class ScriptedClient:
                 result: ToolResult = tool_executor(call)
                 yield ToolResultEvent(result=result)
 
-        yield FinishEvent(reason="stop")
+        yield FinishEvent(reason="stop", provenance=provenance)

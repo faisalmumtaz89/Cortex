@@ -60,6 +60,9 @@ interface RowProps<T> {
   getSecondary?: (item: T) => string | undefined
   getTag?: (item: T) => SelectionTag | undefined
   getDanger?: (item: T) => boolean
+  /** Non-selectable section-header rows (muted label, no caret/tag). Callers
+   * own the index math and must skip these when moving the selection. */
+  isHeader?: (item: T) => boolean
   maxVisibleRows?: number
 }
 
@@ -83,6 +86,13 @@ export function SelectionRows<T>(props: RowProps<T>) {
           const danger = () => Boolean(props.getDanger?.(item))
           const primaryColor = () =>
             danger() ? UI_PALETTE.statusError : selected() ? UI_PALETTE.accent : UI_PALETTE.text
+          if (props.isHeader?.(item)) {
+            return (
+              <box flexShrink={0}>
+                <text fg={UI_PALETTE.textMuted}>{props.getPrimary(item)}</text>
+              </box>
+            )
+          }
           return (
             <box
               flexShrink={0}
@@ -116,10 +126,23 @@ export function SelectionRows<T>(props: RowProps<T>) {
   )
 }
 
+export interface SelectionTabs {
+  labels: string[]
+  activeIndex: number
+}
+
 /** Full overlay: the ┃ panel chrome + optional title + rows + footer hint.
- * Used by the slash palette (list mode) and the model picker. */
+ * Used by the slash palette (list mode) and the model picker. An optional tab
+ * bar renders on the title row (active tab accent+bold, others muted); the
+ * CALLER owns tab state and which rows are visible. */
 export function SelectionList<T>(
-  props: RowProps<T> & { title?: string; footer: string; borderColor?: RGBA; emptyLabel?: string },
+  props: RowProps<T> & {
+    title?: string
+    footer: string
+    borderColor?: RGBA
+    emptyLabel?: string
+    tabs?: SelectionTabs
+  },
 ) {
   return (
     <box
@@ -134,8 +157,34 @@ export function SelectionList<T>(
     >
       {/* One blank row between title / rows / footer so the menu breathes. */}
       <Show when={props.title}>
-        <box flexShrink={0} marginBottom={1}>
+        <box
+          flexShrink={0}
+          marginBottom={1}
+          flexDirection="row"
+          justifyContent="space-between"
+        >
           <text fg={UI_PALETTE.textMuted}>{props.title}</text>
+          <Show when={props.tabs}>
+            <text flexShrink={0} marginLeft={1}>
+              <For each={props.tabs!.labels}>
+                {(label, index) => (
+                  <>
+                    <Show when={index() > 0}>
+                      <span style={{ fg: UI_PALETTE.textMuted }}>{" ─ "}</span>
+                    </Show>
+                    <Show
+                      when={index() === props.tabs!.activeIndex}
+                      fallback={<span style={{ fg: UI_PALETTE.textMuted }}>{label}</span>}
+                    >
+                      <strong>
+                        <span style={{ fg: UI_PALETTE.accent }}>{label}</span>
+                      </strong>
+                    </Show>
+                  </>
+                )}
+              </For>
+            </text>
+          </Show>
         </box>
       </Show>
       <Show
@@ -149,6 +198,7 @@ export function SelectionList<T>(
           getSecondary={props.getSecondary}
           getTag={props.getTag}
           getDanger={props.getDanger}
+          isHeader={props.isHeader}
           maxVisibleRows={props.maxVisibleRows}
         />
       </Show>

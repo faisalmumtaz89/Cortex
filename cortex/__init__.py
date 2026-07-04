@@ -17,8 +17,6 @@ SUPPORTED_PLATFORM = "darwin"
 _LAZY_EXPORTS = {
     "Config": ("cortex.config", "Config"),
     "GPUValidator": ("cortex.gpu_validator", "GPUValidator"),
-    "ModelManager": ("cortex.model_manager", "ModelManager"),
-    "InferenceEngine": ("cortex.inference_engine", "InferenceEngine"),
     "ConversationManager": ("cortex.conversation_manager", "ConversationManager"),
 }
 
@@ -76,8 +74,6 @@ __all__ = [
     "__license__",
     "Config",
     "GPUValidator",
-    "ModelManager",
-    "InferenceEngine",
     "ConversationManager",
     "initialize_cortex",
     "verify_system_requirements",

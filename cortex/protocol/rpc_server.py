@@ -7,6 +7,7 @@ import logging
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass
 from io import TextIOBase
 from typing import Any, Callable, Dict, Optional
@@ -136,7 +137,9 @@ class StdioJsonRpcServer:
 
     def run_forever(self) -> None:
         self._running = True
-        with ThreadPoolExecutor(max_workers=self._max_workers, thread_name_prefix="cortex-rpc") as executor:
+        executor = ThreadPoolExecutor(max_workers=self._max_workers, thread_name_prefix="cortex-rpc")
+        inflight: list = []
+        try:
             while self._running:
                 line = self._stdin.readline()
                 if line == "":
@@ -158,7 +161,17 @@ class StdioJsonRpcServer:
                     self.send_error(code=-32600, message="Invalid Request", data={"errors": exc.errors()})
                     continue
 
-                executor.submit(self._dispatch, request)
+                inflight = [f for f in inflight if not f.done()]
+                inflight.append(executor.submit(self._dispatch, request))
+        finally:
+            # Give in-flight handlers a bounded grace to finish writing their
+            # responses, but never block shutdown indefinitely — a streaming
+            # turn can outlive stdin EOF, and the process teardown (lumen stop,
+            # exit) must not wait on it.
+            pending = [f for f in inflight if not f.done()]
+            if pending:
+                futures_wait(pending, timeout=2.0)
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def shutdown(self) -> None:
         self._running = False

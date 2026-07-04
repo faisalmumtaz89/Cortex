@@ -54,11 +54,10 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 | `/status` | Current setup (GPU, model, settings) |
 | `/gpu` | GPU and memory details |
 | `/model [selector]` | Pick a model interactively, or switch by name / `provider:model` |
-| `/download <repo_id> [filename] [--load]` | Download a model from HuggingFace |
+| `/download <model[:quant]>` | Download a local model via Lumen |
 | `/setup` | Load the first available local model if none is active |
-| `/template [status\|reset\|list\|auto]` | Manage the chat template for the loaded local model |
 | `/benchmark [tokens] [--prompt <text>]` | Performance test (local models only) |
-| `/login <provider> [api_key]` | Manage OpenAI/Anthropic/Azure/HuggingFace credentials |
+| `/login <provider> [api_key]` | Manage OpenAI/Anthropic/Azure credentials |
 | `/clear` | Clear conversation history |
 | `/save` | Save the conversation as JSON |
 | `/quit` or `/exit` | Exit Cortex |
@@ -74,17 +73,17 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 /model list                             # plain text list (headless/worker fallback)
 ```
 
-### `/download` — fetch models from HuggingFace
+### `/download` — fetch local models via Lumen
 
 ```bash
-/download mlx-community/Nanbeige4.1-3B-bf16 --load
-/download TheBloke/Mistral-7B-Instruct-v0.2-GGUF mistral-7b-instruct-v0.2.Q4_K_M.gguf
+/download qwen3-5-9b:q4_0
+/download qwen3-6-27b            # default quant Q8_0
+/download cancel                 # cancel an in-flight download
 ```
 
-- Without `filename`, the whole repository snapshot is downloaded to `model_path` (default `~/models`).
-- Interrupted snapshot downloads are detected and resumed.
-- `--load` loads the model immediately after download (or, if it already exists, loads it).
-- Gated repos need HuggingFace auth: run `huggingface-cli login` in your shell, then check with `/login huggingface`.
+- Local models are downloaded and converted by the Lumen engine (`lumen pull`); only Lumen-supported models are available — the `/model` picker marks them `download required`.
+- Progress streams into the TUI; after it finishes, load with `/model <model:quant>`.
+
 
 ### `/login` — credentials
 
@@ -93,7 +92,6 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 /login anthropic <api_key>    # validate and store an Anthropic key
 /login azure <api_key>        # store an Azure OpenAI key
 /login openai                 # show auth status for a provider
-/login huggingface            # show HuggingFace auth status (never paste HF tokens into chat)
 ```
 
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `AZURE_OPENAI_API_KEY` environment
@@ -102,14 +100,6 @@ endpoint via `AZURE_OPENAI_ENDPOINT` (or `cloud_azure_endpoint` in
 `config.yaml`); Azure model ids are your deployment names, selected as
 `/model azure:<deployment>` (e.g. `azure:gpt-5.5`).
 
-### `/template` — chat templates (local models)
-
-```bash
-/template            # auto-detect and configure the template for the loaded model
-/template status     # show the current template configuration
-/template list       # list available templates
-/template reset      # reset to auto-detected defaults
-```
 
 ### `/benchmark` — local performance test
 

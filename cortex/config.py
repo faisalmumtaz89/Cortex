@@ -79,19 +79,10 @@ class InferenceConfig(BaseModel):
     seed: int = Field(default=-1)
 
 class ModelConfig(BaseModel):
-    """Model configuration."""
-    model_path: Path = Field(default_factory=lambda: Path.home() / "models")
+    """Model selection state (local models are served by Lumen)."""
+
     default_model: str = Field(default="")
     last_used_model: str = Field(default="")  # Track the last used model
-    model_cache_dir: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "models")
-    preload_models: List[str] = Field(default_factory=list)
-    max_loaded_models: int = Field(default=3, ge=1, le=5)
-    lazy_load: bool = False
-    verify_gpu_compatibility: bool = True
-    default_quantization: str = Field(default="Q4_K_M")
-    supported_quantizations: List[str] = Field(
-        default_factory=lambda: ["Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0"]
-    )
 
 
 class CloudConfig(BaseModel):
@@ -105,12 +96,22 @@ class CloudConfig(BaseModel):
     cloud_azure_endpoint: str = Field(default="")
 
 
+class LumenConfig(BaseModel):
+    """Managed local Lumen inference server configuration."""
+
+    lumen_binary: str = Field(default="lumen")
+    lumen_server_binary: str = Field(default="lumen-server")
+    lumen_port: int = Field(default=0, ge=0, le=65535)  # 0 = pick a free port
+    lumen_context_len: int = Field(default=0, ge=0)  # 0 = lumen's default
+    lumen_startup_timeout_seconds: int = Field(default=180, ge=10, le=900)
+    lumen_log_level: str = Field(default="warn")
+
+
 class ToolsConfig(BaseModel):
     """Tooling runtime configuration."""
 
     tools_enabled: bool = True
     tools_profile: Literal["off", "read_only", "edit", "full"] = "full"
-    tools_local_mode: Literal["disabled", "experimental"] = "experimental"
     tools_max_iterations: int = Field(default=25, ge=1, le=100)
     tools_idle_timeout_seconds: int = Field(default=45, ge=1, le=600)
     tools_continue_on_reject: bool = False
@@ -188,6 +189,7 @@ class Config:
         self.inference: InferenceConfig
         self.model: ModelConfig
         self.cloud: CloudConfig
+        self.lumen: LumenConfig
         self.tools: ToolsConfig
         self.ui: UIConfig
         self.logging: LoggingConfig
@@ -223,7 +225,7 @@ class Config:
         """All flat config keys across section models."""
         sections: List[type[BaseModel]] = [
             GPUConfig, MemoryConfig, PerformanceConfig, InferenceConfig,
-            ModelConfig, CloudConfig, ToolsConfig, UIConfig, LoggingConfig,
+            ModelConfig, CloudConfig, LumenConfig, ToolsConfig, UIConfig, LoggingConfig,
             ConversationConfig, SystemConfig, DeveloperConfig, PathsConfig,
         ]
         keys: set = set()
@@ -259,6 +261,7 @@ class Config:
         self.inference = InferenceConfig()
         self.model = ModelConfig()
         self.cloud = CloudConfig()
+        self.lumen = LumenConfig()
         self.tools = ToolsConfig()
         self.ui = UIConfig()
         self.logging = LoggingConfig()
@@ -299,10 +302,7 @@ class Config:
 
             self.model = ModelConfig(**self._get_section({
                 k: v for k, v in self._raw_config.items()
-                if k in ["model_path", "default_model", "last_used_model", "model_cache_dir",
-                        "preload_models", "max_loaded_models", "lazy_load",
-                        "verify_gpu_compatibility", "default_quantization",
-                        "supported_quantizations"]
+                if k in ["default_model", "last_used_model"]
             }))
 
             self.cloud = CloudConfig(**self._get_section({
@@ -317,12 +317,23 @@ class Config:
                 ]
             }))
 
+            self.lumen = LumenConfig(**self._get_section({
+                k: v for k, v in self._raw_config.items()
+                if k in [
+                    "lumen_binary",
+                    "lumen_server_binary",
+                    "lumen_port",
+                    "lumen_context_len",
+                    "lumen_startup_timeout_seconds",
+                    "lumen_log_level",
+                ]
+            }))
+
             raw_tools = self._get_section({
                 k: v for k, v in self._raw_config.items()
                 if k in [
                     "tools_enabled",
                     "tools_profile",
-                    "tools_local_mode",
                     "tools_max_iterations",
                     "tools_idle_timeout_seconds",
                     "tools_continue_on_reject",
@@ -397,19 +408,6 @@ class Config:
                 "patch": "edit",
             }
             data["tools_profile"] = aliases.get(normalized, normalized)
-
-        local_mode = data.get("tools_local_mode")
-        if isinstance(local_mode, bool):
-            data["tools_local_mode"] = "experimental" if local_mode else "disabled"
-        elif local_mode is not None:
-            normalized_mode = str(local_mode).strip().lower()
-            mode_aliases = {
-                "false": "disabled",
-                "off": "disabled",
-                "true": "experimental",
-                "on": "experimental",
-            }
-            data["tools_local_mode"] = mode_aliases.get(normalized_mode, normalized_mode)
 
         return data
 

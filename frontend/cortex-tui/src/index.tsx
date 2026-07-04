@@ -14,7 +14,11 @@ process.on("uncaughtException", (error) => {
 void render(() => <App />, {
   targetFps: 60,
   gatherStats: false,
-  exitOnCtrlC: true,
+  // OpenTUI's exitOnCtrlC (and its SIGINT/SIGTERM handlers) only DESTROY the
+  // renderer — they never exit the process, and the shared spinner interval +
+  // worker pipes keep the event loop alive, which made Ctrl+C need a second
+  // press. app.tsx owns Ctrl+C/SIGINT/SIGTERM via lib/exit.ts instead.
+  exitOnCtrlC: false,
   autoFocus: false,
   useAlternateScreen: true,
   // Mouse ON so the transcript scrollbox scrolls with the wheel (the expected

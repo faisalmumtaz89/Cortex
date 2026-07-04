@@ -5,6 +5,7 @@ import { RpcProvider, useRpc } from "./context/rpc"
 import { StoreProvider, useStore } from "./context/store"
 import { SessionRoute } from "./routes/session"
 import { classifySelectionKey } from "./components/selection_list"
+import { exitCortex, registerRendererDestroy } from "./lib/exit"
 import { UI_PALETTE } from "./components/ui_palette"
 
 const PERMISSION_REPLIES = ["allow_once", "allow_always", "reject"] as const
@@ -15,6 +16,13 @@ function SessionScreen() {
   const renderer = useRenderer()
 
   renderer.disableStdoutInterception()
+
+  // One clean exit path: Ctrl+C (raw-mode key), SIGINT/SIGTERM (e.g. the
+  // python launcher terminating us), and /quit all funnel through exitCortex,
+  // which restores the terminal and exits — one press, whole tree torn down.
+  registerRendererDestroy(() => renderer.destroy())
+  process.on("SIGINT", () => exitCortex(0))
+  process.on("SIGTERM", () => exitCortex(0))
 
   const submit = async (value: string): Promise<boolean> => {
     const trimmed = value.trim()
@@ -28,6 +36,12 @@ function SessionScreen() {
     const rawKey = String(evt.name ?? "")
     const key = rawKey.toLowerCase()
     const ctrl = Boolean((evt as { ctrl?: boolean }).ctrl)
+    // Ctrl+C exits from ANY state (busy turns, modals, overlays included) —
+    // in raw mode it arrives as a keypress, not a signal.
+    if (ctrl && key === "c") {
+      exitCortex(0)
+      return
+    }
     if (store.state.pendingPermission) {
       // The prompt textarea is unfocused while a permission is pending, so the
       // global handler owns these keys. Arrow-select + Enter, no numbers.

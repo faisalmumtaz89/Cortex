@@ -228,38 +228,76 @@ export function SessionRoute(props: {
     setSelectedIndex(0)
   }
 
-  // ---- Interactive /model picker (replaces the old numbered list) ----
+  // ---- Interactive /model picker: one tab per origin (Local / Cloud) ----
   interface ModelEntry {
+    kind: "entry" | "divider"
     selector: string // what /model receives: a local name or "provider:model"
     primary: string
+    size?: string // on-disk size for downloaded local models, e.g. "5.4 GB"
     tag?: SelectionTag
     active: boolean
   }
+  type PickerTab = "local" | "cloud"
+  const PICKER_TABS: PickerTab[] = ["local", "cloud"]
   const [modelPickerOpen, setModelPickerOpen] = createSignal(false)
   const [modelPickerIndex, setModelPickerIndex] = createSignal(0)
+  const [modelPickerTab, setModelPickerTab] = createSignal<PickerTab>("local")
 
-  const modelPickerEntries = createMemo<ModelEntry[]>(() => {
-    const entries: ModelEntry[] = []
+  const PICKER_DIVIDER: ModelEntry = { kind: "divider", selector: "", primary: "", active: false }
+
+  const localPickerEntries = createMemo<ModelEntry[]>(() => {
+    const downloaded: ModelEntry[] = []
+    const downloadable: ModelEntry[] = []
     for (const item of store.state.models.local) {
       const name = String(item.name ?? "").trim()
       if (!name) continue
       const active = Boolean(item.active)
-      entries.push({
+      const cached = item.cached !== false
+      const loading =
+        Boolean(item.loading) ||
+        store.state.activeDownloadRepoId === name ||
+        store.state.activeLoadSelector === name
+      const entry: ModelEntry = {
+        kind: "entry",
         selector: name,
         primary: name,
+        size: cached ? String(item.size ?? "").trim() || undefined : undefined,
         active,
-        tag: active
-          ? { text: "active", color: UI_PALETTE.accent }
-          : item.loaded
-            ? { text: "loaded", color: UI_PALETTE.statusIdle }
-            : undefined,
-      })
+        tag: loading
+          ? {
+              text: store.state.activeDownloadRepoId === name ? "downloading…" : "loading…",
+              color: UI_PALETTE.statusBusy,
+            }
+          : active
+            ? { text: "active", color: UI_PALETTE.accent }
+            : item.loaded
+              ? { text: "loaded", color: UI_PALETTE.statusIdle }
+              : !cached
+                ? { text: "select to download", color: UI_PALETTE.statusBusy }
+                : { text: "ready", color: UI_PALETTE.statusIdle },
+      }
+      if (cached) {
+        downloaded.push(entry)
+      } else {
+        downloadable.push(entry)
+      }
     }
+    // Downloaded first; one blank divider before the download candidates —
+    // the tab is the grouping, the tags carry per-row state.
+    if (downloaded.length > 0 && downloadable.length > 0) {
+      return [...downloaded, PICKER_DIVIDER, ...downloadable]
+    }
+    return [...downloaded, ...downloadable]
+  })
+
+  const cloudPickerEntries = createMemo<ModelEntry[]>(() => {
+    const cloud: ModelEntry[] = []
     for (const item of store.state.models.cloud) {
       const selector = String(item.selector ?? "").trim()
       if (!selector) continue
       const active = Boolean(item.active)
-      entries.push({
+      cloud.push({
+        kind: "entry",
         selector,
         primary: selector,
         active,
@@ -270,14 +308,54 @@ export function SessionRoute(props: {
             : { text: "login required", color: UI_PALETTE.statusBusy },
       })
     }
-    return entries
+    return cloud
   })
+
+  const modelPickerEntries = createMemo<ModelEntry[]>(() =>
+    modelPickerTab() === "local" ? localPickerEntries() : cloudPickerEntries(),
+  )
+
+  const isPickerDivider = (entry: ModelEntry) => entry.kind === "divider"
+
+  /** Next selectable index in `dir`, skipping divider rows (wraps). */
+  const stepPickerIndex = (from: number, dir: 1 | -1): number => {
+    const entries = modelPickerEntries()
+    const count = entries.length
+    if (count === 0) return 0
+    let index = from
+    for (let hops = 0; hops < count; hops += 1) {
+      index = (index + dir + count) % count
+      if (!isPickerDivider(entries[index])) return index
+    }
+    return from
+  }
+
+  /** Selection lands on the active model when it lives on this tab, else the
+   * first selectable row. */
+  const resetPickerIndex = () => {
+    const entries = modelPickerEntries()
+    const activeIdx = entries.findIndex((entry) => entry.active)
+    const firstSelectable = entries.findIndex((entry) => !isPickerDivider(entry))
+    setModelPickerIndex(activeIdx >= 0 ? activeIdx : Math.max(firstSelectable, 0))
+  }
+
+  const switchPickerTab = () => {
+    setModelPickerTab((tab) => (tab === "local" ? "cloud" : "local"))
+    resetPickerIndex()
+  }
 
   const openModelPicker = () => {
     // The store's model list is refreshed after every command, so it is current.
-    const entries = modelPickerEntries()
-    const activeIdx = entries.findIndex((entry) => entry.active)
-    setModelPickerIndex(activeIdx >= 0 ? activeIdx : 0)
+    // Open on the tab matching the active backend; an empty tab falls through
+    // to the other so the picker never opens onto nothing.
+    let tab: PickerTab = store.state.activeBackend === "cloud" ? "cloud" : "local"
+    const entriesFor = (which: PickerTab) =>
+      which === "local" ? localPickerEntries() : cloudPickerEntries()
+    if (entriesFor(tab).length === 0 && entriesFor(tab === "local" ? "cloud" : "local").length > 0) {
+      tab = tab === "local" ? "cloud" : "local"
+    }
+    setModelPickerTab(tab)
+    resetPickerIndex()
     closePaletteAndClearInput()
     setModelPickerOpen(true)
   }
@@ -400,14 +478,22 @@ export function SessionRoute(props: {
     }
     event.preventDefault()
     const action = classifySelectionKey(event)
+    const rawKey = String(event.name ?? "").toLowerCase()
     const entries = modelPickerEntries()
     const count = entries.length
-    if (action === "up" && count > 0) {
-      setModelPickerIndex((index) => (index - 1 + count) % count)
+    if (action === "tab" || rawKey === "left" || rawKey === "right") {
+      // Tab / ←→ flip between the Local and Cloud tabs (picker-only keys —
+      // Tab in the slash palette still completes commands).
+      switchPickerTab()
+    } else if (action === "up" && count > 0) {
+      setModelPickerIndex((index) => stepPickerIndex(index, -1))
     } else if (action === "down" && count > 0) {
-      setModelPickerIndex((index) => (index + 1) % count)
+      setModelPickerIndex((index) => stepPickerIndex(index, 1))
     } else if (action === "enter" && count > 0) {
       const entry = entries[Math.min(modelPickerIndex(), count - 1)]
+      if (!entry || isPickerDivider(entry)) {
+        return true
+      }
       closeModelPicker()
       runSlashCommand(`/model ${entry.selector}`)
     } else if (action === "cancel") {
@@ -456,8 +542,12 @@ export function SessionRoute(props: {
     return readGitBranch(process.env.CORTEX_PROJECT_DIR || process.cwd())
   })
   const headerModel = createMemo(() => {
-    const label = hasActiveModel() ? activeModelLabel() : "no model"
-    return label.length > 28 ? `${label.slice(0, 27)}…` : label
+    if (!hasActiveModel()) {
+      return "no model"
+    }
+    const origin = (store.state.activeBackend ?? "").trim()
+    const label = origin ? `${origin} · ${activeModelLabel()}` : activeModelLabel()
+    return label.length > 36 ? `${label.slice(0, 35)}…` : label
   })
   const headerRightLen = createMemo(() => headerModel().length + 3 + store.state.status.length)
   // Branch is capped (never wider than 24 or the remaining budget) and SHED
@@ -934,8 +1024,9 @@ export function SessionRoute(props: {
         </Show>
 
         {/* Interactive /model picker — same overlay slot, mutually exclusive.
-            Primary names are width-budgeted so they ellipsize instead of
-            colliding with the right-aligned status tag on narrow terminals. */}
+            One origin per tab (Local / Cloud); Tab or ←→ switch. Primary names
+            are width-budgeted so they ellipsize instead of colliding with the
+            right-aligned status tag on narrow terminals. */}
         <Show when={modelPickerOpen()}>
           <SelectionList
             items={modelPickerEntries()}
@@ -944,10 +1035,26 @@ export function SessionRoute(props: {
               const budget = Math.max(12, terminalColumns() - 24)
               return entry.primary.length > budget ? `${entry.primary.slice(0, budget - 1)}…` : entry.primary
             }}
+            getSecondary={(entry) => (entry.size ? `  ${entry.size}` : undefined)}
             getTag={(entry) => entry.tag}
+            isHeader={isPickerDivider}
             title="Select a model"
-            footer={terminalColumns() < 56 ? "↑↓ · Enter load · Esc" : "↑↓ select · Enter load · Esc cancel"}
-            emptyLabel="No models available — /download one or /login for cloud."
+            tabs={{
+              labels: ["Local", "Cloud"],
+              activeIndex: PICKER_TABS.indexOf(modelPickerTab()),
+            }}
+            footer={
+              terminalColumns() < 64
+                ? `↑↓ · Tab ${modelPickerTab() === "local" ? "cloud" : "local"} · Enter · Esc`
+                : modelPickerTab() === "local"
+                  ? "↑↓ select · Tab cloud · Enter load · Esc cancel"
+                  : "↑↓ select · Tab local · Enter use · Esc cancel"
+            }
+            emptyLabel={
+              modelPickerTab() === "local"
+                ? "No local models — Lumen not detected. Tab for cloud."
+                : "No cloud models — /login openai|anthropic|azure. Tab for local."
+            }
           />
         </Show>
 

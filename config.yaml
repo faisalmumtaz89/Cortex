@@ -8,8 +8,11 @@ top_p: 0.95
 max_tokens: 4096
 context_length: 8192
 
-# Local models
-model_path: ~/models
+# Local models (served by the managed Lumen engine)
+# lumen_binary: lumen
+# lumen_server_binary: lumen-server
+# lumen_port: 0            # 0 = pick a free port
+# lumen_context_len: 0     # 0 = Lumen's default
 
 # Cloud models
 cloud_default_openai_model: gpt-5.1
@@ -19,7 +22,6 @@ cloud_default_anthropic_model: claude-sonnet-4-5
 # Agent tooling
 tools_enabled: true
 tools_profile: full          # off | read_only | edit | full
-tools_local_mode: experimental
 tools_max_iterations: 25
 
 # Logging

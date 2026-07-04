@@ -34,18 +34,9 @@ dependencies = [
     "openai>=1.54.0",
     "anthropic>=0.42.0",
     "keyring>=24.3.0",
-    "huggingface-hub>=0.19.0",
 ]
 
 [project.optional-dependencies]
-# Local inference on Apple Silicon (MLX + GGUF)
-local = [
-    "mlx>=0.30.4",
-    "mlx-lm>=0.30.5",
-    "llama-cpp-python>=0.2.0",
-    "numpy>=1.24.0",
-]
-
 # Development tools
 dev = [
     "pytest>=7.4.0",
@@ -53,11 +44,6 @@ dev = [
     "mypy>=1.8.0",
     "types-PyYAML>=6.0.12.20250915",
     "types-psutil>=7.0.0.20251001",
-]
-
-# Optional model format support
-optional = [
-    "sentencepiece>=0.1.99",     # For certain tokenizers (needs cmake to build)
 ]
 
 [project.scripts]
@@ -69,7 +55,7 @@ Homepage = "https://github.com/faisalmumtaz89/Cortex"
 Documentation = "https://github.com/faisalmumtaz89/Cortex/wiki"
 
 [tool.setuptools]
-packages = ["cortex", "cortex.app", "cortex.protocol", "cortex.cloud", "cortex.cloud.clients", "cortex.metal", "cortex.ui", "cortex.ui_runtime", "cortex.template_registry", "cortex.template_registry.template_profiles", "cortex.template_registry.template_profiles.complex", "cortex.template_registry.template_profiles.standard", "cortex.tooling", "cortex.tooling.builtin"]
+packages = ["cortex", "cortex.app", "cortex.protocol", "cortex.cloud", "cortex.cloud.clients", "cortex.ui_runtime", "cortex.tooling", "cortex.tooling.builtin"]
 include-package-data = true
 
 [tool.setuptools.package-data]
@@ -91,7 +77,7 @@ disallow_untyped_defs = false
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["sentencepiece"]
+module = ["keyring", "keyring.errors"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

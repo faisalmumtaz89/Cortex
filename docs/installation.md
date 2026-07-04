@@ -90,10 +90,10 @@ python -c "import mlx.core as mx; print(f'MLX device: {mx.default_device()}')"
 
 ```bash
 cortex
-/download mlx-community/Nanbeige4.1-3B-bf16 --load
+/download qwen3-5-9b:q4_0
 ```
 
-Prefer `mlx-community` models (native MLX) or GGUF files. Downloads land in `model_path` (default `~/models`).
+Local models are downloaded and managed by the Lumen engine (`/model` lists what's supported; cache lives at `~/.cache/lumen/`).
 
 **Cloud instead of local:**
 

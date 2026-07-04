@@ -30,71 +30,17 @@ except ImportError:
 from cortex.ui_runtime.launcher import launch_tui
 
 
-def _build_components(
-    *,
-    strict_gpu_validation: bool = True,
-    lazy_inference_engine: bool = False,
-    eager_gpu_validation: bool = True,
-) -> tuple[Any, Any, Any, Any, Any]:
-    from cortex.app.lazy_inference_engine import LazyProxy
+def _build_components() -> tuple[Any, Any, Any]:
     from cortex.config import Config
     from cortex.conversation_manager import ConversationManager
     from cortex.gpu_validator import GPUValidator
     from cortex.logging_config import configure_logging
-    from cortex.model_manager import ModelManager
 
     config = Config()
     configure_logging(config)
     gpu_validator = GPUValidator()
-
-    if eager_gpu_validation:
-        is_valid, _gpu_info, errors = gpu_validator.validate()
-        if not is_valid:
-            if strict_gpu_validation:
-                print(
-                    "Error: GPU validation failed. Cortex requires Apple Silicon with Metal support.",
-                    file=sys.stderr,
-                )
-                for error in errors:
-                    print(f"  - {error}", file=sys.stderr)
-                raise SystemExit(1)
-
-            print(
-                "Warning: GPU validation failed. Continuing in worker mode with limited local inference capability.",
-                file=sys.stderr,
-            )
-            for error in errors:
-                print(f"  - {error}", file=sys.stderr)
-
-    model_manager = ModelManager(config, gpu_validator)
-
-    def _create_inference_engine():
-        # Import lazily to avoid paying MLX/Torch startup costs in cloud-only worker turns.
-        from cortex.inference_engine import InferenceEngine
-
-        return InferenceEngine(config, model_manager)
-
-    if lazy_inference_engine:
-        inference_engine = LazyProxy(_create_inference_engine)
-    else:
-        inference_engine = _create_inference_engine()
     conversation_manager = ConversationManager(config)
-    return config, gpu_validator, model_manager, inference_engine, conversation_manager
-
-
-def _cleanup_inference_engine(inference_engine) -> None:
-    if inference_engine is not None and hasattr(inference_engine, "get_if_initialized"):
-        inference_engine = inference_engine.get_if_initialized()
-
-    if inference_engine is None:
-        return
-
-    if (
-        inference_engine is not None
-        and hasattr(inference_engine, "memory_pool")
-        and inference_engine.memory_pool
-    ):
-        inference_engine.memory_pool.cleanup()
+    return config, gpu_validator, conversation_manager
 
 
 def _run_worker_stdio() -> None:
@@ -113,52 +59,27 @@ def _run_worker_stdio() -> None:
     # Route any accidental stdout writes away from JSON-RPC channel.
     sys.stdout = sys.stderr
 
-    inference_engine = None
-    try:
-        (
-            config,
-            _gpu_validator,
-            model_manager,
-            inference_engine,
-            conversation_manager,
-        ) = _build_components(
-            strict_gpu_validation=False,
-            lazy_inference_engine=True,
-            eager_gpu_validation=False,
-        )
-
-        runtime = WorkerRuntime(
-            config=config,
-            model_manager=model_manager,
-            gpu_validator=_gpu_validator,
-            inference_engine=inference_engine,
-            conversation_manager=conversation_manager,
-            rpc_stdin=rpc_stdin,
-            rpc_stdout=rpc_stdout,
-        )
-        runtime.run()
-    finally:
-        _cleanup_inference_engine(inference_engine)
+    config, gpu_validator, conversation_manager = _build_components()
+    runtime = WorkerRuntime(
+        config=config,
+        gpu_validator=gpu_validator,
+        conversation_manager=conversation_manager,
+        rpc_stdin=rpc_stdin,
+        rpc_stdout=rpc_stdout,
+    )
+    runtime.run()
 
 
 def _run_headless(args) -> None:
     from cortex.app.headless import run_headless
 
-    components = _build_components(
-        strict_gpu_validation=False,
-        lazy_inference_engine=True,
-        eager_gpu_validation=False,
+    components = _build_components()
+    exit_code = run_headless(
+        prompt=args.print,
+        components=components,
+        model=args.model,
+        full_auto=args.full_auto,
     )
-    inference_engine = components[3]
-    try:
-        exit_code = run_headless(
-            prompt=args.print,
-            components=components,
-            model=args.model,
-            full_auto=args.full_auto,
-        )
-    finally:
-        _cleanup_inference_engine(inference_engine)
     if exit_code != 0:
         raise SystemExit(exit_code)
 

@@ -11,66 +11,48 @@
         terminal AI coding agent for Apple Silicon
 ```
 
-Cortex runs coding-agent turns in your terminal: it reads, searches, edits, and runs commands inside your repository through a small permissioned tool set. Local-first — models run on your Mac's GPU via MLX (primary) or GGUF (llama.cpp) — with optional cloud models from OpenAI, Anthropic, and Azure OpenAI.
+Cortex is an agentic coding tool that lives in your terminal. It reads, searches, and edits your code, runs commands, and shows every change as a reviewable diff — powered by local models running on your Mac's GPU through the [Lumen](https://github.com/faisalmumtaz89/Lumen) inference engine, or by cloud models (OpenAI, Anthropic, Azure OpenAI) when you want them.
 
-Two processes: an OpenTUI frontend (Bun + SolidJS, `frontend/cortex-tui`) owns rendering; a Python worker (`python -m cortex --worker-stdio`) owns models and tools, speaking JSON-RPC 2.0 over stdio.
-
-## Quick Start
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
-cortex
-```
-
-Inside Cortex:
-
-- `/download mlx-community/Nanbeige4.1-3B-bf16 --load` — fetch and load a local model
-- `/login openai <api_key>` (or `anthropic` / `azure`) — use cloud models instead; env keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT`) also work
-- `/model` — pick a model interactively (↑↓ + Enter), or `/model <name | provider:model>`
-- `/help` — every command
-
-Then type what you want done. Cortex loads `AGENTS.md` (or `CLAUDE.md`) from your working directory into its system prompt, so project conventions travel with the agent.
-
-## Agent Tools
-
-Tools are sandboxed to the directory Cortex was started in:
-
-| Tool | Purpose | Permission |
-|---|---|---|
-| `read_file` | Read a file by optional line range | auto-allowed |
-| `list_dir` | List directory contents | auto-allowed |
-| `search` | Search file contents (prefers ripgrep) | auto-allowed |
-| `edit_file` | Exact string-replacement edit | prompts |
-| `write_file` | Create or overwrite a file | prompts |
-| `bash` | Run a shell command with timeout | prompts |
-
-Edits render as green/red diffs. When approval is needed, an arrow menu opens: **Allow once** / **Allow always** (persisted to `~/.cortex/tool_permissions.yaml`) / **Reject** — ↑↓ to choose, Enter to confirm, Esc rejects.
-
-Profiles (`tools_profile` in `config.yaml`): `off`, `read_only`, `edit`, `full` (default). Local models call tools through an experimental `<tool_calls>` JSON protocol; cloud models use native tool calling.
-
-## Headless Mode
-
-One agent turn without the TUI — reply on stdout, tool activity on stderr, pipeable:
-
-```bash
-cortex -p "explain the retry logic in cortex/cloud/router.py"
-cortex -p "fix the failing test" --model anthropic:claude-sonnet-4-5 --full-auto
-```
-
-Reads are allowed; edits and shell commands are denied unless `--full-auto`. Exit codes: `0` success, `1` turn error, `2` setup error.
-
-## Requirements
+![Cortex demo](demo.gif)
 
 **Cortex runs on Apple Silicon Macs. Nothing else.**
 
-- Apple Silicon Mac (M1–M4), macOS 13.3+
-- Python 3.11+, Xcode Command Line Tools
-- 8GB+ unified memory (16GB+ recommended for larger local models)
+## Get started
+
+1. Install Cortex:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
+```
+
+2. Navigate to your project and start:
+
+```bash
+cd your-project
+cortex
+```
+
+3. Pick a model with `/model`:
+   - **Local** — Lumen-supported models (Qwen3.5 / 3.6 family). Selecting an undownloaded model downloads and loads it automatically; Cortex manages the Lumen server for you (start, load, switch, shutdown).
+   - **Cloud** — `/login openai <key>` (or `anthropic` / `azure`), or set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT`.
+
+Then type what you want done. Cortex loads `AGENTS.md` (or `CLAUDE.md`) from your working directory into its system prompt, so project conventions travel with the agent.
+
+## What you get
+
+- **Agent tools, sandboxed to your project** — `read_file`, `list_dir`, `search` run freely; `edit_file`, `write_file`, `bash` ask first (arrow menu: allow once / always / reject). Edits render as green/red diffs.
+- **Local models, fully managed** — Cortex owns the Lumen server lifecycle end to end; local turns use the same native tool-calling loop as cloud.
+- **Verified provenance** — every reply is checked against the model you selected (endpoint + reported model); a mismatch rejects the turn. What the UI shows is what actually answered, labeled `local ·` / `cloud ·` everywhere.
+- **Headless mode** — `cortex -p "fix the failing test" --full-auto` for scripts and CI; reply on stdout, tools on stderr.
+
+## Commands
+
+`/model` (tabbed local/cloud picker) · `/download` · `/login` · `/status` · `/gpu` · `/benchmark` · `/clear` · `/save` · `/setup` · `/help` · `/quit`
 
 ## Documentation
 
-- `docs/installation.md` · `docs/cli.md` · `docs/model-management.md` · `docs/configuration.md` · `docs/troubleshooting.md`
-- Deeper: `docs/architecture-runtime.md`, `docs/inference-engine.md`, `docs/mlx-acceleration.md`, `docs/development.md`
+- [Installation](docs/installation.md) · [CLI & tools](docs/cli.md) · [Model management](docs/model-management.md) · [Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md)
+- Deeper: [Runtime architecture](docs/architecture-runtime.md) · [Development](docs/development.md)
 
 ## Development
 
@@ -81,7 +63,7 @@ python -m pytest tests/ -q          # full suite — must be green before and af
 cd frontend/cortex-tui && bun run typecheck && bun run build   # TUI sidecar
 ```
 
-Behavioral changes are gated empirically: `tests/test_agent_runtime_e2e.py` drives the real worker over JSON-RPC and `tests/test_tui_e2e.py` drives the real TUI in tmux, both with a deterministic scripted model (`CORTEX_SCRIPTED_MODEL`), asserting observable effects. If a change cannot be observed through the suite, add the E2E scenario first. See `docs/development.md`.
+Behavioral changes are gated empirically: e2e suites drive the real worker over JSON-RPC and the real TUI in tmux with a deterministic scripted model, asserting observable effects. If a change cannot be observed through the suite, add the E2E scenario first. See [docs/development.md](docs/development.md).
 
 ## License
 

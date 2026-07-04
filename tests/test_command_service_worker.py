@@ -1,880 +1,419 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from cortex.app.command_service import CommandService
+from cortex.app.model_service import ModelService
+from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
+from tests.lumen_fakes import FakeLumenRuntime, catalog
 
 
-class _FakeModelManager:
-    def __init__(self, current_model: str = "demo-model") -> None:
-        self.current_model = current_model
-        self.tokenizers = {current_model: object()} if current_model else {}
-
-    def discover_available_models(self):
-        if not self.current_model:
-            return []
-        return [
-            {
-                "name": self.current_model,
-                "path": f"/tmp/{self.current_model}",
-                "format": "mlx",
-                "size_gb": 1.2,
-            }
-        ]
-
-
-class _FakeModelService:
-    def __init__(self, current_model: str = "demo-model", *, backend: str = "local") -> None:
-        self.model_manager = _FakeModelManager(current_model=current_model)
-        self.active_target = SimpleNamespace(backend=backend)
-        self.load_calls: list[str] = []
-
-    def select_local_model(self, model_name_or_path: str):
-        self.load_calls.append(model_name_or_path)
-        return {"ok": True, "message": "loaded", "active_model": "demo-model"}
-
-    def get_active_model_label(self) -> str:
-        return "cloud-model" if self.active_target.backend == "cloud" else "demo-model"
-
-    def status_summary(self):
-        return {"active_model": "demo-model"}
-
-    def gpu_status(self):
-        return {"chip_name": "Apple M4"}
-
-    def list_models(self):
-        return {"local": [], "cloud": []}
-
-    def select_cloud_model(self, provider: str, model_id: str):
-        return {"ok": True, "message": f"cloud {provider}:{model_id}"}
-
-    def auth_status(self, _provider):
-        return {"authenticated": False}
-
-    def auth_save_key(self, _provider, _key):
-        return {"ok": True}
-
-
-class _FakeDownloader:
-    def __init__(
-        self, *, success: bool = True, message: str = "Downloaded", path: Path | None = None
-    ):
-        self.success = success
-        self.message = message
-        self.path = path or Path("/tmp/model.gguf")
-        self.calls: list[tuple[str, str | None]] = []
-
-    def download_model(self, repo_id: str, filename: str | None):
-        self.calls.append((repo_id, filename))
-        return self.success, self.message, self.path if self.success else None
-
-
-class _FakeTemplateConfigManager:
-    def __init__(self, config=None):
-        self._config = config
-
-    def get_model_config(self, _model_name: str):
-        return self._config
-
-
-class _FakeTemplateRegistry:
-    def __init__(self, *, config=None, reset_ok: bool = True):
-        self.config_manager = _FakeTemplateConfigManager(config=config)
-        self.reset_ok = reset_ok
-        self.setup_calls: list[tuple[str, bool, bool]] = []
-
-    def setup_model(self, model_name: str, *, tokenizer, interactive: bool, force_setup: bool):
-        self.setup_calls.append((model_name, interactive, force_setup))
-        return SimpleNamespace(config=SimpleNamespace(name="ChatML"))
-
-    def reset_model_config(self, _model_name: str):
-        return self.reset_ok
-
-    def list_templates(self):
-        return [{"type": "chatml", "name": "ChatML"}]
-
-
-class _FakeInferenceEngine:
+class _FakeConfig:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, int]] = []
+        self.state: dict[str, str] = {}
+        self.last_used = ""
 
-    def benchmark(self, prompt: str = "Once upon a time", num_tokens: int = 100):
-        self.calls.append((prompt, num_tokens))
-        return SimpleNamespace(
-            tokens_generated=num_tokens,
-            time_elapsed=2.0,
-            tokens_per_second=num_tokens / 2.0,
-            first_token_latency=0.2,
-            gpu_utilization=61.0,
-            memory_used_gb=3.2,
-        )
+    def set_state_value(self, key: str, value: str) -> None:
+        self.state[key] = value
+
+    def update_last_used_model(self, name: str) -> None:
+        self.last_used = name
 
 
-def _service(
-    *, model_service=None, downloader=None, template_registry=None, inference_engine=None
-) -> CommandService:
-    return CommandService(
-        model_service=model_service or _FakeModelService(),
+class _FakeCloudRouter:
+    def __init__(self, *, authenticated: bool = False) -> None:
+        self.authenticated = authenticated
+
+    def get_auth_status(self, _provider):
+        return self.authenticated, "fake"
+
+
+class _FakeCredentialStore:
+    def __init__(self) -> None:
+        self.saved: list[tuple[str, str]] = []
+
+    def get_auth_summary(self, provider):
+        return {"authenticated": False, "source": None}
+
+    def save_api_key(self, provider, api_key):
+        self.saved.append((provider.value, api_key))
+        return True, ""
+
+    def delete_api_key(self, provider):
+        return True, "deleted"
+
+
+def _build(
+    *,
+    lumen: FakeLumenRuntime | None = None,
+    cloud_authenticated: bool = False,
+) -> tuple[CommandService, ModelService, FakeLumenRuntime]:
+    runtime = lumen or FakeLumenRuntime()
+    model_service = ModelService(
+        config=_FakeConfig(),
+        lumen_runtime=runtime,
+        gpu_validator=SimpleNamespace(),
+        cloud_router=_FakeCloudRouter(authenticated=cloud_authenticated),
+        credential_store=_FakeCredentialStore(),
+        cloud_catalog=SimpleNamespace(list_models=lambda: []),
+    )
+    service = CommandService(
+        model_service=model_service,
         clear_session=lambda _session_id: {"ok": True, "message": "cleared"},
         save_session=lambda _session_id: {"ok": True, "path": "/tmp/x.json"},
-        model_downloader=downloader or _FakeDownloader(),
-        template_registry=template_registry or _FakeTemplateRegistry(),
-        inference_engine=inference_engine or _FakeInferenceEngine(),
+        lumen_runtime=runtime,
     )
+    return service, model_service, runtime
+
+
+# ---- /download -------------------------------------------------------------
 
 
 def test_download_requires_args() -> None:
-    service = _service()
+    service, _, _ = _build()
     result = service.execute(session_id="s1", command="/download")
     assert result["ok"] is False
-    assert "Usage: /download <repo_id>" in str(result["message"])
-
-
-def test_download_rejects_invalid_repo_format() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/download badrepo")
-    assert result["ok"] is False
-    assert "Expected: username/model-name" in str(result["message"])
+    assert "Usage: /download <model[:quant]>" in str(result["message"])
 
 
 def test_download_rejects_extra_arguments() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/download user/repo file.gguf extra")
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/download a b")
     assert result["ok"] is False
-    assert "Too many arguments" in str(result["message"])
+    assert "Usage: /download" in str(result["message"])
 
 
-def test_download_rejects_unknown_option() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/download user/repo --force")
+def test_download_rejects_invalid_shell_syntax() -> None:
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command='/download "unterminated')
     assert result["ok"] is False
-    assert "Unknown option: --force" in str(result["message"])
+    assert "Invalid download arguments" in str(result["message"])
 
 
-def test_download_preflight_rejects_missing_repo_without_starting_download() -> None:
-    service = _service()
-    preflight = service.preflight_download("")
-    assert preflight["ok"] is False
-    assert "Usage: /download <repo_id>" in str(preflight["message"])
+def test_download_unknown_model_lists_supported() -> None:
+    service, _, runtime = _build()
+    result = service.execute(session_id="s1", command="/download llama-3")
+    assert result["ok"] is False
+    assert "qwen3-5-9b" in str(result["message"])
+    assert runtime.pull_calls == []
 
 
-def test_download_success_calls_downloader() -> None:
-    downloader = _FakeDownloader(success=True, message="ok", path=Path("/tmp/demo.gguf"))
-    service = _service(downloader=downloader)
-    result = service.execute(session_id="s1", command="/download user/repo model.gguf")
+def test_download_already_cached_loads_the_model() -> None:
+    service, model_service, runtime = _build()
+    result = service.execute(session_id="s1", command="/download qwen3-5-9b:q4_0")
     assert result["ok"] is True
-    assert downloader.calls == [("user/repo", "model.gguf")]
-    assert result["download"]["path"] == "/tmp/demo.gguf"
+    assert "Already downloaded: local · qwen3-5-9b:q4_0 — now active." in str(result["message"])
+    assert runtime.pull_calls == []
+    assert runtime.ensure_calls == ["qwen3-5-9b:q4_0"]
+    assert model_service.active_target.local_model == "qwen3-5-9b:q4_0"
 
 
-def test_download_with_load_selects_local_model() -> None:
-    model_service = _FakeModelService()
-    downloader = _FakeDownloader(success=True, message="ok", path=Path("/tmp/loaded.gguf"))
-    service = _service(model_service=model_service, downloader=downloader)
-    result = service.execute(session_id="s1", command="/download user/repo --load")
-    assert result["ok"] is True
-    assert model_service.load_calls == ["/tmp/loaded.gguf"]
-    assert isinstance(result.get("load"), dict)
-    assert result["load"]["ok"] is True
+def test_download_pulls_and_streams_progress_lines() -> None:
+    service, _, runtime = _build()
+    events: list[dict] = []
 
-
-def test_download_accepts_quoted_filename() -> None:
-    downloader = _FakeDownloader(success=True, message="ok", path=Path("/tmp/quoted.gguf"))
-    service = _service(downloader=downloader)
-    result = service.execute(session_id="s1", command='/download user/repo "model file.gguf"')
-    assert result["ok"] is True
-    assert downloader.calls == [("user/repo", "model file.gguf")]
-
-
-def test_download_existing_target_without_load_is_not_ok_and_skips_network_download() -> None:
-    class _ExistingTargetDownloader:
-        def __init__(self) -> None:
-            self.download_calls = 0
-            self.inspect_calls: list[tuple[str, str | None]] = []
-
-        def inspect_download_target(self, repo_id: str, filename: str | None = None):
-            self.inspect_calls.append((repo_id, filename))
-            return {
-                "path": Path("/tmp/existing-repo"),
-                "exists": True,
-                "resumable": False,
-                "kind": "repo",
-            }
-
-        def download_model(self, repo_id: str, filename: str | None):
-            self.download_calls += 1
-            return True, "unexpected", Path("/tmp/should-not-run")
-
-    model_service = _FakeModelService()
-    downloader = _ExistingTargetDownloader()
-    service = _service(model_service=model_service, downloader=downloader)
-
-    result = service.execute(session_id="s1", command="/download user/repo")
-    assert result["ok"] is False
-    assert "Model already exists: /tmp/existing-repo" in str(result["message"])
-    assert result["download"]["preexisting"] is True
-    assert model_service.load_calls == []
-    assert downloader.download_calls == 0
-    assert downloader.inspect_calls == [("user/repo", None)]
-
-
-def test_download_existing_target_with_load_attempts_load_without_network_download() -> None:
-    class _ExistingTargetDownloader:
-        def __init__(self) -> None:
-            self.download_calls = 0
-            self.inspect_calls: list[tuple[str, str | None]] = []
-
-        def inspect_download_target(self, repo_id: str, filename: str | None = None):
-            self.inspect_calls.append((repo_id, filename))
-            return {
-                "path": Path("/tmp/existing-repo"),
-                "exists": True,
-                "resumable": False,
-                "kind": "repo",
-            }
-
-        def download_model(self, repo_id: str, filename: str | None):
-            self.download_calls += 1
-            return True, "unexpected", Path("/tmp/should-not-run")
-
-    model_service = _FakeModelService()
-    downloader = _ExistingTargetDownloader()
-    service = _service(model_service=model_service, downloader=downloader)
-
-    result = service.execute(session_id="s1", command="/download user/repo --load")
-    assert result["ok"] is True
-    assert "Model already exists: /tmp/existing-repo (loaded)" in str(result["message"])
-    assert result["download"]["preexisting"] is True
-    assert model_service.load_calls == ["/tmp/existing-repo"]
-    assert downloader.download_calls == 0
-    assert downloader.inspect_calls == [("user/repo", None)]
-
-
-def test_template_status_requires_loaded_model() -> None:
-    service = _service(model_service=_FakeModelService(current_model=""))
-    result = service.execute(session_id="s1", command="/template status")
-    assert result["ok"] is False
-    assert result["message"] == "No local model loaded."
-
-
-def test_template_under_cloud_model_reports_local_only() -> None:
-    service = _service(model_service=_FakeModelService(current_model="", backend="cloud"))
-    result = service.execute(session_id="s1", command="/template status")
-    assert result["ok"] is False
-    assert "local models only" in str(result["message"])
-
-
-def test_template_status_returns_configuration() -> None:
-    config = SimpleNamespace(
-        detected_type="reasoning",
-        user_preference="simple",
-        custom_filters=["<think>"],
-        show_reasoning=False,
-        confidence=0.9,
-        last_updated="2026-02-13T00:00:00",
+    result = service.execute(
+        session_id="s1",
+        command="/download qwen3-6-27b:q4_0",
+        progress_callback=events.append,
     )
-    service = _service(template_registry=_FakeTemplateRegistry(config=config))
-    result = service.execute(session_id="s1", command="/template status")
-    assert result["ok"] is True
-    assert result["template"]["detected_type"] == "reasoning"
-    assert result["template"]["custom_filters"] == ["<think>"]
+
+    assert result["ok"] is True, result
+    assert runtime.pull_calls == ["qwen3-6-27b:q4_0"]
+    # Downloading IS selecting: the model auto-loads and becomes active.
+    assert "local · qwen3-6-27b:q4_0 ready — now active." in str(result["message"])
+    assert runtime.ensure_calls == ["qwen3-6-27b:q4_0"]
+    # Progress lines are forwarded in the schema the worker forwards to the
+    # TUI: pull lines as kind "download" (bytes measured by the caller), and a
+    # final "model-load" transition when the chained GPU load begins.
+    assert events, "expected forwarded progress payloads"
+    for event in events[:-1]:
+        assert event["kind"] == "download"
+        assert event["repo_id"] == "qwen3-6-27b:q4_0"
+        assert isinstance(event["phase"], str) and event["phase"]
+        assert "bytes_downloaded" not in event
+    assert events[-1]["kind"] == "model-load"
+    assert events[-1]["phase"] == "loading"
 
 
-def test_template_reset_reports_missing_config() -> None:
-    service = _service(template_registry=_FakeTemplateRegistry(reset_ok=False))
-    result = service.execute(session_id="s1", command="/template reset")
+def test_download_failure_is_summarized_and_does_not_activate() -> None:
+    service, model_service, runtime = _build(lumen=FakeLumenRuntime(pull_ok=False))
+    result = service.execute(session_id="s1", command="/download qwen3-6-27b:q4_0")
     assert result["ok"] is False
-    assert "No template configuration found" in str(result["message"])
+    assert "Download failed" in str(result["message"])
+    assert runtime.ensure_calls == []
+    assert model_service.active_target.local_model is None
 
 
-def test_template_auto_runs_non_interactive_setup() -> None:
-    registry = _FakeTemplateRegistry()
-    service = _service(template_registry=registry)
-    result = service.execute(session_id="s1", command="/template")
-    assert result["ok"] is True
-    assert registry.setup_calls == [("demo-model", False, True)]
-    assert result["template_name"] == "ChatML"
+def test_download_load_failure_after_pull_is_reported() -> None:
+    runtime = FakeLumenRuntime(ensure_ok=False, ensure_message="boot failed")
+    service, model_service, _ = _build(lumen=runtime)
+    result = service.execute(session_id="s1", command="/download qwen3-6-27b:q4_0")
+    assert result["ok"] is False
+    assert "Downloaded local · qwen3-6-27b:q4_0, but loading failed" in str(result["message"])
+    assert model_service.active_target.local_model is None
+
+
+def test_preflight_download_resolves_bare_name_to_cached_quant() -> None:
+    service, _, _ = _build()
+    preflight = service.preflight_download("qwen3-5-9b")
+    assert preflight["ok"] is True
+    assert preflight["selector"] == "qwen3-5-9b:q4_0"
+    assert preflight["cached"] is True
+
+
+# ---- /benchmark -------------------------------------------------------------
 
 
 def test_benchmark_rejects_cloud_backend() -> None:
-    service = _service(model_service=_FakeModelService(backend="cloud"))
+    service, model_service, _ = _build(cloud_authenticated=True)
+    model_service.active_target = ActiveModelTarget.cloud(
+        CloudModelRef(provider=CloudProvider.OPENAI, model_id="gpt-5.1")
+    )
     result = service.execute(session_id="s1", command="/benchmark")
     assert result["ok"] is False
     assert "local models only" in str(result["message"])
 
 
 def test_benchmark_requires_loaded_model() -> None:
-    service = _service(model_service=_FakeModelService(current_model=""))
+    service, _, _ = _build()
     result = service.execute(session_id="s1", command="/benchmark")
     assert result["ok"] is False
-    assert result["message"] == "No model loaded."
-
-
-def test_benchmark_executes_and_returns_metrics_payload() -> None:
-    engine = _FakeInferenceEngine()
-    service = _service(inference_engine=engine)
-    result = service.execute(session_id="s1", command="/benchmark --tokens 80 --prompt 'hello'")
-    assert result["ok"] is True
-    assert engine.calls == [("hello", 80)]
-    assert result["benchmark"]["requested_tokens"] == 80
-    assert result["benchmark"]["tokens_generated"] == 80
-    assert result["benchmark"]["model"] == "demo-model"
-    assert "Benchmark complete" in str(result["message"])
+    assert "No local model loaded" in str(result["message"])
 
 
 def test_benchmark_rejects_invalid_tokens() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/benchmark --tokens nope")
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/benchmark --tokens abc")
     assert result["ok"] is False
     assert "positive integer" in str(result["message"])
 
 
-def test_status_command_includes_formatted_message() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/status")
-    assert result["ok"] is True
-    assert "System status" in str(result["message"])
-    assert "- Active model:" in str(result["message"])
-
-
-def test_gpu_command_includes_formatted_message() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/gpu")
-    assert result["ok"] is True
-    assert "GPU status" in str(result["message"])
-    assert "- Chip name:" in str(result["message"])
-
-
-def test_login_status_includes_formatted_message() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/login openai")
-    assert result["ok"] is True
-    assert isinstance(result.get("auth"), dict)
-    assert "Authentication status" in str(result["message"])
-    assert "- Provider: openai" in str(result["message"])
-
-
-def test_model_rejects_unknown_cloud_provider_gracefully() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/model unknown:gpt")
+def test_benchmark_rejects_out_of_range_tokens() -> None:
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/benchmark 9999")
     assert result["ok"] is False
-    assert "Unsupported cloud provider" in str(result["message"])
+    assert "between 1 and 8192" in str(result["message"])
+
+
+def test_benchmark_measures_through_lumen_endpoint(monkeypatch) -> None:
+    service, model_service, runtime = _build()
+    assert model_service.select_local_model("qwen3-5-9b:q4_0")["ok"] is True
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"usage": {"completion_tokens": 50, "prompt_tokens": 5, "total_tokens": 55}}
+            ).encode("utf-8")
+
+    captured: dict = {}
+
+    def _fake_urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return _FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+    result = service.execute(session_id="s1", command="/benchmark 50")
+
+    assert result["ok"] is True, result
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["body"]["max_tokens"] == 50
+    assert captured["body"]["model"] == "qwen3-5-9b"
+    benchmark = result["benchmark"]
+    assert benchmark["tokens_generated"] == 50
+    assert "tok/s" in str(result["message"])
+
+
+# ---- /model ------------------------------------------------------------------
+
+
+def test_model_list_shows_lumen_tags() -> None:
+    service, model_service, _ = _build()
+    model_service.select_local_model("qwen3-5-9b:q4_0")
+
+    result = service.execute(session_id="s1", command="/model list")
+
+    message = str(result["message"])
+    assert "Local models (Lumen):" in message
+    assert "- qwen3-5-9b:q4_0 (active, loaded)" in message
+    assert "- qwen3-5-9b:q8_0 (not downloaded)" in message
+
+
+def test_model_routes_cloud_selector_to_cloud() -> None:
+    service, _, _ = _build(cloud_authenticated=True)
+    result = service.execute(session_id="s1", command="/model openai:gpt-5.1")
+    assert result["ok"] is True
+    assert "openai:gpt-5.1" in str(result["message"])
+
+
+def test_model_routes_lumen_selector_with_colon_to_local() -> None:
+    service, model_service, runtime = _build()
+    result = service.execute(session_id="s1", command="/model qwen3-5-9b:q4_0")
+    assert result["ok"] is True, result
+    assert runtime.ensure_calls == ["qwen3-5-9b:q4_0"]
+    assert model_service.active_target.local_model == "qwen3-5-9b:q4_0"
 
 
 def test_model_rejects_empty_cloud_selector() -> None:
-    service = _service()
+    service, _, _ = _build()
     result = service.execute(session_id="s1", command="/model openai:")
     assert result["ok"] is False
     assert "Usage: /model <provider:model>" in str(result["message"])
 
 
-def test_login_rejects_unknown_provider_gracefully() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/login unknown")
+def test_model_uncached_selector_sync_fallback_carries_marker() -> None:
+    # The worker intercepts this path in the TUI and auto-downloads; the sync
+    # result (direct callers) carries the structured marker, no /download hint.
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/model qwen3-6-27b:q4_0")
     assert result["ok"] is False
-    assert "Unsupported provider" in str(result["message"])
+    assert result["not_cached"] is True
+    assert "/download" not in str(result["message"])
 
 
-def test_login_huggingface_with_token_is_rejected_for_security() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/login huggingface hf_secret_token")
-    assert result["ok"] is False
-    assert "Do not paste HuggingFace tokens into chat" in str(result["message"])
+# ---- /setup --------------------------------------------------------------------
 
 
-def test_setup_loads_first_available_local_model() -> None:
-    model_service = _FakeModelService(current_model="")
-    model_service.list_models = lambda: {
-        "active_target": {"label": "No model loaded"},
-        "local": [{"name": "first-local-model"}, {"name": "second-local-model"}],
-        "cloud": [],
-    }
-    service = _service(model_service=model_service)
+def test_setup_loads_first_cached_local_model() -> None:
+    service, model_service, runtime = _build()
     result = service.execute(session_id="s1", command="/setup")
-    assert result["ok"] is True
-    assert model_service.load_calls == ["first-local-model"]
+    assert result["ok"] is True, result
+    assert runtime.ensure_calls == ["qwen3-5-9b:q4_0"]
+    assert model_service.active_target.local_model == "qwen3-5-9b:q4_0"
 
 
 def test_setup_reports_complete_when_model_already_active() -> None:
-    model_service = _FakeModelService(current_model="demo-model")
-    model_service.list_models = lambda: {
-        "active_target": {"label": "demo-model"},
-        "local": [{"name": "demo-model", "active": True, "loaded": True}],
-        "cloud": [],
-    }
-    service = _service(model_service=model_service)
+    service, model_service, runtime = _build()
+    model_service.select_local_model("qwen3-5-9b:q4_0")
+    runtime.ensure_calls.clear()
+
     result = service.execute(session_id="s1", command="/setup")
+
     assert result["ok"] is True
-    assert "Setup complete. Active model: demo-model" in str(result["message"])
+    assert "Setup complete" in str(result["message"])
+    assert runtime.ensure_calls == []
 
 
-def test_setup_requires_any_installed_local_model() -> None:
-    model_service = _FakeModelService(current_model="")
-    model_service.list_models = lambda: {
-        "active_target": {"label": "No model loaded"},
-        "local": [],
-        "cloud": [],
-    }
-    service = _service(model_service=model_service)
+def test_setup_guides_to_download_when_nothing_cached() -> None:
+    service, _, _ = _build(
+        lumen=FakeLumenRuntime(models=catalog(("qwen3-5-9b", "Q4_0", False)))
+    )
     result = service.execute(session_id="s1", command="/setup")
     assert result["ok"] is False
-    assert "No local model installed." in str(result["message"])
+    # One-flow guidance: the picker downloads and loads; never a /download dead end.
+    assert "Pick one with /model" in str(result["message"])
+    assert "/download" not in str(result["message"])
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        "/help",
-        "/status",
-        "/gpu",
-        "/model",
-        "/login openai",
-        "/benchmark",
-        "/clear",
-        "/save",
-        "/setup",
-    ],
-)
-def test_core_slash_commands_emit_transcript_ready_message(command: str) -> None:
-    service = _service(model_service=_FakeModelService(current_model=""))
-    result = service.execute(session_id="s1", command=command)
-    assert bool(str(result.get("message", "")).strip())
+# ---- /login ---------------------------------------------------------------------
+
+
+def test_login_rejects_lumen_provider() -> None:
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/login lumen key")
+    assert result["ok"] is False
+    assert "managed local engine" in str(result["message"])
+
+
+def test_login_rejects_unknown_provider() -> None:
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/login huggingface")
+    assert result["ok"] is False
+    assert "/login azure" in str(result["message"])
+
+
+def test_login_provider_key_save_sets_default_success_message() -> None:
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/login openai sk-test")
+    assert result["ok"] is True
+    assert result["message"] == "Saved openai API key."
+
+
+def test_login_status_includes_formatted_message() -> None:
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/login openai")
+    assert result["ok"] is True
+    assert "openai" in str(result["message"]).lower()
+
+
+# ---- dispatch basics --------------------------------------------------------------
 
 
 def test_execute_rejects_empty_command() -> None:
-    service = _service()
+    service, _, _ = _build()
     result = service.execute(session_id="s1", command="   ")
     assert result["ok"] is False
-    assert result["message"] == "Command cannot be empty."
+    assert "Command cannot be empty" in str(result["message"])
 
 
 def test_execute_rejects_non_slash_command() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="download user/repo")
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="hello")
     assert result["ok"] is False
-    assert result["message"] == "Not a slash command: download user/repo"
+    assert "Not a slash command" in str(result["message"])
 
 
 @pytest.mark.parametrize("command", ["/quit", "/exit"])
 def test_execute_quit_commands_return_exit(command: str) -> None:
-    service = _service()
+    service, _, _ = _build()
     result = service.execute(session_id="s1", command=command)
-    assert result["ok"] is True
-    assert result["exit"] is True
+    assert result == {"ok": True, "exit": True}
 
 
 def test_execute_save_sets_default_message_from_path() -> None:
-    service = _service()
+    service, _, _ = _build()
     result = service.execute(session_id="s1", command="/save")
     assert result["ok"] is True
     assert result["message"] == "Saved conversation: /tmp/x.json."
 
 
 def test_execute_unknown_command_returns_error() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/doesnotexist")
-    assert result["ok"] is False
-    assert result["message"] == "Unknown command: /doesnotexist"
-
-
-def test_download_rejects_invalid_shell_syntax() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command='/download "unterminated')
-    assert result["ok"] is False
-    assert "Invalid download arguments:" in str(result["message"])
-
-
-def test_download_rejects_flag_only_without_repo() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/download --load")
-    assert result["ok"] is False
-    assert "Usage: /download <repo_id>" in str(result["message"])
-
-
-def test_download_with_load_and_missing_path_does_not_attempt_load() -> None:
-    class _NoPathDownloader:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, str | None]] = []
-
-        def download_model(self, repo_id: str, filename: str | None):
-            self.calls.append((repo_id, filename))
-            return True, "ok", None
-
-    model_service = _FakeModelService()
-    downloader = _NoPathDownloader()
-    service = _service(model_service=model_service, downloader=downloader)
-    result = service.execute(session_id="s1", command="/download user/repo --load")
-    assert result["ok"] is True
-    assert model_service.load_calls == []
-    assert "load" not in result
-
-
-def test_download_with_load_surfaces_model_load_failure() -> None:
-    model_service = _FakeModelService()
-    model_service.select_local_model = lambda _name: {"ok": False, "message": "cannot load model"}  # type: ignore[method-assign]
-    downloader = _FakeDownloader(success=True, message="ok", path=Path("/tmp/failed-load.gguf"))
-    service = _service(model_service=model_service, downloader=downloader)
-    result = service.execute(session_id="s1", command="/download user/repo --load")
-    assert result["ok"] is False
-    assert "failed to load: cannot load model" in str(result["message"])
-
-
-def test_download_with_load_failure_message_is_summarized_for_transcript() -> None:
-    model_service = _FakeModelService()
-    model_service.select_local_model = lambda _name: {  # type: ignore[method-assign]
-        "ok": False,
-        "message": "Failed to load model\n" + ("details " * 200),
-    }
-    downloader = _FakeDownloader(success=True, message="ok", path=Path("/tmp/failed-load.gguf"))
-    service = _service(model_service=model_service, downloader=downloader)
-
-    result = service.execute(session_id="s1", command="/download user/repo --load")
-    message = str(result["message"])
-    assert result["ok"] is False
-    assert "failed to load: Failed to load model" in message
-    assert len(message) < 320
-
-
-def test_download_with_load_failure_message_deduplicates_repeated_prefix() -> None:
-    model_service = _FakeModelService()
-    model_service.select_local_model = lambda _name: {  # type: ignore[method-assign]
-        "ok": False,
-        "message": "Failed to load MLX model: Failed to load MLX model: Received 64 parameters not in model:",
-    }
-    downloader = _FakeDownloader(success=True, message="ok", path=Path("/tmp/failed-load.gguf"))
-    service = _service(model_service=model_service, downloader=downloader)
-
-    result = service.execute(session_id="s1", command="/download user/repo --load")
-    message = str(result["message"])
-    assert result["ok"] is False
-    assert (
-        "failed to load: Failed to load MLX model: Received 64 parameters not in model:" in message
-    )
-    assert "Failed to load MLX model: Failed to load MLX model" not in message
-
-
-def test_template_list_returns_registry_templates() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/template list")
-    assert result["ok"] is True
-    assert isinstance(result.get("templates"), list)
-    assert result["templates"][0]["name"] == "ChatML"
-
-
-def test_template_configure_alias_runs_setup() -> None:
-    registry = _FakeTemplateRegistry()
-    service = _service(template_registry=registry)
-    result = service.execute(session_id="s1", command="/template configure")
-    assert result["ok"] is True
-    assert registry.setup_calls == [("demo-model", False, True)]
-
-
-def test_template_rejects_unknown_subcommand() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/template nonsense")
-    assert result["ok"] is False
-    assert result["message"] == "Usage: /template [status|reset|list|auto]"
-
-
-def test_benchmark_rejects_invalid_shell_syntax() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command='/benchmark --prompt "unterminated')
-    assert result["ok"] is False
-    assert "Invalid benchmark arguments:" in str(result["message"])
-
-
-def test_benchmark_rejects_missing_prompt_value() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/benchmark --prompt")
-    assert result["ok"] is False
-    assert result["message"] == "Usage: /benchmark [tokens] [--prompt <text>]"
-
-
-def test_benchmark_rejects_out_of_range_tokens() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/benchmark --tokens 9000")
-    assert result["ok"] is False
-    assert "between 1 and 8192" in str(result["message"])
-
-
-def test_benchmark_accepts_positional_token_count() -> None:
-    engine = _FakeInferenceEngine()
-    service = _service(inference_engine=engine)
-    result = service.execute(session_id="s1", command="/benchmark 32")
-    assert result["ok"] is True
-    assert engine.calls == [("Once upon a time", 32)]
-
-
-def test_benchmark_rejects_empty_prompt() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command='/benchmark --prompt ""')
-    assert result["ok"] is False
-    assert result["message"] == "Benchmark prompt cannot be empty."
-
-
-def test_benchmark_rejects_when_engine_not_available() -> None:
-    service = _service(inference_engine=object())
-    result = service.execute(session_id="s1", command="/benchmark")
-    assert result["ok"] is False
-    assert result["message"] == "Benchmark engine is not available in worker mode."
-
-
-def test_benchmark_rejects_when_engine_returns_none() -> None:
-    class _NoMetricsEngine:
-        def benchmark(self, prompt: str = "Once upon a time", num_tokens: int = 100):
-            return None
-
-    service = _service(inference_engine=_NoMetricsEngine())
-    result = service.execute(session_id="s1", command="/benchmark")
-    assert result["ok"] is False
-    assert result["message"] == "Benchmark failed to produce metrics."
-
-
-def test_unknown_command_returns_error() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/finetune")
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/nonsense")
     assert result["ok"] is False
     assert "Unknown command" in str(result["message"])
 
 
-def test_model_list_and_ls_aliases_route_to_model_list() -> None:
-    service = _service()
-    list_result = service.execute(session_id="s1", command="/model list")
-    ls_result = service.execute(session_id="s1", command="/model ls")
-    assert list_result["ok"] is True
-    assert ls_result["ok"] is True
-    assert "Active model:" in str(list_result["message"])
-    assert "Active model:" in str(ls_result["message"])
+def test_help_lists_current_commands_without_template() -> None:
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/help")
+    message = str(result["message"])
+    assert "/template" not in message
+    assert "/download" in message and "/benchmark" in message
 
 
-def test_model_select_local_routes_to_model_service() -> None:
-    model_service = _FakeModelService()
-    service = _service(model_service=model_service)
-    result = service.execute(session_id="s1", command="/model /tmp/foo.gguf")
-    assert result["ok"] is True
-    assert model_service.load_calls == ["/tmp/foo.gguf"]
-
-
-def test_model_select_local_by_unique_prefix_routes_to_model_service() -> None:
-    model_service = _FakeModelService()
-    model_service.list_models = lambda: {
-        "local": [
-            {"name": "mlx-community--first-model"},
-            {"name": "mlx-community--second-model"},
-        ],
-        "cloud": [],
-    }
-    service = _service(model_service=model_service)
-
-    # Numeric selection is removed; selection is by name (the picker/frontend
-    # sends the resolved name). A unique partial still resolves.
-    result = service.execute(session_id="s1", command="/model second-model")
-    assert result["ok"] is True
-    assert model_service.load_calls == ["mlx-community--second-model"]
-
-
-def test_model_numeric_arg_is_not_an_index() -> None:
-    model_service = _FakeModelService()
-    model_service.list_models = lambda: {
-        "local": [{"name": "mlx-community--first-model"}],
-        "cloud": [],
-    }
-    service = _service(model_service=model_service)
-
-    # "/model 1" is treated as a name, not an index — it must NOT load model #1.
-    result = service.execute(session_id="s1", command="/model 1")
+def test_template_command_is_gone() -> None:
+    service, _, _ = _build()
+    result = service.execute(session_id="s1", command="/template status")
     assert result["ok"] is False
-    assert model_service.load_calls == []
+    assert "Unknown command" in str(result["message"])
 
 
-def test_model_list_and_index_selection_use_stable_sorted_order() -> None:
-    model_service = _FakeModelService()
-    model_service.list_models = lambda: {
-        "local": [
-            {"name": "zeta-model"},
-            {"name": "Alpha-model"},
-            {"name": "beta-model"},
-        ],
-        "cloud": [
-            {"selector": "openai:gpt-5.1", "authenticated": False, "active": False},
-            {"selector": "anthropic:claude-sonnet-4-5", "authenticated": False, "active": False},
-        ],
-    }
-    service = _service(model_service=model_service)
-
-    listed = service.execute(session_id="s1", command="/model")
-    assert listed["ok"] is True
-    message = str(listed["message"])
-    # De-numbered rows (no [N]), stable sorted order preserved.
-    assert "- Alpha-model" in message
-    assert "- beta-model" in message
-    assert "- zeta-model" in message
-    assert "- anthropic:claude-sonnet-4-5 (login required)" in message
-    assert "- openai:gpt-5.1 (login required)" in message
-    assert "[1]" not in message and "[2]" not in message
-    assert "<number>" not in message
-
-    selected = service.execute(session_id="s1", command="/model Alpha-model")
-    assert selected["ok"] is True
-    assert model_service.load_calls == ["Alpha-model"]
-
-
-def test_model_select_cloud_by_index_routes_to_cloud_selection() -> None:
-    model_service = _FakeModelService()
-    model_service.list_models = lambda: {
-        "local": [
-            {"name": "zeta-model"},
-        ],
-        "cloud": [
-            {
-                "provider": "openai",
-                "model_id": "gpt-5.1",
-                "selector": "openai:gpt-5.1",
-                "authenticated": True,
-                "active": False,
-            },
-            {
-                "provider": "anthropic",
-                "model_id": "claude-sonnet-4-5",
-                "selector": "anthropic:claude-sonnet-4-5",
-                "authenticated": False,
-                "active": False,
-            },
-        ],
-    }
-    service = _service(model_service=model_service)
-
-    listed = service.execute(session_id="s1", command="/model")
-    assert listed["ok"] is True
-    message = str(listed["message"])
-    assert "- zeta-model" in message
-    assert "- anthropic:claude-sonnet-4-5 (login required)" in message
-    assert "- openai:gpt-5.1 (ready)" in message
-    assert "[1]" not in message
-
-    selected = service.execute(session_id="s1", command="/model openai:gpt-5.1")
-    assert selected["ok"] is True
-    assert selected["message"] == "cloud openai:gpt-5.1"
-
-
-def test_model_select_local_by_unique_partial_name_routes_to_model_service() -> None:
-    model_service = _FakeModelService()
-    model_service.list_models = lambda: {
-        "local": [
-            {"name": "mlx-community--llama-3.2-3b-instruct-4bit"},
-            {"name": "mlx-community--mistral-7b-instruct-v0.3"},
-        ],
-        "cloud": [],
-    }
-    service = _service(model_service=model_service)
-
-    result = service.execute(session_id="s1", command="/model mistral-7b")
-    assert result["ok"] is True
-    assert model_service.load_calls == ["mlx-community--mistral-7b-instruct-v0.3"]
-
-
-def test_model_select_local_with_ambiguous_partial_name_returns_actionable_error() -> None:
-    model_service = _FakeModelService()
-    model_service.list_models = lambda: {
-        "local": [
-            {"name": "mlx-community--llama-3.2-3b-instruct-4bit"},
-            {"name": "mlx-community--llama-3.2-1b-instruct-4bit"},
-        ],
-        "cloud": [],
-    }
-    service = _service(model_service=model_service)
-
-    result = service.execute(session_id="s1", command="/model llama-3.2")
-    assert result["ok"] is False
-    assert "Ambiguous local model selector" in str(result["message"])
-    assert "<number>" not in str(result["message"])
-    assert "open the picker with /model" in str(result["message"])
-    assert model_service.load_calls == []
-
-
-def test_model_select_local_with_no_match_returns_actionable_error() -> None:
-    model_service = _FakeModelService()
-    model_service.list_models = lambda: {
-        "local": [{"name": "mlx-community--only-model"}],
-        "cloud": [],
-    }
-    service = _service(model_service=model_service)
-
-    result = service.execute(session_id="s1", command="/model nonexistent")
-    assert result["ok"] is False
-    assert "No local model matches" in str(result["message"])
-    assert model_service.load_calls == []
-
-
-def test_model_select_cloud_routes_to_model_service() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/model openai:gpt-5.1")
-    assert result["ok"] is True
-    assert result["message"] == "cloud openai:gpt-5.1"
-
-
-def test_model_rejects_missing_provider_or_model_parts() -> None:
-    service = _service()
-    result_missing_provider = service.execute(session_id="s1", command="/model :gpt-5.1")
-    result_missing_model = service.execute(session_id="s1", command="/model openai:")
-    assert result_missing_provider["ok"] is False
-    assert "Usage: /model <provider:model>" in str(result_missing_provider["message"])
-    assert result_missing_model["ok"] is False
-    assert "Usage: /model <provider:model>" in str(result_missing_model["message"])
-
-
-def test_login_requires_provider_argument() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/login")
-    assert result["ok"] is False
-    assert "Usage: /login openai|anthropic" in str(result["message"])
-
-
-def test_login_provider_key_save_sets_default_success_message() -> None:
-    service = _service()
-    result = service.execute(session_id="s1", command="/login openai sk-test")
-    assert result["ok"] is True
-    assert result["message"] == "Saved openai API key."
-
-
-def test_login_huggingface_alias_uses_status_checker(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = _service()
-    monkeypatch.setattr(
-        CommandService,
-        "_huggingface_status",
-        staticmethod(lambda: {"ok": True, "message": "hf auth ok"}),
+def test_cancelled_download_reports_cancelled_not_failed() -> None:
+    """A user-initiated cancel is not a failure (consensus-confirmed wording
+    fix: it used to resolve as 'Download failed: Download cancelled.')."""
+    service, _models, runtime = _build()
+    runtime.pull = lambda selector, *, on_line=None, cancel_requested=None: (
+        False,
+        "Download cancelled.",
     )
-    result = service.execute(session_id="s1", command="/login hf")
-    assert result["ok"] is True
-    assert result["message"] == "hf auth ok"
-
-
-def test_setup_returns_loaded_message_when_model_service_omits_message() -> None:
-    model_service = _FakeModelService(current_model="")
-    model_service.list_models = lambda: {
-        "active_target": {"label": "No model loaded"},
-        "local": [{"name": "first-local-model"}],
-        "cloud": [],
+    service.preflight_download = lambda args: {
+        "ok": True,
+        "selector": "qwen3-6-27b:q4_0",
+        "cached": False,
     }
-    model_service.select_local_model = lambda _name: {"ok": True}  # type: ignore[method-assign]
-    service = _service(model_service=model_service)
-    result = service.execute(session_id="s1", command="/setup")
-    assert result["ok"] is True
-    assert result["message"] == "Setup complete. Active model: first-local-model"
-
-
-def test_setup_returns_failed_message_when_model_service_omits_message() -> None:
-    model_service = _FakeModelService(current_model="")
-    model_service.list_models = lambda: {
-        "active_target": {"label": "No model loaded"},
-        "local": [{"name": "first-local-model"}],
-        "cloud": [],
-    }
-    model_service.select_local_model = lambda _name: {"ok": False}  # type: ignore[method-assign]
-    service = _service(model_service=model_service)
-    result = service.execute(session_id="s1", command="/setup")
+    result = service.execute(session_id="s1", command="/download qwen3-6-27b:q4_0")
     assert result["ok"] is False
-    assert result["message"] == "Failed to load local model: first-local-model"
+    assert result["message"] == "Download cancelled."
+    assert "failed" not in str(result["message"]).lower()

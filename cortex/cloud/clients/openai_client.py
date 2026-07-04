@@ -25,6 +25,10 @@ class OpenAIClient:
     via base_url.
     """
 
+    # Class-level defaults: some tests construct via __new__ and skip __init__.
+    endpoint: str = "https://api.openai.com/v1"
+    last_provenance: Optional[Dict[str, object]] = None
+
     def __init__(self, api_key: str, timeout_seconds: int = 60, base_url: Optional[str] = None):
         try:
             from openai import OpenAI  # type: ignore
@@ -34,6 +38,19 @@ class OpenAIClient:
             ) from exc
 
         self.client = OpenAI(api_key=api_key, timeout=timeout_seconds, base_url=base_url)
+        self.endpoint = str(base_url or "https://api.openai.com/v1")
+        self.last_provenance: Optional[Dict[str, object]] = None
+
+    def _provenance(self, reported_model: object, response_id: object) -> Dict[str, object]:
+        """Response-side identity proof for post-turn verification."""
+        record: Dict[str, object] = {
+            "client_kind": "openai",
+            "reported_model": str(reported_model or ""),
+            "response_id": str(response_id or "")[:40],
+            "endpoint": self.endpoint,
+        }
+        self.last_provenance = record
+        return record
 
     def validate_key(self) -> Tuple[bool, str]:
         """Validate API key using a low-cost API call."""
@@ -222,6 +239,8 @@ class OpenAIClient:
         if tools and tool_executor is not None:
             request_input: object = normalized_messages
             previous_response_id: Optional[str] = None
+            reported_model: object = ""
+            reported_id: object = ""
 
             for _ in range(max_tool_iterations):
                 kwargs = self._build_response_kwargs(
@@ -271,9 +290,14 @@ class OpenAIClient:
                         yield TextDeltaEvent(delta=text)
 
                 previous_response_id = getattr(response, "id", None) or previous_response_id
+                reported_model = getattr(response, "model", None) or reported_model
+                reported_id = getattr(response, "id", None) or reported_id
                 calls = self._extract_tool_calls(response)
                 if not calls:
-                    yield FinishEvent(reason="stop")
+                    yield FinishEvent(
+                        reason="stop",
+                        provenance=self._provenance(reported_model, reported_id),
+                    )
                     return
 
                 outputs = []
@@ -320,13 +344,24 @@ class OpenAIClient:
                                 emitted = True
                                 yield TextDeltaEvent(delta=str(delta))
 
-                if not emitted and hasattr(stream, "get_final_response"):
-                    final_response = stream.get_final_response()
+                final_response = None
+                if hasattr(stream, "get_final_response"):
+                    try:
+                        final_response = stream.get_final_response()
+                    except Exception:  # pragma: no cover - SDK-specific edge
+                        final_response = None
+                if not emitted and final_response is not None:
                     final_text = self._extract_output_text(final_response)
                     if final_text:
                         yield TextDeltaEvent(delta=final_text)
 
-            yield FinishEvent(reason="stop")
+            yield FinishEvent(
+                reason="stop",
+                provenance=self._provenance(
+                    getattr(final_response, "model", None),
+                    getattr(final_response, "id", None),
+                ),
+            )
             return
         except Exception as exc:
             logger.debug("OpenAI Responses API stream failed, falling back to chat completions: %s", exc)
@@ -355,7 +390,11 @@ class OpenAIClient:
                 **cast(Any, completion_kwargs),
             )
 
+        chunk_model: object = ""
+        chunk_id: object = ""
         for chunk in stream:
+            chunk_model = getattr(chunk, "model", None) or chunk_model
+            chunk_id = getattr(chunk, "id", None) or chunk_id
             try:
                 delta = chunk.choices[0].delta.content
             except Exception:
@@ -363,7 +402,7 @@ class OpenAIClient:
             if delta:
                 yield TextDeltaEvent(delta=str(delta))
 
-        yield FinishEvent(reason="stop")
+        yield FinishEvent(reason="stop", provenance=self._provenance(chunk_model, chunk_id))
 
     def stream(
         self,
@@ -412,6 +451,7 @@ class OpenAIClient:
         )
 
         response = self.client.responses.create(**cast(Any, response_kwargs))
+        self._provenance(getattr(response, "model", None), getattr(response, "id", None))
         text = self._extract_output_text(response)
         if text:
             return text
@@ -435,6 +475,7 @@ class OpenAIClient:
                 top_p=top_p,
                 max_tokens=max_tokens,
             )
+        self._provenance(getattr(completion, "model", None), getattr(completion, "id", None))
         try:
             content = completion.choices[0].message.content
         except Exception:

@@ -19,7 +19,6 @@ from cortex.tooling.types import (
     ToolCallEvent,
     ToolResultEvent,
 )
-from cortex.ui.cli_prompt import format_prompt_with_chat_template
 
 
 class _WorkerToolingBridge:
@@ -29,19 +28,15 @@ class _WorkerToolingBridge:
         self,
         *,
         config,
-        inference_engine,
-        model_manager,
         conversation_manager,
-        template_registry,
         cloud_router,
+        lumen_runtime,
         permission_service,
     ) -> None:
         self.config = config
-        self.inference_engine = inference_engine
-        self.model_manager = model_manager
         self.conversation_manager = conversation_manager
-        self.template_registry = template_registry
         self.cloud_router = cloud_router
+        self.lumen_runtime = lumen_runtime
         self.permission_service = permission_service
 
         self._active_session_id: Optional[str] = None
@@ -65,21 +60,6 @@ class _WorkerToolingBridge:
         if emitter is None:
             return PermissionDecision.REJECT
         return self.permission_service.ask(session_id=session_id, request=request, emit_event=emitter)
-
-    def _format_prompt_with_chat_template(
-        self,
-        user_input: str,
-        include_user: bool = True,
-        system_prompt: Optional[str] = None,
-    ) -> str:
-        return format_prompt_with_chat_template(
-            conversation_manager=self.conversation_manager,
-            model_manager=self.model_manager,
-            template_registry=self.template_registry,
-            user_input=user_input,
-            include_user=include_user,
-            system_prompt=system_prompt,
-        )
 
 
 class TurnInterruptedError(RuntimeError):
@@ -133,7 +113,7 @@ class SessionService:
 
         backend = payload.backend
         if backend == "local":
-            local_model = payload.local_model or self.model_service.model_manager.current_model
+            local_model = payload.local_model or self.model_service.active_target.local_model
             target = ActiveModelTarget.local(local_model)
             self.model_service.active_target = target
             return target
@@ -198,6 +178,7 @@ class SessionService:
         conversation, _ = self._get_or_create_conversation(session_id)
         active_target = self._resolve_active_target(active_target_input)
         active_model_label = self.model_service.get_active_model_label()
+        active_backend = active_target.backend
         turn_started_ms = self._now_ms()
 
         interrupt_event = threading.Event()
@@ -242,6 +223,7 @@ class SessionService:
                 "parent_id": user_message.message_id,
                 "mode": "chat",
                 "model_label": active_model_label,
+                "backend": active_backend,
             },
         )
 
@@ -374,6 +356,7 @@ class SessionService:
                         "parent_id": user_message.message_id,
                         "mode": "chat",
                         "model_label": active_model_label,
+                        "backend": active_backend,
                     },
                 )
                 emit_event(
@@ -419,6 +402,7 @@ class SessionService:
                         "parent_id": user_message.message_id,
                         "mode": "chat",
                         "model_label": active_model_label,
+                        "backend": active_backend,
                     },
                 )
                 return {
@@ -435,6 +419,18 @@ class SessionService:
             self.tooling_bridge.unbind_turn()
             with self._lock:
                 self._interrupts.pop(session_id, None)
+
+        # The final frame carries VERIFIED provenance labels (what actually
+        # answered), not just intent — a mismatch never reaches this point
+        # because the orchestrator rejects the turn.
+        served_backend = turn_result.served_backend or active_backend
+        served_model_label = turn_result.served_model_label or active_model_label
+        self.model_service.record_turn_provenance(
+            backend=served_backend,
+            label=served_model_label,
+            verified=turn_result.provenance_verified,
+            record=turn_result.provenance,
+        )
 
         final_text = turn_result.text or "".join(assistant_chunks)
         assistant_message = self.conversation_manager.add_message(
@@ -460,7 +456,9 @@ class SessionService:
                 "elapsed_ms": elapsed_ms,
                 "parent_id": user_message.message_id,
                 "mode": "chat",
-                "model_label": active_model_label,
+                "model_label": served_model_label,
+                "backend": served_backend,
+                "provenance_verified": turn_result.provenance_verified,
             },
         )
         emit_event(session_id=session_id, event_type="session.status", payload={"status": "idle"})

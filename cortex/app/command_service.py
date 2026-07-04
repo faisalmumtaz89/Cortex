@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-import io
+import json
 import shlex
-from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
-from typing import Any, Callable, Dict, cast
+import time
+import urllib.request
+from typing import Callable, Dict, cast
 
 from cortex.app.command_output import format_auth_status, format_gpu_status, format_status_summary
 from cortex.cloud.types import CloudProvider
+from cortex.lumen_runtime import LumenModel
+
+_CLOUD_LOGIN_PROVIDERS = {"openai", "anthropic", "azure"}
 
 
 class CommandService:
@@ -21,16 +24,12 @@ class CommandService:
         model_service,
         clear_session: Callable[[str], Dict[str, object]],
         save_session: Callable[[str], Dict[str, object]],
-        model_downloader,
-        template_registry,
-        inference_engine=None,
+        lumen_runtime,
     ) -> None:
         self.model_service = model_service
         self.clear_session = clear_session
         self.save_session = save_session
-        self.model_downloader = model_downloader
-        self.template_registry = template_registry
-        self.inference_engine = inference_engine
+        self.lumen_runtime = lumen_runtime
 
     @staticmethod
     def _parse_command_args(args: str) -> tuple[bool, list[str] | str]:
@@ -38,107 +37,6 @@ class CommandService:
             return True, shlex.split(args)
         except ValueError as exc:
             return False, str(exc)
-
-    @staticmethod
-    def _template_config_payload(config: Any) -> Dict[str, object]:
-        return {
-            "detected_type": getattr(config, "detected_type", "unknown"),
-            "user_preference": getattr(config, "user_preference", "auto"),
-            "custom_filters": list(getattr(config, "custom_filters", []) or []),
-            "show_reasoning": bool(getattr(config, "show_reasoning", False)),
-            "confidence": float(getattr(config, "confidence", 0.0) or 0.0),
-            "last_updated": str(getattr(config, "last_updated", "") or ""),
-        }
-
-    def preflight_download(self, args: str) -> Dict[str, object]:
-        """Validate and normalize /download args without performing network IO."""
-        ok, parsed = self._parse_command_args(args)
-        if not ok:
-            return {"ok": False, "message": f"Invalid download arguments: {parsed}"}
-        parsed_args = parsed if isinstance(parsed, list) else []
-
-        if not parsed_args:
-            return {
-                "ok": False,
-                "message": "Usage: /download <repo_id> [filename] [--load]",
-            }
-
-        should_load = False
-        filtered_parts: list[str] = []
-        for part in parsed_args:
-            if part == "--load":
-                should_load = True
-            elif part.startswith("--"):
-                return {
-                    "ok": False,
-                    "message": f"Unknown option: {part}. Usage: /download <repo_id> [filename] [--load]",
-                }
-            else:
-                filtered_parts.append(part)
-
-        if not filtered_parts:
-            return {
-                "ok": False,
-                "message": "Usage: /download <repo_id> [filename] [--load]",
-            }
-        if len(filtered_parts) > 2:
-            return {
-                "ok": False,
-                "message": "Too many arguments. Usage: /download <repo_id> [filename] [--load]",
-            }
-
-        repo_id = filtered_parts[0].strip()
-        filename = filtered_parts[1].strip() if len(filtered_parts) > 1 else None
-
-        if "/" not in repo_id:
-            return {
-                "ok": False,
-                "message": "Invalid format. Expected: username/model-name",
-            }
-
-        return {
-            "ok": True,
-            "repo_id": repo_id,
-            "filename": filename,
-            "should_load": should_load,
-        }
-
-    @staticmethod
-    def _huggingface_status() -> Dict[str, object]:
-        try:
-            from huggingface_hub import HfApi
-        except Exception:
-            return {
-                "ok": False,
-                "message": "huggingface-hub not installed. Install with: pip install huggingface-hub",
-            }
-
-        try:
-            user_info = HfApi().whoami()
-        except Exception:
-            return {
-                "ok": False,
-                "message": (
-                    "HuggingFace is not authenticated. Run `huggingface-cli login` in your shell "
-                    "or set HF_TOKEN, then retry /download."
-                ),
-            }
-
-        username = str((user_info or {}).get("name", "Unknown")).strip() or "Unknown"
-        return {
-            "ok": True,
-            "auth": {
-                "provider": "huggingface",
-                "authenticated": True,
-                "username": username,
-            },
-            "message": (
-                "Authentication status\n"
-                "- Provider: huggingface\n"
-                "- Authenticated: True\n"
-                f"- Username: {username}"
-            ),
-        }
 
     @staticmethod
     def _summarize_error_message(message: object, *, max_chars: int = 220) -> str:
@@ -162,8 +60,33 @@ class CommandService:
             summary = f"{first}: {remainder}"
 
         if len(summary) > max_chars:
-            return f"{summary[:max_chars - 3].rstrip()}..."
+            return f"{summary[: max_chars - 3].rstrip()}..."
         return summary
+
+    # ---- /download (lumen pull) ------------------------------------------
+
+    def preflight_download(self, args: str) -> Dict[str, object]:
+        """Validate /download args against the Lumen catalog (no network)."""
+        ok, parsed = self._parse_command_args(args)
+        if not ok:
+            return {"ok": False, "message": f"Invalid download arguments: {parsed}"}
+        parsed_args = parsed if isinstance(parsed, list) else []
+
+        if len(parsed_args) != 1:
+            return {"ok": False, "message": "Usage: /download <model[:quant]>"}
+
+        resolved = self.model_service.resolve_local_selector(parsed_args[0])
+        if not bool(resolved.get("ok")):
+            return {"ok": False, "message": str(resolved.get("message", "Invalid model."))}
+
+        model = cast(LumenModel, resolved["model"])
+        return {
+            "ok": True,
+            "selector": model.selector,
+            # Kept for callers that key progress on repo_id.
+            "repo_id": model.selector,
+            "cached": model.cached,
+        }
 
     def _handle_download(
         self,
@@ -171,6 +94,7 @@ class CommandService:
         *,
         progress_callback: Callable[[Dict[str, object]], None] | None = None,
         cancel_requested: Callable[[], bool] | None = None,
+        activation_guard: Callable[[], bool] | None = None,
     ) -> Dict[str, object]:
         preflight = self.preflight_download(args)
         if not bool(preflight.get("ok")):
@@ -179,179 +103,92 @@ class CommandService:
                 "message": str(preflight.get("message", "Invalid /download command")),
             }
 
-        repo_id = str(preflight.get("repo_id", "")).strip()
-        filename_raw = preflight.get("filename")
-        filename = str(filename_raw).strip() if isinstance(filename_raw, str) else None
-        should_load = bool(preflight.get("should_load"))
-
-        if not repo_id:
-            return {"ok": False, "message": "Usage: /download <repo_id> [filename] [--load]"}
-
-        download_kind = "file" if filename else "repo"
-        existing_message_template = (
-            "File already exists: {path}"
-            if download_kind == "file"
-            else "Model already exists: {path}"
-        )
-
-        inspected_target: Dict[str, object] | None = None
-        inspect_target = getattr(self.model_downloader, "inspect_download_target", None)
-        if callable(inspect_target):
-            try:
-                raw_inspected = inspect_target(repo_id, filename)
-                if isinstance(raw_inspected, dict):
-                    inspected_target = raw_inspected
-            except Exception:
-                inspected_target = None
-
-        target_path: Path | None = None
-        target_exists = False
-        target_resumable = False
-        if inspected_target is not None:
-            candidate = inspected_target.get("path")
-            if isinstance(candidate, Path):
-                target_path = candidate
-            elif isinstance(candidate, str) and candidate.strip():
-                target_path = Path(candidate).expanduser().resolve()
-            target_exists = bool(inspected_target.get("exists"))
-            target_resumable = bool(inspected_target.get("resumable"))
-
-        if target_exists and target_path is not None and not target_resumable:
-            existing_message = existing_message_template.format(path=target_path)
-            existing_result: Dict[str, object] = {
-                "ok": False,
-                "message": existing_message,
-                "download": {
-                    "repo_id": repo_id,
-                    "filename": filename,
-                    "path": str(target_path),
-                    "preexisting": True,
-                },
-            }
-            if should_load:
-                load_result = self.model_service.select_local_model(str(target_path))
-                existing_result["load"] = load_result
-                if bool(load_result.get("ok")):
-                    existing_result["ok"] = True
-                    existing_result["message"] = f"{existing_message} (loaded)"
-                else:
-                    load_error = self._summarize_error_message(load_result.get("message"))
-                    existing_result["message"] = (
-                        f"{existing_message} but failed to load: {load_error}"
-                    )
-            return existing_result
-
-        # The downloader writes progress to stdout/stderr; keep worker RPC channel clean.
-        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            try:
-                success, message, path = self.model_downloader.download_model(
-                    repo_id,
-                    filename,
-                    progress_callback=progress_callback,
-                    cancel_requested=cancel_requested,
-                )
-            except TypeError:
-                try:
-                    # Backward compatibility for downloader stubs that do not support cancel_requested.
-                    success, message, path = self.model_downloader.download_model(
-                        repo_id,
-                        filename,
-                        progress_callback=progress_callback,
-                    )
-                except TypeError:
-                    # Backward compatibility for downloader stubs that do not support callbacks.
-                    success, message, path = self.model_downloader.download_model(repo_id, filename)
-
-        result: Dict[str, object] = {
-            "ok": bool(success),
-            "message": str(message),
-            "download": {
-                "repo_id": repo_id,
-                "filename": filename,
-                "path": str(path) if path is not None else None,
-            },
-        }
-        if not success:
-            return result
-
-        if should_load and path is not None:
-            load_result = self.model_service.select_local_model(str(path))
-            result["load"] = load_result
-            if not load_result.get("ok"):
-                load_error = self._summarize_error_message(load_result.get("message"))
-                result["ok"] = False
-                result["message"] = f"{message} (downloaded) but failed to load: {load_error}"
-            else:
-                result["message"] = f"{message} (loaded)"
-
-        return result
-
-    def _handle_template(self, args: str) -> Dict[str, object]:
-        active_target = getattr(self.model_service, "active_target", None)
-        if getattr(active_target, "backend", None) == "cloud":
-            label = self.model_service.get_active_model_label()
+        selector = str(preflight.get("selector", ""))
+        if bool(preflight.get("cached")):
+            # One mental model: getting a model makes it usable — an
+            # already-downloaded selector simply loads.
+            load = cast(Dict[str, object], self.model_service.select_local_model(selector))
+            if bool(load.get("ok")):
+                return {
+                    "ok": True,
+                    "message": f"Already downloaded: local · {selector} — now active.",
+                    "download": {"repo_id": selector, "preexisting": True},
+                }
             return {
                 "ok": False,
                 "message": (
-                    f"Chat templates apply to local models only; the active model is cloud ({label})."
+                    f"Already downloaded: local · {selector}, but loading failed: "
+                    f"{self._summarize_error_message(load.get('message'))}"
                 ),
+                "download": {"repo_id": selector, "preexisting": True},
             }
 
-        model_name = (self.model_service.model_manager.current_model or "").strip()
-        if not model_name:
-            return {"ok": False, "message": "No local model loaded."}
+        def on_line(line: str) -> None:
+            if progress_callback is not None:
+                # Bytes are measured by the caller (cache-side poller); pull's
+                # own progress bar is TTY-only and never reaches this pipe.
+                progress_callback(
+                    {
+                        "kind": "download",
+                        "repo_id": selector,
+                        "phase": line,
+                    }
+                )
 
-        tokenizer = self.model_service.model_manager.tokenizers.get(model_name)
-        parts = args.strip().split()
-        subcommand = parts[0].lower() if parts else "auto"
-
-        if subcommand == "status":
-            config = self.template_registry.config_manager.get_model_config(model_name)
-            if not config:
-                return {"ok": False, "message": f"No template configuration for {model_name}"}
-            return {
-                "ok": True,
-                "message": f"Template status for {model_name}",
-                "model": model_name,
-                "template": self._template_config_payload(config),
-            }
-
-        if subcommand == "reset":
-            reset_ok = self.template_registry.reset_model_config(model_name)
-            if reset_ok:
-                return {"ok": True, "message": f"Template configuration reset for {model_name}"}
-            return {"ok": False, "message": f"No template configuration found for {model_name}"}
-
-        if subcommand == "list":
-            return {
-                "ok": True,
-                "message": "Available templates listed.",
-                "templates": self.template_registry.list_templates(),
-            }
-
-        if subcommand not in {"auto", "configure"}:
+        ok, message = self.lumen_runtime.pull(
+            selector, on_line=on_line, cancel_requested=cancel_requested
+        )
+        if not ok:
+            summarized = self._summarize_error_message(message)
+            if "cancel" in summarized.lower():
+                # A user-initiated cancel is not a failure — say what happened.
+                return {
+                    "ok": False,
+                    "message": "Download cancelled.",
+                    "download": {"repo_id": selector, "cancelled": True},
+                }
             return {
                 "ok": False,
-                "message": "Usage: /template [status|reset|list|auto]",
+                "message": f"Download failed: {summarized}",
+                "download": {"repo_id": selector},
             }
 
-        profile = self.template_registry.setup_model(
-            model_name,
-            tokenizer=tokenizer,
-            interactive=False,
-            force_setup=True,
-        )
-        config = self.template_registry.config_manager.get_model_config(model_name)
-
-        payload: Dict[str, object] = {
+        # Downloaded models auto-load: the download IS the selection.
+        if activation_guard is not None and not activation_guard():
+            return {
+                "ok": True,
+                "message": (
+                    f"Downloaded local · {selector} (kept inactive — you switched models)."
+                ),
+                "download": {"repo_id": selector},
+            }
+        if progress_callback is not None:
+            # Distinct kind: the byte phase is over — the UI switches from the
+            # download indicator to the GPU-load indicator.
+            progress_callback(
+                {
+                    "kind": "model-load",
+                    "repo_id": selector,
+                    "phase": "loading",
+                }
+            )
+        load = cast(Dict[str, object], self.model_service.select_local_model(selector))
+        if not bool(load.get("ok")):
+            return {
+                "ok": False,
+                "message": (
+                    f"Downloaded local · {selector}, but loading failed: "
+                    f"{self._summarize_error_message(load.get('message'))}"
+                ),
+                "download": {"repo_id": selector},
+            }
+        return {
             "ok": True,
-            "message": f"Template configured for {model_name}: {profile.config.name}",
-            "model": model_name,
-            "template_name": profile.config.name,
+            "message": f"local · {selector} ready — now active.",
+            "download": {"repo_id": selector},
         }
-        if config is not None:
-            payload["template"] = self._template_config_payload(config)
-        return payload
+
+    # ---- /benchmark (via the managed Lumen server) -------------------------
 
     def _handle_benchmark(self, args: str) -> Dict[str, object]:
         ok, parsed = self._parse_command_args(args)
@@ -391,57 +228,89 @@ class CommandService:
             return {"ok": False, "message": "Benchmark prompt cannot be empty."}
 
         active_target = getattr(self.model_service, "active_target", None)
-        backend = getattr(active_target, "backend", "local")
-        if backend == "cloud":
+        if getattr(active_target, "backend", "local") == "cloud":
             return {
                 "ok": False,
                 "message": "Benchmark is currently available for local models only.",
             }
+        selector = getattr(active_target, "local_model", None)
+        if not selector:
+            return {"ok": False, "message": "No local model loaded. Pick one with /model."}
 
-        model_name = (self.model_service.model_manager.current_model or "").strip()
-        if not model_name:
-            return {"ok": False, "message": "No model loaded."}
+        server_ok, server_message = self.lumen_runtime.ensure_server(selector)
+        if not server_ok:
+            return {"ok": False, "message": server_message}
+        base_url = self.lumen_runtime.base_url()
+        if not base_url:
+            return {"ok": False, "message": "Lumen server is not running."}
 
-        benchmark_fn = getattr(self.inference_engine, "benchmark", None)
-        if not callable(benchmark_fn):
-            return {"ok": False, "message": "Benchmark engine is not available in worker mode."}
+        payload = json.dumps(
+            {
+                "model": str(selector).split(":", 1)[0],
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": num_tokens,
+                "temperature": 0.7,
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        started = time.time()
+        try:
+            with urllib.request.urlopen(request, timeout=600) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            return {"ok": False, "message": f"Benchmark request failed: {exc}"}
+        elapsed = max(1e-6, time.time() - started)
 
-        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            metrics = benchmark_fn(prompt=prompt, num_tokens=num_tokens)
-        if metrics is None:
-            return {"ok": False, "message": "Benchmark failed to produce metrics."}
+        usage = body.get("usage", {}) if isinstance(body, dict) else {}
+        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        tokens_per_second = completion_tokens / elapsed if completion_tokens else 0.0
 
-        payload = {
-            "tokens_generated": int(getattr(metrics, "tokens_generated", 0) or 0),
-            "time_elapsed": float(getattr(metrics, "time_elapsed", 0.0) or 0.0),
-            "tokens_per_second": float(getattr(metrics, "tokens_per_second", 0.0) or 0.0),
-            "first_token_latency": float(getattr(metrics, "first_token_latency", 0.0) or 0.0),
-            "gpu_utilization": float(getattr(metrics, "gpu_utilization", 0.0) or 0.0),
-            "memory_used_gb": float(getattr(metrics, "memory_used_gb", 0.0) or 0.0),
+        benchmark = {
+            "tokens_generated": completion_tokens,
+            "time_elapsed": round(elapsed, 3),
+            "tokens_per_second": round(tokens_per_second, 1),
             "requested_tokens": num_tokens,
             "prompt": prompt,
-            "model": model_name,
+            "model": str(selector),
         }
         return {
             "ok": True,
             "message": (
                 "Benchmark complete: "
-                f"{payload['tokens_per_second']:.1f} tok/s, "
-                f"first token {payload['first_token_latency']:.3f}s, "
-                f"memory {payload['memory_used_gb']:.1f}GB"
+                f"{tokens_per_second:.1f} tok/s "
+                f"({completion_tokens} tokens in {elapsed:.1f}s)"
             ),
-            "benchmark": payload,
+            "benchmark": benchmark,
         }
+
+    # ---- /model listing ------------------------------------------------------
+
+    @staticmethod
+    def _origin_label(models: Dict[str, object]) -> str:
+        raw = models.get("active_target", {}) if isinstance(models, dict) else {}
+        active: Dict[str, object] = raw if isinstance(raw, dict) else {}
+        label = str(active.get("label", "No model loaded") or "No model loaded")
+        backend = str(active.get("backend", "") or "").strip()
+        if backend and label != "No model loaded":
+            return f"{backend} · {label}"
+        return label
 
     def _handle_model_list(self) -> Dict[str, object]:
         models = self.model_service.list_models()
         active = models.get("active_target", {}) if isinstance(models, dict) else {}
         active_label = str(active.get("label", "No model loaded"))
+        backend = str(active.get("backend", "") or "").strip()
+        if backend and active_label != "No model loaded":
+            active_label = f"{backend} · {active_label}"
 
         lines: list[str] = [f"Active model: {active_label}", ""]
 
         local_models = self._sorted_local_models(models if isinstance(models, dict) else {})
-        lines.append("Local models:")
+        lines.append("Local models (Lumen):")
         if local_models:
             for item in local_models:
                 name = str(item.get("name", "unknown"))
@@ -450,10 +319,14 @@ class CommandService:
                     tags.append("active")
                 if bool(item.get("loaded")):
                     tags.append("loaded")
+                if not bool(item.get("cached")):
+                    tags.append("not downloaded")
                 suffix = f" ({', '.join(tags)})" if tags else ""
                 lines.append(f"- {name}{suffix}")
         else:
-            lines.append("- none")
+            lines.append(
+                "- none (install Lumen: curl -fsSL https://servelumen.com/install.sh | bash)"
+            )
 
         lines.append("")
         lines.append("Cloud models:")
@@ -506,67 +379,7 @@ class CommandService:
         cloud_models = [item for item in raw_cloud_models if isinstance(item, dict)]
         return sorted(cloud_models, key=lambda item: cls._cloud_selector(item).lower())
 
-    @staticmethod
-    def _extract_local_model_names(models_payload: Dict[str, object]) -> list[str]:
-        names: list[str] = []
-        for item in CommandService._sorted_local_models(models_payload):
-            name = str(item.get("name", "")).strip()
-            if name:
-                names.append(name)
-        return names
-
-    def _resolve_local_model_selector(
-        self,
-        selector: str,
-        *,
-        models_payload: Dict[str, object] | None = None,
-    ) -> Dict[str, object]:
-        normalized = selector.strip()
-        if not normalized:
-            return {
-                "ok": False,
-                "message": "Usage: /model <name | path | provider:model>",
-            }
-
-        looks_like_path = normalized.startswith(("/", "./", "../", "~"))
-        if looks_like_path:
-            return {"ok": True, "model_name_or_path": normalized}
-
-        models = (
-            models_payload if isinstance(models_payload, dict) else self.model_service.list_models()
-        )
-        local_names = self._extract_local_model_names(models if isinstance(models, dict) else {})
-        if not local_names:
-            return {"ok": False, "message": "No local models found. Run /download first."}
-
-        lowered = normalized.lower()
-        exact = [name for name in local_names if name.lower() == lowered]
-        if len(exact) == 1:
-            return {"ok": True, "model_name_or_path": exact[0]}
-
-        prefix_matches = [name for name in local_names if name.lower().startswith(lowered)]
-        if len(prefix_matches) == 1:
-            return {"ok": True, "model_name_or_path": prefix_matches[0]}
-
-        contains_matches = [name for name in local_names if lowered in name.lower()]
-        if len(contains_matches) == 1:
-            return {"ok": True, "model_name_or_path": contains_matches[0]}
-
-        if prefix_matches or contains_matches:
-            matches = prefix_matches if prefix_matches else contains_matches
-            preview = matches[:8]
-            lines = [
-                f"Ambiguous local model selector '{normalized}'. Matches:",
-            ]
-            for name in preview:
-                lines.append(f"- {name}")
-            lines.append("Type the full name, or open the picker with /model.")
-            return {"ok": False, "message": "\n".join(lines)}
-
-        return {
-            "ok": False,
-            "message": f"No local model matches '{normalized}'. Run /model to list available models.",
-        }
+    # ---- /setup ----------------------------------------------------------------
 
     def _handle_setup(self) -> Dict[str, object]:
         models = self.model_service.list_models()
@@ -578,37 +391,41 @@ class CommandService:
         if active_label != "No model loaded":
             return {
                 "ok": True,
-                "message": f"Setup complete. Active model: {active_label}",
+                "message": f"Setup complete. Active model: {self._origin_label(models)}",
                 "models": models,
             }
 
         local_models = models.get("local", []) if isinstance(models, dict) else []
-        first_local = ""
+        first_cached = ""
         if isinstance(local_models, list):
             for item in local_models:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name", "")).strip()
-                if name:
-                    first_local = name
-                    break
+                if isinstance(item, dict) and bool(item.get("cached")):
+                    name = str(item.get("name", "")).strip()
+                    if name:
+                        first_cached = name
+                        break
 
-        if first_local:
+        if first_cached:
             load_result = cast(
-                Dict[str, object], self.model_service.select_local_model(first_local)
+                Dict[str, object], self.model_service.select_local_model(first_cached)
             )
             if "message" not in load_result or not str(load_result.get("message", "")).strip():
                 if bool(load_result.get("ok")):
-                    load_result["message"] = f"Setup complete. Active model: {first_local}"
+                    load_result["message"] = f"Setup complete. Active model: local · {first_cached}"
                 else:
-                    load_result["message"] = f"Failed to load local model: {first_local}"
+                    load_result["message"] = f"Failed to load local model: {first_cached}"
             return load_result
 
         return {
             "ok": False,
-            "message": "No local model installed. Run: /download mlx-community/Nanbeige4.1-3B-bf16 --load",
+            "message": (
+                "No local models downloaded. Pick one with /model — "
+                "selecting it downloads and loads it automatically."
+            ),
             "models": models,
         }
+
+    # ---- dispatch ---------------------------------------------------------------
 
     def execute(
         self,
@@ -617,6 +434,7 @@ class CommandService:
         command: str,
         progress_callback: Callable[[Dict[str, object]], None] | None = None,
         cancel_requested: Callable[[], bool] | None = None,
+        activation_guard: Callable[[], bool] | None = None,
     ) -> Dict[str, object]:
         raw = command.strip()
         if not raw:
@@ -635,7 +453,7 @@ class CommandService:
                 "ok": True,
                 "message": (
                     "Commands: /help /status /gpu /model [name | provider:model] /clear /save "
-                    "/login /download /template /benchmark /setup /quit"
+                    "/login /download /benchmark /setup /quit"
                 ),
             }
         if cmd == "/status":
@@ -653,17 +471,15 @@ class CommandService:
                 if path:
                     result["message"] = f"Saved conversation: {path}."
             return result
-        if cmd in {"/download", "/template", "/benchmark"}:
-            if cmd == "/download":
-                return self._handle_download(
-                    args,
-                    progress_callback=progress_callback,
-                    cancel_requested=cancel_requested,
-                )
-            if cmd == "/template":
-                return self._handle_template(args)
-            if cmd == "/benchmark":
-                return self._handle_benchmark(args)
+        if cmd == "/download":
+            return self._handle_download(
+                args,
+                progress_callback=progress_callback,
+                cancel_requested=cancel_requested,
+                activation_guard=activation_guard,
+            )
+        if cmd == "/benchmark":
+            return self._handle_benchmark(args)
         if cmd == "/setup":
             return self._handle_setup()
         if cmd == "/model":
@@ -673,66 +489,47 @@ class CommandService:
                 return self._handle_model_list()
             selector = args.strip()
             if ":" in selector:
-                provider_raw, model_id = selector.split(":", 1)
-                provider_name = provider_raw.strip()
-                selector_model_id = model_id.strip()
-                if not provider_name or not selector_model_id:
-                    return {
-                        "ok": False,
-                        "message": "Usage: /model <provider:model> (example: /model openai:gpt-5.1)",
-                    }
-                try:
-                    provider = CloudProvider.from_value(provider_name)
-                except ValueError:
-                    return {
-                        "ok": False,
-                        "message": "Unsupported cloud provider. Use openai, anthropic, or azure.",
-                    }
-                return cast(
-                    Dict[str, object],
-                    self.model_service.select_cloud_model(
-                        provider=provider.value, model_id=selector_model_id
-                    ),
-                )
-
-            models = self.model_service.list_models()
-            local_selector = self._resolve_local_model_selector(selector, models_payload=models)
-            if not bool(local_selector.get("ok")):
-                return {
-                    "ok": False,
-                    "message": str(
-                        local_selector.get("message", "Failed to resolve local model selector.")
-                    ),
-                }
-            resolved = str(local_selector.get("model_name_or_path", "")).strip()
-            return cast(Dict[str, object], self.model_service.select_local_model(resolved))
+                provider_name = selector.split(":", 1)[0].strip().lower()
+                if provider_name in _CLOUD_LOGIN_PROVIDERS:
+                    model_id = selector.split(":", 1)[1].strip()
+                    if not model_id:
+                        return {
+                            "ok": False,
+                            "message": (
+                                "Usage: /model <provider:model> (example: /model openai:gpt-5.1)"
+                            ),
+                        }
+                    return cast(
+                        Dict[str, object],
+                        self.model_service.select_cloud_model(
+                            provider=provider_name, model_id=model_id
+                        ),
+                    )
+                # Anything else with a colon is a Lumen selector (name:quant).
+            return cast(Dict[str, object], self.model_service.select_local_model(selector))
         if cmd == "/login":
             if not args:
                 return {
                     "ok": False,
-                    "message": "Usage: /login openai|anthropic|azure <api_key> OR /login huggingface",
+                    "message": "Usage: /login openai|anthropic|azure [api_key]",
                 }
             login_parts = args.split(maxsplit=1)
             provider_name = login_parts[0].strip().lower()
 
-            if provider_name in {"huggingface", "hf"}:
-                if len(login_parts) > 1:
-                    return {
-                        "ok": False,
-                        "message": (
-                            "Do not paste HuggingFace tokens into chat. "
-                            "Run `huggingface-cli login` in your shell, then retry /download."
-                        ),
-                    }
-                return self._huggingface_status()
-
-            try:
-                provider = CloudProvider.from_value(provider_name)
-            except ValueError:
+            if provider_name == "lumen":
                 return {
                     "ok": False,
-                    "message": "Unsupported provider. Use /login openai, /login anthropic, /login azure, or /login huggingface.",
+                    "message": "lumen is the managed local engine, not a login target.",
                 }
+            if provider_name not in _CLOUD_LOGIN_PROVIDERS:
+                return {
+                    "ok": False,
+                    "message": (
+                        "Unsupported provider. Use /login openai, /login anthropic, "
+                        "or /login azure."
+                    ),
+                }
+            provider = CloudProvider.from_value(provider_name)
 
             if len(login_parts) == 1:
                 auth = self.model_service.auth_status(provider)
@@ -742,7 +539,7 @@ class CommandService:
                     "message": format_auth_status(provider=provider.value, auth=auth),
                 }
             result = self.model_service.auth_save_key(provider, login_parts[1])
-            if "message" not in result:
+            if not str(result.get("message", "")).strip():
                 result["message"] = f"Saved {provider.value} API key."
             return cast(Dict[str, object], result)
 

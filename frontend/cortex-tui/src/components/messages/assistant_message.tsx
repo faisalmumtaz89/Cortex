@@ -137,7 +137,12 @@ export function AssistantMessage(props: {
   }
 
   const modeLabel = () => titlecase(props.message.mode ?? "chat")
-  const modelLabel = () => props.message.modelLabel ?? "model unavailable"
+  const modelLabel = () => {
+    const label = props.message.modelLabel ?? "model unavailable"
+    const origin = (props.message.backend ?? "").trim()
+    // Origin-first, identical wording everywhere: "local · x" / "cloud · y".
+    return origin ? `${origin} · ${label}` : label
+  }
   const durationLabel = () => formatDuration(props.message.elapsedMs)
 
   // No top role label — the reply is identified by its indent onto the shared

@@ -34,7 +34,7 @@ def configure_logging(config: Config) -> None:
         handlers.append(stderr_handler)
 
     logging.basicConfig(level=log_level, handlers=handlers, force=True)
-    for noisy_logger in ("httpx", "httpcore", "huggingface_hub"):
+    for noisy_logger in ("httpx", "httpcore"):
         logging.getLogger(noisy_logger).setLevel(max(log_level, logging.WARNING))
     logging.getLogger(__name__).info(
         "Logging initialized level=%s file=%s", log_level_name, log_file

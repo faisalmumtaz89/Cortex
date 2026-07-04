@@ -6,6 +6,16 @@ from cortex.tooling.orchestrator import NO_TOOLS_SYSTEM_INSTRUCTION, ToolingOrch
 from cortex.tooling.types import FinishEvent, TextDeltaEvent
 
 
+def _ok_provenance(model: str = "gpt-5.1") -> dict:
+    """Well-formed response-side identity for a healthy OpenAI turn."""
+    return {
+        "client_kind": "openai",
+        "reported_model": model,
+        "response_id": "resp_test",
+        "endpoint": "https://api.openai.com/v1",
+    }
+
+
 class _DummyCloudRouter:
     def __init__(self, events):
         self._events = events
@@ -55,7 +65,7 @@ def test_orchestrator_deduplicates_cumulative_cloud_chunks():
             TextDeltaEvent(delta="Based on the current codebase"),
             TextDeltaEvent(delta="Based on the current codebase, there are two"),
             TextDeltaEvent(delta="Based on the current codebase, there are two main input field implementations."),
-            FinishEvent(reason="stop"),
+            FinishEvent(reason="stop", provenance=_ok_provenance()),
         ]
     )
     cli = _make_cli(cloud_router=router, tools_enabled=False, tools_profile="off")
@@ -79,7 +89,7 @@ def test_orchestrator_deduplicates_cumulative_cloud_chunks():
 
 
 def test_orchestrator_prepends_no_tools_instruction_when_tools_off():
-    router = _DummyCloudRouter(events=[TextDeltaEvent(delta="ok"), FinishEvent(reason="stop")])
+    router = _DummyCloudRouter(events=[TextDeltaEvent(delta="ok"), FinishEvent(reason="stop", provenance=_ok_provenance())])
     cli = _make_cli(cloud_router=router, tools_enabled=False, tools_profile="off")
     orchestrator = ToolingOrchestrator(cli=cli)
     target = ActiveModelTarget.cloud(CloudModelRef(provider=CloudProvider.OPENAI, model_id="gpt-5.1"))
@@ -97,7 +107,7 @@ def test_orchestrator_prepends_no_tools_instruction_when_tools_off():
 
 
 def test_orchestrator_prepends_tools_instruction_when_tools_on():
-    router = _DummyCloudRouter(events=[TextDeltaEvent(delta="ok"), FinishEvent(reason="stop")])
+    router = _DummyCloudRouter(events=[TextDeltaEvent(delta="ok"), FinishEvent(reason="stop", provenance=_ok_provenance())])
     cli = _make_cli(cloud_router=router, tools_enabled=True, tools_profile="read_only")
     orchestrator = ToolingOrchestrator(cli=cli)
     target = ActiveModelTarget.cloud(CloudModelRef(provider=CloudProvider.OPENAI, model_id="gpt-5.1"))

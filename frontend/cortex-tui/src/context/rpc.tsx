@@ -1,5 +1,6 @@
 import { createContext, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
 import { SLASH_COMMANDS } from "../commands"
+import { exitCortex, registerWorkerKill } from "../lib/exit"
 import { RpcClient } from "../protocol"
 import { useStore } from "./store"
 
@@ -143,8 +144,21 @@ export function RpcProvider(props: ParentProps) {
   const store = useStore()
   const worker = parseWorkerCommand()
   const client = new RpcClient(worker.cmd, worker.args, worker.cwd)
+  registerWorkerKill(() => client.killWorker())
 
-  client.onEvent((event) => store.applyEvent(event))
+  client.onEvent((event) => {
+    store.applyEvent(event)
+    // A background operation finished (download auto-load or a model boot):
+    // refresh the catalog so the picker/header show the new state.
+    if (event.event_type === "message.updated") {
+      const payload = event.payload as Record<string, unknown> | undefined
+      const progress = payload?.progress as Record<string, unknown> | undefined
+      const kind = progress ? String(progress.kind ?? "") : ""
+      if (payload?.final === true && (kind === "download" || kind === "model-load")) {
+        void refreshModels()
+      }
+    }
+  })
 
   const bootstrap = async () => {
     await client.request("app.handshake", {
@@ -203,11 +217,17 @@ export function RpcProvider(props: ParentProps) {
         timeoutMs,
       )
       if (result.exit === true) {
-        process.exit(0)
+        exitCortex(0)
       }
       const ok = result.ok !== false
       const message = String(result.message ?? "")
-      store.setCommandResult({ command: maskCommand(slashCommand), ok, text: message })
+      store.setCommandResult({
+        command: maskCommand(slashCommand),
+        ok,
+        text: message,
+        // Background model ops auto-dismiss this panel when they resolve.
+        background: result.background === true,
+      })
       // /clear starts a fresh worker conversation — reset the on-screen
       // transcript back to the empty welcome state (keeps the result panel).
       if (lowerCommand === "/clear" && ok) {

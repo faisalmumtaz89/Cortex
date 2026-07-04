@@ -33,7 +33,6 @@ def test_tools_profile_boolean_false_normalizes_to_off(tmp_path: Path, monkeypat
 cloud_enabled: true
 tools_enabled: true
 tools_profile: false
-tools_local_mode: false
 """.strip(),
         encoding="utf-8",
     )
@@ -43,4 +42,3 @@ tools_local_mode: false
 
     assert config.tools.tools_enabled is True
     assert config.tools.tools_profile == "off"
-    assert config.tools.tools_local_mode == "disabled"
