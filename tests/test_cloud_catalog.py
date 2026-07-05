@@ -4,19 +4,20 @@ from cortex.cloud.catalog import CloudModelCatalog
 from cortex.cloud.types import CloudProvider
 
 
-def test_default_catalog_contains_phase1_models(tmp_path: Path):
+def test_default_catalog_lists_validated_latest_models(tmp_path: Path):
+    # Every id below was validated with a real API call (2026-07-05).
     catalog = CloudModelCatalog(override_path=tmp_path / "missing.json")
 
     openai_models = catalog.list_model_ids(CloudProvider.OPENAI)
     anthropic_models = catalog.list_model_ids(CloudProvider.ANTHROPIC)
 
-    assert "gpt-5.1" in openai_models
-    assert "gpt-5-mini" in openai_models
-    assert "gpt-5-nano" in openai_models
-
-    assert "claude-opus-4-6" in anthropic_models
-    assert "claude-sonnet-4-5" in anthropic_models
-    assert "claude-haiku-4-5" in anthropic_models
+    assert openai_models == ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"]
+    assert anthropic_models == [
+        "claude-fable-5",
+        "claude-sonnet-5",
+        "claude-opus-4-8",
+        "claude-haiku-4-5",
+    ]
 
 
 def test_override_catalog_merges_without_duplicates(tmp_path: Path):
@@ -24,8 +25,8 @@ def test_override_catalog_merges_without_duplicates(tmp_path: Path):
     override_path.write_text(
         """
 {
-  "openai": ["gpt-5.1", "gpt-custom-experimental"],
-  "anthropic": ["claude-sonnet-4-5", "claude-labs-preview"]
+  "openai": ["gpt-5.5", "gpt-custom-experimental"],
+  "anthropic": ["claude-sonnet-5", "claude-labs-preview"]
 }
 """.strip(),
         encoding="utf-8",
@@ -35,9 +36,9 @@ def test_override_catalog_merges_without_duplicates(tmp_path: Path):
     openai_models = catalog.list_model_ids(CloudProvider.OPENAI)
     anthropic_models = catalog.list_model_ids(CloudProvider.ANTHROPIC)
 
-    assert openai_models.count("gpt-5.1") == 1
+    assert openai_models.count("gpt-5.5") == 1
     assert "gpt-custom-experimental" in openai_models
-    assert anthropic_models.count("claude-sonnet-4-5") == 1
+    assert anthropic_models.count("claude-sonnet-5") == 1
     assert "claude-labs-preview" in anthropic_models
 
 

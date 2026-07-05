@@ -11,8 +11,10 @@ from cortex.tooling.permissions import (
 from cortex.tooling.types import PermissionAction, PermissionRule
 
 
-def test_permission_allow_once_is_session_scoped():
-    manager = PermissionManager()
+def test_permission_allow_once_is_session_scoped(tmp_path: Path):
+    # Hermetic store: the default path is the developer's real
+    # ~/.cortex/tool_permissions.yaml, whose persisted rules would leak in.
+    manager = PermissionManager(store=PermissionStore(path=tmp_path / "perm.yaml"))
     calls = {"count": 0}
 
     def prompt(_request):
@@ -57,9 +59,12 @@ def test_permission_allow_always_persists(tmp_path: Path):
     assert reloaded.evaluate(permission="grep", patterns=["*"], session_id="new") == PermissionAction.ALLOW
 
 
-def test_permission_denied_by_rule_short_circuits_prompt():
+def test_permission_denied_by_rule_short_circuits_prompt(tmp_path: Path):
+    # Hermetic store (see above): a persisted user-level `bash * allow` rule
+    # would override the DENY under last-match-wins and break the assertion.
     manager = PermissionManager(
-        rules=[PermissionRule(permission="bash", pattern="*", action=PermissionAction.DENY)]
+        store=PermissionStore(path=tmp_path / "perm.yaml"),
+        rules=[PermissionRule(permission="bash", pattern="*", action=PermissionAction.DENY)],
     )
 
     with pytest.raises(PermissionDeniedError):

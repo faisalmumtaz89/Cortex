@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, cast
 
 from cortex.cloud.types import CloudModelRef, CloudProvider
-from cortex.lumen_runtime import parse_selector
+from cortex.lumen_runtime import SWITCH_IN_FLIGHT_PREFIX, parse_selector
 from cortex.tooling.agent_prompt import build_system_prompt
 from cortex.tooling.permissions import (
     PermissionDecision,
@@ -226,6 +226,11 @@ class ToolingOrchestrator:
                 raise RuntimeError("No model loaded. Pick one with /model.")
             ok, message = self.cli.lumen_runtime.ensure_server(selector)
             if not ok:
+                if message.startswith(SWITCH_IN_FLIGHT_PREFIX):
+                    # A different model is mid-boot (e.g. this turn raced a
+                    # /model switch). The refusal is already user-actionable —
+                    # surface it verbatim, not as a startup failure.
+                    raise RuntimeError(message)
                 raise RuntimeError(f"local · {selector} failed to start: {message}")
             local_selector = selector
             model_ref = CloudModelRef(

@@ -20,7 +20,11 @@ from cortex.app.permission_service import PermissionService
 from cortex.app.session_service import SessionService, _WorkerToolingBridge
 from cortex.cloud import CloudCredentialStore, CloudModelCatalog, CloudRouter
 from cortex.cloud.types import ActiveModelTarget, CloudProvider
-from cortex.lumen_runtime import LumenRuntime, partial_download_bytes
+from cortex.lumen_runtime import (
+    SWITCH_IN_FLIGHT_PREFIX,
+    LumenRuntime,
+    partial_download_bytes,
+)
 from cortex.protocol.events import EventEmitter
 from cortex.protocol.rpc_server import RpcMethodError, StdioJsonRpcServer
 from cortex.protocol.schema import (
@@ -481,6 +485,14 @@ class WorkerRuntime:
             alive = self._active_boot_thread is not None and self._active_boot_thread.is_alive()
             return self._active_boot_selector if alive else None
 
+    def _booting_selector(self) -> str | None:
+        """Selector of ANY in-flight lumen-server boot: a worker background
+        boot thread, or a boot created inline by a turn (a turn is the boot
+        creator when a restore/crash left the active model without a live
+        server). Guards that only checked the worker's own thread were blind
+        to turn-driven boots and raced them."""
+        return self._current_boot_selector() or self.lumen_runtime.starting_selector()
+
     def _run_background_boot(self, *, session_id: str, selector: str, choice_seq: int) -> None:
         """Boot lumen-server for `selector` off the RPC thread, narrating the
         load like a download: an immediate progress message, then a ready or
@@ -511,7 +523,14 @@ class WorkerRuntime:
             _emit(content=headline, phase="loading", final=False)
             ok, message = self.lumen_runtime.ensure_server(selector)
             if not ok:
-                final_message = f"local · {selector} failed to start: {message}"
+                if message.startswith(SWITCH_IN_FLIGHT_PREFIX):
+                    # Transient refusal — this boot raced another model's
+                    # in-flight boot. Surface the runtime's retry message
+                    # verbatim (same contract as the turn path in the
+                    # orchestrator), never as a hard startup failure.
+                    final_message = message
+                else:
+                    final_message = f"local · {selector} failed to start: {message}"
             elif self._model_choice_seq != choice_seq:
                 final_message = (
                     f"local · {selector} finished loading (kept inactive — you "
@@ -744,7 +763,7 @@ class WorkerRuntime:
             return {"ok": True, "message": message, "background": True, "repo_id": selector}
         if current is not None:
             return {"ok": False, "message": self._download_busy_message(selector)}
-        booting = self._current_boot_selector()
+        booting = self._booting_selector()
         if booting is not None:
             # A boot and a download must never run concurrently: the download's
             # chained auto-load would tear down the in-flight boot.
@@ -785,7 +804,7 @@ class WorkerRuntime:
         if self.lumen_runtime.serving_selector() == selector:
             return None  # instant: sync handler activates and reports
 
-        booting = self._current_boot_selector()
+        booting = self._booting_selector()
         if booting == selector:
             message = f"Already starting local · {selector} — it will be active shortly."
             self._emit_event(
@@ -817,7 +836,10 @@ class WorkerRuntime:
                 "message": f"Still starting local · {booting} — wait for it to finish.",
             }
 
-        message = f"Loading {selector}…"
+        # Terse confirmation only: the transcript's live "Loading {selector}…"
+        # row solely owns load state (one operation = one live message; the
+        # result panel must not mirror it).
+        message = f"local · {selector} selected."
         return {"ok": True, "message": message, "background": True, "repo_id": selector}
 
     def _maybe_intercept_setup(self, *, session_id: str) -> Dict[str, object] | None:
@@ -881,7 +903,7 @@ class WorkerRuntime:
             download_preflight = self.command_service.preflight_download(command_args)
             if bool(download_preflight.get("ok")) and not bool(download_preflight.get("cached")):
                 repo_id = str(download_preflight.get("selector", "")).strip()
-                booting = self._current_boot_selector()
+                booting = self._booting_selector()
                 if booting is not None:
                     # Never run a download (whose auto-load restarts the
                     # server) while a boot is in flight.

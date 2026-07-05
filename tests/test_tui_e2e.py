@@ -135,6 +135,28 @@ def tui_project(tmp_path: Path):
         session.close()
 
 
+def _cloud_picker_rows() -> list[str]:
+    """The Cloud tab's rows exactly as the worker builds them: every catalog
+    entry in catalog order (the harness's isolated HOME has no override file).
+    Deriving rows from the real catalog keeps the picker test decoupled from
+    catalog cardinality — a routine model-list edit cannot silently break it."""
+    from cortex.cloud.catalog import CloudModelCatalog
+
+    catalog = CloudModelCatalog(override_path=Path("/nonexistent-cloud-override.json"))
+    return [ref.selector for ref in catalog.list_models()]
+
+
+def _selection_window_size() -> int:
+    """The shared picker window (rows shown before '+N more'), read from the
+    component's own default so the test tracks the source of truth."""
+    source = (REPO_ROOT / "frontend/cortex-tui/src/components/selection_list.tsx").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"maxVisibleRows \?\? (\d+)", source)
+    assert match, "selection_list.tsx window default not found"
+    return int(match.group(1))
+
+
 def _fake_lumen_env(tmp_path: Path) -> dict:
     """Deterministic local catalog for picker tests: one cached model (with a
     size), two available-to-download — no host lumen cache or network."""
@@ -420,14 +442,27 @@ def test_cached_model_load_shows_load_indicator_not_download_bar(tui_project, tm
     assert "Working…" not in loading
     assert "Esc to interrupt" not in loading
 
-    # Exactly ONE live indicator row (spinner-prefixed); the result panel may
-    # additionally echo the response text, which is a different surface.
+    # Exactly ONE live indicator row (spinner-prefixed) — and exactly ONE
+    # "Loading …" line in the WHOLE frame: the /model result panel must stay a
+    # terse selection confirmation, never a second live-state mirror (the
+    # cold-boot double-"Loading" regression).
     spinner_rows = [
         line
         for line in loading.splitlines()
         if "Loading qwen3-5-9b:q4_0…" in line and any(ch in line for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
     ]
     assert len(spinner_rows) == 1, spinner_rows
+    loading_rows = [line for line in loading.splitlines() if "Loading qwen3-5-9b:q4_0…" in line]
+    assert loading_rows == spinner_rows, (
+        f"transcript row must solely own live load state, saw: {loading_rows}"
+    )
+    # The result panel confirms the selection tersely (no "Loading" mirror).
+    panel = session.wait_until(
+        lambda frame: "local · qwen3-5-9b:q4_0 selected." in frame,
+        description="terse selection confirmation in the result panel",
+        timeout=10,
+    )
+    assert len([line for line in panel.splitlines() if "Loading qwen3-5-9b:q4_0…" in line]) <= 1
 
     session.wait_for("local · qwen3-5-9b:q4_0 ready — now active.", timeout=30)
     session.send_key("Escape")  # dismiss the /model result panel
@@ -505,6 +540,16 @@ def test_model_picker_tabs_split_local_and_cloud(tui_project, tmp_path) -> None:
     session.send_key("Escape")
     time.sleep(0.8)
 
+    # Rows and windowing are DERIVED (real catalog + the picker's own window
+    # default) so a routine catalog edit cannot silently break this test.
+    cloud_rows = _cloud_picker_rows()
+    window = _selection_window_size()
+    hidden = max(0, len(cloud_rows) - window)
+    first_row, last_row = cloud_rows[0], cloud_rows[-1]
+    # The wrap-select leg needs the env-authenticated azure deployment as the
+    # catalog's final row; if the order ever changes, update that leg too.
+    assert last_row.startswith("azure:"), f"catalog order changed: {cloud_rows}"
+
     # Bare /model opens the picker. No model is active → Local tab first.
     session.send_key("/model")
     time.sleep(1)
@@ -514,45 +559,54 @@ def test_model_picker_tabs_split_local_and_cloud(tui_project, tmp_path) -> None:
     assert "qwen3-5-9b:q4_0" in picker  # downloaded row…
     assert "5.4 GB" in picker  # …with its on-disk size
     assert "select to download" in picker  # download candidates below
-    assert "azure:gpt-5.5" not in picker  # cloud rows live on the OTHER tab
+    assert first_row not in picker  # cloud rows live on the OTHER tab
     assert "Tab cloud" in picker  # footer names the other tab
     # No numbered rows anywhere.
     assert "[1]" not in picker and "- [1]" not in picker
 
-    # Tab → Cloud tab: cloud rows appear, local rows disappear.
+    # Tab → Cloud tab: cloud rows appear, local rows disappear; rows past the
+    # window hide behind the "+N more" hint until selection reaches them.
     session.send_key("Tab")
-    cloud_tab = session.wait_for("azure:gpt-5.5", timeout=10)
+    cloud_tab = session.wait_for(first_row, timeout=10)
     assert "qwen3-5-9b:q4_0" not in cloud_tab
+    for visible_row in cloud_rows[:window]:
+        assert visible_row in cloud_tab, f"windowed row missing: {visible_row}"
+    for windowed_out in cloud_rows[window:]:
+        assert windowed_out not in cloud_tab, f"row should be windowed out: {windowed_out}"
+    if hidden:
+        assert f"+{hidden} more" in cloud_tab
     assert "Tab local" in cloud_tab
     assert "ready" in cloud_tab or "login required" in cloud_tab
 
     # Left arrow flips back to Local; Right returns to Cloud.
     session.send_key("Left")
     session.wait_until(
-        lambda frame: "qwen3-5-9b:q4_0" in frame and "azure:gpt-5.5" not in frame,
+        lambda frame: "qwen3-5-9b:q4_0" in frame and first_row not in frame,
         description="left arrow returns to the Local tab",
         timeout=10,
     )
     session.send_key("Right")
-    session.wait_for("azure:gpt-5.5", timeout=10)
+    session.wait_for(first_row, timeout=10)
 
-    # Up from the top wraps to the last cloud entry (azure:gpt-5.5, the only
-    # "ready" one); select it via Enter — no typing a number.
+    # Up from the top wraps to the LAST cloud entry — the windowing follows
+    # the selection, revealing it; select it via Enter (azure is the one
+    # env-authenticated provider in this harness).
     session.send_key("Up")
-    time.sleep(0.5)
+    session.wait_for(last_row, timeout=10)
     session.send_key("Enter")
-    result = session.wait_for("cloud · azure:gpt-5.5 — now active.", timeout=10)
+    result = session.wait_for(f"cloud · {last_row} — now active.", timeout=10)
     assert "✓" in result
     session.send_key("Escape")
     time.sleep(1)
     assert "Select a model" not in session.capture()
 
-    # Reopen: the active backend is cloud, so the picker opens on Cloud.
+    # Reopen: the active backend is cloud, so the picker opens on Cloud with
+    # the window scrolled to the active (last) row.
     session.send_key("/model")
     time.sleep(1)
     session.send_key("Enter")
     reopened = session.wait_for("Select a model", timeout=10)
-    assert "azure:gpt-5.5" in reopened
+    assert last_row in reopened
     assert "qwen3-5-9b:q4_0" not in reopened
     session.send_key("Escape")
     time.sleep(1)
@@ -611,6 +665,54 @@ def test_slash_palette_login_masks_api_key(tui_project) -> None:
     # The key must be masked and never rendered.
     assert "sk-supersecret123" not in result
     assert "****" in result
+
+
+def test_bare_login_opens_provider_picker_and_prefills_key_prompt(tui_project) -> None:
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]])
+    session.wait_for("Session ready")
+
+    # Bare /login + Enter opens the provider picker (not arg-hint mode).
+    session.send_key("/login")
+    time.sleep(1)
+    session.send_key("Enter")
+    picker = session.wait_for("Log in to a provider", timeout=10)
+    assert "openai" in picker
+    assert "anthropic" in picker
+    assert "azure" in picker
+    # Auth-status tags render (azure has env creds in this harness; the others
+    # may or may not — at least one status tag of each kind's vocabulary shows).
+    assert "logged in" in picker or "not configured" in picker
+    # No numbered selection anywhere.
+    assert "[1]" not in picker
+
+    # Enter on the highlighted provider pre-fills the key prompt (arg-hint).
+    session.send_key("Down")  # anthropic
+    time.sleep(0.4)
+    session.send_key("Enter")
+    session.wait_until(
+        lambda frame: "Log in to a provider" not in frame and "/login" in frame,
+        description="picker closed into pre-filled /login prompt",
+        timeout=10.0,
+    )
+    frame = session.capture()
+    assert "/login anthropic" in frame  # pre-filled input, awaiting the key
+
+    # Esc cancels cleanly: input empties, no picker, no residue.
+    session.send_key("Escape")
+    time.sleep(1)
+    cleared = session.capture()
+    assert "Log in to a provider" not in cleared
+    assert "/login anthropic" not in cleared
+
+    # Re-open and Esc directly from the picker also leaves a clean input.
+    session.send_key("/login")
+    time.sleep(0.8)
+    session.send_key("Enter")
+    session.wait_for("Log in to a provider", timeout=10)
+    session.send_key("Escape")
+    time.sleep(1)
+    assert "Log in to a provider" not in session.capture()
 
 
 def test_clear_resets_the_transcript(tui_project) -> None:
@@ -704,6 +806,53 @@ def test_permission_modal_shows_command_and_executes_it(tui_project) -> None:
     session.send_key("Enter")
     session.wait_for("WROTE_FILE_MARKER")
     assert (project / "proof.txt").read_text(encoding="utf-8").strip() == "proof"
+
+
+def test_absolute_tool_paths_display_repo_relative(tui_project) -> None:
+    """Models sometimes pass ABSOLUTE paths in tool arguments. Tool rows and
+    the permission modal must DISPLAY them repo-relative when they are inside
+    the repo (display only — the tool input itself is untouched: the edit
+    still lands on the real file)."""
+    project, start = tui_project
+    abs_path = str((project / "calc.py").resolve())
+    session = start(
+        [
+            [
+                {
+                    "tool_calls": [
+                        {"name": "read_file", "arguments": {"path": abs_path}},
+                        {
+                            "name": "edit_file",
+                            "arguments": {
+                                "path": abs_path,
+                                "old_text": "    return a + b",
+                                "new_text": "    return a - b",
+                            },
+                        },
+                    ]
+                },
+                {"text": "ABS_PATH_DONE"},
+            ]
+        ]
+    )
+    _select_scripted_model(session)
+    session.send_line("edit it with absolute paths")
+
+    # Permission modal: repo-relative summary, no absolute path anywhere, and
+    # no redundant Target row (the normalized pattern repeats the summary).
+    modal = session.wait_for("Permission required")
+    assert "Edit file: calc.py" in modal
+    assert "project/calc.py" not in modal
+    assert "Target:" not in modal
+    session.send_key("Enter")  # Allow once
+
+    frame = session.wait_for("ABS_PATH_DONE")
+    # Tool rows show the repo-relative form, not the truncated absolute tail.
+    assert "Read calc.py" in frame
+    assert "Update calc.py" in frame
+    assert "project/calc.py" not in frame
+    # The edit was applied to the real absolute-path file (inputs untouched).
+    assert "return a - b" in (project / "calc.py").read_text(encoding="utf-8")
 
 
 def test_markdown_and_syntax_highlighting_render_with_color(tui_project) -> None:

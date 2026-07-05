@@ -91,8 +91,8 @@ class CloudConfig(BaseModel):
     cloud_enabled: bool = True
     cloud_timeout_seconds: int = Field(default=60, ge=1, le=600)
     cloud_max_retries: int = Field(default=2, ge=0, le=10)
-    cloud_default_openai_model: str = Field(default="gpt-5.1")
-    cloud_default_anthropic_model: str = Field(default="claude-sonnet-4-5")
+    cloud_default_openai_model: str = Field(default="gpt-5.5")
+    cloud_default_anthropic_model: str = Field(default="claude-fable-5")
     cloud_azure_endpoint: str = Field(default="")
 
 

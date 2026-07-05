@@ -114,6 +114,35 @@ class AnthropicClient:
                 "name": str(self._item_get(block, "name", "")),
                 "input": self._item_get(block, "input", {}),
             }
+        if block_type == "thinking":
+            # Claude 5 family emits thinking blocks by default on tool-use
+            # turns. Replay them VERBATIM: `thinking` is REQUIRED even when
+            # empty (verified live — a block can stream only a signature_delta,
+            # thinking=""), and the signature authenticates the block. Dropping
+            # the field 400s: "content.0.thinking.thinking: Field required".
+            return {
+                "type": "thinking",
+                "thinking": str(self._item_get(block, "thinking", "") or ""),
+                "signature": str(self._item_get(block, "signature", "") or ""),
+            }
+        if block_type == "redacted_thinking":
+            # Opaque encrypted reasoning — pass through untouched.
+            return {
+                "type": "redacted_thinking",
+                "data": str(self._item_get(block, "data", "") or ""),
+            }
+        # Unknown server block: replay its own shape verbatim when possible
+        # rather than fabricating a text block the API may reject.
+        dump = getattr(block, "model_dump", None)
+        if callable(dump):
+            try:
+                raw = dump()
+                if isinstance(raw, dict) and raw.get("type"):
+                    return raw
+            except Exception:  # pragma: no cover - SDK-specific edge
+                pass
+        if isinstance(block, dict) and block.get("type"):
+            return dict(block)
         return {"type": block_type or "text", "text": str(self._item_get(block, "text", ""))}
 
     def stream_events(
@@ -139,14 +168,15 @@ class AnthropicClient:
             reported_model: Any = ""
             reported_id: Any = ""
             for _ in range(max_tool_iterations):
+                # No temperature/top_p: Claude-5-era models 400 on temperature
+                # ("deprecated for this model") and 4-x-era models 400 when both
+                # are sent — omitting both works on every generation (verified
+                # live against fable-5/sonnet-5/opus-4-8/haiku-4-5/opus-4-6).
                 kwargs: Dict[str, Any] = {
                     "model": model_id,
                     "messages": history,
                     "max_tokens": max_tokens,
-                    "temperature": temperature,
                 }
-                if top_p is not None:
-                    kwargs["top_p"] = top_p
                 if system_text:
                     kwargs["system"] = system_text
                 kwargs["tools"] = self._serialize_tools(tools)
@@ -233,14 +263,12 @@ class AnthropicClient:
 
             raise RuntimeError("Anthropic tool loop exceeded max iterations")
 
+        # Sampling params intentionally omitted (see tool-loop comment above).
         final_kwargs: Dict[str, Any] = {
             "model": model_id,
             "messages": normalized_messages,
             "max_tokens": max_tokens,
-            "temperature": temperature,
         }
-        if top_p is not None:
-            final_kwargs["top_p"] = top_p
         if system_text:
             final_kwargs["system"] = system_text
 
@@ -300,14 +328,12 @@ class AnthropicClient:
         if not normalized_messages:
             raise RuntimeError("No user/assistant messages available for Anthropic request.")
 
+        # Sampling params intentionally omitted (see stream_events comment).
         kwargs: Dict[str, Any] = {
             "model": model_id,
             "messages": normalized_messages,
             "max_tokens": max_tokens,
-            "temperature": temperature,
         }
-        if top_p is not None:
-            kwargs["top_p"] = top_p
         if system_text:
             kwargs["system"] = system_text
 

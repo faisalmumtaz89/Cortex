@@ -2,6 +2,7 @@ import type { RGBA } from "@opentui/core"
 import { For, Show } from "solid-js"
 import type { DiffData } from "../context/store"
 import { createFadeIn, createMinDwell, mixRgba } from "../lib/animation"
+import { displayPath } from "../lib/paths"
 import { spinnerFrame } from "../lib/spinner"
 import { terminalColumns } from "../lib/terminal_size"
 import { DiffView } from "./diff_view"
@@ -74,10 +75,12 @@ function pathBudget(): number {
   return Math.max(16, Math.min(terminalColumns() - 30, PATH_MAX_CHARS))
 }
 
-/** Compact, Claude Code-style argument summary for a tool call. */
+/** Compact, Claude Code-style argument summary for a tool call. Absolute
+ * paths under the repo root display repo-relative (display only — the tool's
+ * actual input is untouched). */
 export function toolCallSummary(tool: string, input?: Record<string, unknown>): string {
   const args = input ?? {}
-  const path = typeof args.path === "string" ? args.path : ""
+  const path = typeof args.path === "string" ? displayPath(args.path) : ""
   const budget = pathBudget()
   switch (tool) {
     case "bash":

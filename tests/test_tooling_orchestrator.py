@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 
+import pytest
+
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
 from cortex.conversation_manager import MessageRole
+from cortex.lumen_runtime import SWITCH_IN_FLIGHT_PREFIX
 from cortex.tooling.orchestrator import NO_TOOLS_SYSTEM_INSTRUCTION, ToolingOrchestrator
 from cortex.tooling.types import FinishEvent, TextDeltaEvent
 
@@ -104,6 +107,39 @@ def test_orchestrator_prepends_no_tools_instruction_when_tools_off():
     outbound_messages = router.last_kwargs["messages"]
     assert outbound_messages[0]["role"] == "system"
     assert outbound_messages[0]["content"] == NO_TOOLS_SYSTEM_INSTRUCTION
+
+
+def test_local_turn_during_model_switch_surfaces_retry_message_verbatim():
+    """A local turn refused because a switch's boot is in flight must surface
+    the runtime's 'Model is switching … retry in a moment.' message as-is —
+    NOT wrapped as a 'failed to start' hard error."""
+    refusal = f"{SWITCH_IN_FLIGHT_PREFIX}qwen3-5-9b:q8_0 — retry in a moment."
+    cli = _make_cli(cloud_router=_DummyCloudRouter(events=[]))
+    cli.lumen_runtime = SimpleNamespace(ensure_server=lambda selector: (False, refusal))
+    orchestrator = ToolingOrchestrator(cli=cli)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        orchestrator.run_turn(
+            user_input="hello",
+            active_target=ActiveModelTarget.local("qwen3-5-9b:q4_0"),
+            conversation=_make_conversation(),
+        )
+    assert str(excinfo.value) == refusal
+    assert "failed to start" not in str(excinfo.value)
+
+
+def test_local_turn_boot_failure_still_reports_failed_to_start():
+    cli = _make_cli(cloud_router=_DummyCloudRouter(events=[]))
+    cli.lumen_runtime = SimpleNamespace(ensure_server=lambda selector: (False, "boom: no GPU"))
+    orchestrator = ToolingOrchestrator(cli=cli)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        orchestrator.run_turn(
+            user_input="hello",
+            active_target=ActiveModelTarget.local("qwen3-5-9b:q4_0"),
+            conversation=_make_conversation(),
+        )
+    assert "local · qwen3-5-9b:q4_0 failed to start: boom: no GPU" in str(excinfo.value)
 
 
 def test_orchestrator_prepends_tools_instruction_when_tools_on():

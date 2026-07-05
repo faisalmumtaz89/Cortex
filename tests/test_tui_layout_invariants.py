@@ -238,6 +238,27 @@ expect eof
     assert "Traceback" not in transcript
 
 
+def test_tool_rows_and_permission_modal_display_repo_relative_paths() -> None:
+    """Absolute tool-argument paths under the repo root must DISPLAY
+    repo-relative (display-only; the shared helper is lib/paths.ts). Tool
+    inputs are never rewritten."""
+    repo = _repo_root()
+    assert (repo / "frontend/cortex-tui/src/lib/paths.ts").exists()
+
+    paths_source = _read("frontend/cortex-tui/src/lib/paths.ts")
+    assert "export function displayPath" in paths_source
+    assert "CORTEX_PROJECT_DIR" in paths_source
+
+    tool_block = _read("frontend/cortex-tui/src/components/tool_block.tsx")
+    assert 'from "../lib/paths"' in tool_block
+    assert 'typeof args.path === "string" ? displayPath(args.path) : ""' in tool_block
+
+    session = _read("frontend/cortex-tui/src/routes/session.tsx")
+    assert 'from "../lib/paths"' in session
+    assert "patterns.map(displayPath)" in session
+    assert "displayPath(String(args.path ?? pending.patterns[0] ?? \"\"))" in session
+
+
 def test_model_picker_tabs_and_origin_labels() -> None:
     """Picker separates origins into Local/Cloud TABS (one origin visible at a
     time); Tab and arrow keys switch; the session header and turn footer keep

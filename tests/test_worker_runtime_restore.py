@@ -8,6 +8,7 @@ import pytest
 
 from cortex.app.worker_runtime import WorkerRuntime
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
+from cortex.lumen_runtime import SWITCH_IN_FLIGHT_PREFIX
 
 
 class _FakeConfig:
@@ -495,7 +496,10 @@ def _intercept_runtime(
     fake = SimpleNamespace(
         model_service=_Models(),
         command_service=_Commands(),
-        lumen_runtime=SimpleNamespace(serving_selector=lambda: None),
+        lumen_runtime=SimpleNamespace(
+            serving_selector=lambda: None,
+            starting_selector=lambda: None,
+        ),
         _download_task_lock=threading.Lock(),
         _active_download_thread=None,
         _active_download_repo_id=None,
@@ -520,6 +524,7 @@ def _intercept_runtime(
         "_is_download_active",
         "_is_boot_active",
         "_current_boot_selector",
+        "_booting_selector",
     ):
         setattr(fake, name, MethodType(getattr(WorkerRuntime, name), fake))
 
@@ -619,6 +624,7 @@ def test_cached_model_boots_in_background_with_ready_notice() -> None:
     activated: list[str] = []
     fake.lumen_runtime = SimpleNamespace(
         serving_selector=lambda: None,
+        starting_selector=lambda: None,
         ensure_server=lambda selector: (True, f"Lumen serving {selector} on port 1."),
     )
     fake.model_service.activate_local = lambda selector: (
@@ -629,7 +635,10 @@ def test_cached_model_boots_in_background_with_ready_notice() -> None:
     result = fake._maybe_intercept_model_download(session_id="s1", selector_arg="qwen3-5-9b:q4_0")
 
     assert result is not None and result["ok"] is True and result["background"] is True
-    assert str(result["message"]) == "Loading qwen3-5-9b:q4_0…"
+    # Terse selection confirmation only — the transcript's live "Loading …"
+    # row solely owns load state (no duplicated live text in the panel).
+    assert str(result["message"]) == "local · qwen3-5-9b:q4_0 selected."
+    assert "Loading" not in str(result["message"])
 
     fake._active_boot_thread.join(timeout=10)
     assert activated == ["qwen3-5-9b:q4_0"]
@@ -652,6 +661,7 @@ def test_cached_model_boot_failure_reports_log_tail() -> None:
     fake, events, _executed = _intercept_runtime(resolved=_cached("qwen3-5-9b:q4_0"))
     fake.lumen_runtime = SimpleNamespace(
         serving_selector=lambda: None,
+        starting_selector=lambda: None,
         ensure_server=lambda selector: (False, "lumen-server failed to become ready: boom."),
     )
     fake.model_service.activate_local = lambda selector: {"ok": True}
@@ -671,11 +681,81 @@ def test_cached_model_boot_failure_reports_log_tail() -> None:
     assert frames and frames[-1]["progress"]["phase"] == "failed"
 
 
+def test_background_boot_switch_refusal_surfaces_retry_message_verbatim() -> None:
+    """A background boot refused because ANOTHER model's boot is in flight
+    must narrate the runtime's 'Model is switching …' retry message verbatim
+    (same contract as the turn path) — never as a hard 'failed to start'."""
+    refusal = f"{SWITCH_IN_FLIGHT_PREFIX}qwen3-6-27b:q4_0 — retry in a moment."
+    fake, events, _executed = _intercept_runtime(resolved=_cached("qwen3-5-9b:q4_0"))
+    fake.lumen_runtime = SimpleNamespace(
+        serving_selector=lambda: None,
+        starting_selector=lambda: None,
+        ensure_server=lambda selector: (False, refusal),
+    )
+    fake.model_service.activate_local = lambda selector: {"ok": True}
+
+    result = fake._maybe_intercept_model_download(session_id="s1", selector_arg="qwen3-5-9b:q4_0")
+    assert result is not None and result["ok"] is True
+
+    fake._active_boot_thread.join(timeout=10)
+    finals = [
+        p for kind, p in events if kind == "message.updated" and p.get("final") is True
+    ]
+    assert finals, "background boot must resolve its progress message"
+    content = str(finals[-1].get("content", ""))
+    assert content == refusal
+    assert "failed to start" not in content
+    assert finals[-1]["progress"]["phase"] == "failed"
+
+
+def test_uncached_download_blocked_while_turn_driven_boot_in_flight() -> None:
+    """The uncached-selector branch (download + chained auto-load) must also
+    see turn-driven boots via the runtime's starting_selector — its auto-load
+    would otherwise race the in-flight boot."""
+    fake, _events, _executed = _intercept_runtime(resolved=_uncached("qwen3-6-27b:q4_0"))
+    fake.lumen_runtime = SimpleNamespace(
+        serving_selector=lambda: None,
+        starting_selector=lambda: "qwen3-5-9b:q8_0",  # turn-driven boot
+    )
+    result = fake._maybe_intercept_model_download(
+        session_id="s1", selector_arg="qwen3-6-27b:q4_0"
+    )
+    assert result is not None and result["ok"] is False
+    assert "Still starting local · qwen3-5-9b:q8_0" in str(result["message"])
+    assert "before downloading" in str(result["message"])
+
+
+def test_model_switch_blocked_while_turn_driven_boot_in_flight() -> None:
+    """A turn can be the boot creator (restore/crash leaves the active model
+    without a live server). /model must see that in-flight boot through the
+    runtime's starting_selector — not only the worker's own boot thread — and
+    block the switch instead of racing it."""
+    fake, events, _executed = _intercept_runtime(resolved=_cached("qwen3-5-9b:q4_0"))
+    fake.lumen_runtime = SimpleNamespace(
+        serving_selector=lambda: None,
+        starting_selector=lambda: "qwen3-6-27b:q4_0",  # turn-driven boot
+    )
+
+    result = fake._maybe_intercept_model_download(session_id="s1", selector_arg="qwen3-5-9b:q4_0")
+    assert result is not None and result["ok"] is False
+    assert "Still starting local · qwen3-6-27b:q4_0" in str(result["message"])
+
+    # Same selector as the turn-driven boot: dedupe, don't double-start.
+    fake.lumen_runtime = SimpleNamespace(
+        serving_selector=lambda: None,
+        starting_selector=lambda: "qwen3-5-9b:q4_0",
+    )
+    again = fake._maybe_intercept_model_download(session_id="s1", selector_arg="qwen3-5-9b:q4_0")
+    assert again is not None and again["ok"] is True
+    assert "Already starting local · qwen3-5-9b:q4_0" in str(again["message"])
+
+
 def test_cached_boot_dedupes_and_blocks_switches() -> None:
     fake, events, _executed = _intercept_runtime(resolved=_cached("qwen3-5-9b:q4_0"))
     hold = threading.Event()
     fake.lumen_runtime = SimpleNamespace(
         serving_selector=lambda: None,
+        starting_selector=lambda: None,
         ensure_server=lambda selector: (hold.wait(10), (True, "ok"))[1],
     )
     fake.model_service.activate_local = lambda selector: {"ok": True, "message": "done"}
@@ -702,6 +782,7 @@ def test_stale_boot_keeps_model_inactive_after_new_choice() -> None:
     activated: list[str] = []
     fake.lumen_runtime = SimpleNamespace(
         serving_selector=lambda: None,
+        starting_selector=lambda: None,
         ensure_server=lambda selector: (hold.wait(10), (True, "ok"))[1],
     )
     fake.model_service.activate_local = lambda selector: activated.append(selector) or {"ok": True}
@@ -736,6 +817,7 @@ def _boot_in_flight(fake):
     activated: list[str] = []
     fake.lumen_runtime = SimpleNamespace(
         serving_selector=lambda: None,
+        starting_selector=lambda: None,
         ensure_server=lambda selector: (hold.wait(10), (True, "ok"))[1],
     )
     fake.model_service.activate_local = lambda selector: activated.append(selector) or {"ok": True}

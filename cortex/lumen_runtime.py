@@ -33,6 +33,11 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 INSTALL_HINT = "Install Lumen: curl -fsSL https://servelumen.com/install.sh | bash"
 
+# ensure_server's refusal while another model is mid-boot starts with this
+# prefix. The orchestrator keys on it to surface the message verbatim (it is
+# already user-actionable) instead of wrapping it as a startup failure.
+SWITCH_IN_FLIGHT_PREFIX = "Model is switching to "
+
 _QUANTS = ("BF16", "F16", "Q8_0", "Q4_0")
 # Cached entries print as "<model>-<QUANT>[ -suffix]", e.g. "qwen3-5-9b-Q4_0".
 _CACHED_LINE = re.compile(r"^\s{2,}(\S+)\s+([\d.]+\s*[KMGT]?B)\s*$")
@@ -160,9 +165,13 @@ def partial_download_bytes() -> int:
 
 @dataclass
 class LumenServerState:
-    process: subprocess.Popen
     selector: str
     port: int
+    # The OS process backing this state. None only inside ensure_server's
+    # claim window: the placeholder is installed first (making the boot
+    # exclusive and its selector visible) and the outgoing server's teardown
+    # plus the replacement's spawn then run OUTSIDE the runtime lock.
+    process: Optional[subprocess.Popen] = None
     started_at: float = field(default_factory=time.time)
     # Boot synchronization: `ready` is set once /v1/models answers (or the boot
     # fails — then `error` says why). Concurrent ensure_server callers wait on
@@ -231,9 +240,16 @@ class LumenRuntime:
 
     @property
     def server(self) -> Optional[LumenServerState]:
-        if self._server is not None and self._server.process.poll() is not None:
-            self._server = None  # crashed / exited underneath us
-        return self._server
+        with self._lock:
+            state = self._server
+            if (
+                state is not None
+                and state.process is not None
+                and state.process.poll() is not None
+            ):
+                self._server = None  # crashed / exited underneath us
+                return None
+            return state
 
     def base_url(self) -> Optional[str]:
         state = self.server
@@ -261,9 +277,20 @@ class LumenRuntime:
         """Start (or switch to) `selector`; blocks until the API is ready.
 
         Thread-safe: if another caller is already booting the SAME selector,
-        this waits for that boot instead of double-starting; a boot of a
-        DIFFERENT selector is stopped and replaced (last caller wins) — the
-        worker layer serializes user-facing switches with clear messages.
+        this waits for that boot instead of double-starting. An IN-FLIGHT boot
+        of a different selector is never torn down — a racing caller (e.g. a
+        turn still bound to the outgoing model during a switch) is refused
+        with a clear retry message. Killing the incoming boot here is exactly
+        how a mid-switch turn used to leave ZERO servers running: the turn's
+        switch killed the booting server, and that boot's failure cleanup then
+        killed the turn's replacement. Only a READY server is replaced.
+
+        The creator claims the boot by installing a placeholder state under
+        the lock FIRST; the outgoing server's teardown and the replacement's
+        spawn then run OUTSIDE the lock. Concurrent callers therefore coalesce
+        (same selector) or are refused (different selector) immediately, and
+        pointer reads (status / base_url / selectors) never block on a process
+        teardown — the lock only ever guards pointer state, not process waits.
         """
         ok, message = self.available()
         if not ok:
@@ -272,44 +299,21 @@ class LumenRuntime:
         name, quant = parse_selector(selector)
         canonical = f"{name}:{quant.lower()}"
 
+        outgoing: Optional[LumenServerState] = None
         with self._lock:
             state = self.server
             if state is not None and state.selector == canonical:
                 creator = False
+            elif state is not None and not state.ready.is_set():
+                # A different model is mid-boot: refuse instead of replacing.
+                return False, (
+                    f"{SWITCH_IN_FLIGHT_PREFIX}{state.selector} — retry in a moment."
+                )
             else:
-                if state is not None:
-                    self.stop()
-                port = self.port_config or find_free_port()
-                server_bin = self.resolve_binary(self.server_binary)
-                assert server_bin is not None  # guaranteed by available()
-
-                command = [
-                    server_bin,
-                    "--model",
-                    name,
-                    "--quant",
-                    quant.lower(),
-                    "--port",
-                    str(port),
-                    "--log-level",
-                    self.log_level,
-                ]
-                if self.context_len:
-                    command += ["--context-len", str(self.context_len)]
-
-                self.log_path.parent.mkdir(parents=True, exist_ok=True)
-                log_handle = open(self.log_path, "ab")
-                try:
-                    process = subprocess.Popen(
-                        command, stdout=log_handle, stderr=subprocess.STDOUT
-                    )
-                except OSError as exc:
-                    return False, f"Failed to launch lumen-server: {exc}"
-                finally:
-                    # Popen inherited the descriptor; the parent copy can close.
-                    log_handle.close()
-
-                state = LumenServerState(process=process, selector=canonical, port=port)
+                outgoing = state  # READY server being replaced (or None)
+                state = LumenServerState(
+                    selector=canonical, port=self.port_config or find_free_port()
+                )
                 self._server = state
                 creator = True
 
@@ -319,9 +323,68 @@ class LumenRuntime:
                 return False, "Timed out waiting for the in-flight lumen-server startup."
             if state.error:
                 return False, state.error
-            if state.process.poll() is not None:
+            if state.process is None or state.process.poll() is not None:
                 return False, "lumen-server exited unexpectedly."
             return True, f"Lumen already serving {canonical}."
+
+        # Everything from here until the process is installed runs while this
+        # thread HOLDS THE CLAIM (the not-ready placeholder). Any failure —
+        # reaping the old server, resolving the binary, opening the log,
+        # spawning — must discard that claim, or the runtime would refuse
+        # every future boot against a placeholder nothing will ever finish.
+        try:
+            # Fully reap the outgoing server BEFORE spawning the replacement —
+            # two GPU-resident models must never co-exist. The claim keeps
+            # this exclusive without holding the lock through the wait.
+            if outgoing is not None:
+                self._shutdown_state(outgoing)
+
+            server_bin = self.resolve_binary(self.server_binary)
+            assert server_bin is not None  # guaranteed by available()
+            command = [
+                server_bin,
+                "--model",
+                name,
+                "--quant",
+                quant.lower(),
+                "--port",
+                str(state.port),
+                "--log-level",
+                self.log_level,
+            ]
+            if self.context_len:
+                command += ["--context-len", str(self.context_len)]
+
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_handle = open(self.log_path, "ab")
+            try:
+                process = subprocess.Popen(
+                    command, stdout=log_handle, stderr=subprocess.STDOUT
+                )
+            finally:
+                # Popen inherited the descriptor; the parent copy can close.
+                log_handle.close()
+        except OSError as exc:
+            state.error = f"Failed to launch lumen-server: {exc}"
+            state.ready.set()  # release any coalesced waiters with the error
+            self._discard(state)
+            return False, state.error
+        except BaseException:
+            # Unexpected failure while holding the claim: release waiters and
+            # discard the placeholder first, then let the error surface.
+            state.error = "lumen-server startup failed unexpectedly."
+            state.ready.set()
+            self._discard(state)
+            raise
+
+        with self._lock:
+            state.process = process
+            installed = self._server is state
+        if not installed:
+            # stop() detached this boot while the process was spawning (user
+            # shutdown / signal): the fresh process must not outlive it.
+            self._shutdown_state(state)
+            return False, state.error or "lumen-server was stopped during startup."
 
         ready, why = self._wait_ready(state)
         if not ready:
@@ -329,10 +392,13 @@ class LumenRuntime:
             detail = f" Server log: {tail}" if tail else ""
             state.error = f"lumen-server failed to become ready: {why}.{detail}"
             state.ready.set()  # release any waiters with the error recorded
-            self.stop()
+            # Targeted cleanup: discard only OUR failed state. A global stop()
+            # here would kill whatever server a concurrent caller may have
+            # started since (the other half of the mutual-termination race).
+            self._discard(state)
             return False, state.error
         state.ready.set()
-        return True, f"Lumen serving {canonical} on port {port}."
+        return True, f"Lumen serving {canonical} on port {state.port}."
 
     def _log_tail(self, max_chars: int = 300) -> str:
         """Last log line(s) — surfaced when startup fails so the user sees why."""
@@ -353,8 +419,11 @@ class LumenRuntime:
         deadline = time.time() + self.startup_timeout_seconds
         url = f"http://127.0.0.1:{state.port}/v1/models"
         while time.time() < deadline:
-            if state.process.poll() is not None:
-                return False, f"process exited with code {state.process.returncode}"
+            process = state.process
+            if process is None:  # defensive: creator installs before waiting
+                return False, "lumen-server was stopped during startup"
+            if process.poll() is not None:
+                return False, f"process exited with code {process.returncode}"
             try:
                 with urllib.request.urlopen(url, timeout=2) as response:
                     if response.status == 200:
@@ -366,24 +435,39 @@ class LumenRuntime:
         return False, f"timed out after {self.startup_timeout_seconds}s"
 
     def stop(self) -> None:
+        """Stop whatever server is CURRENT (user-facing shutdown/switch path)."""
         with self._lock:
             state = self._server
             self._server = None
         if state is None:
             return
+        self._shutdown_state(state)
+
+    def _discard(self, state: LumenServerState) -> None:
+        """Terminate `state`'s process, clearing it from the runtime ONLY if it
+        is still the current server — a concurrent caller may have replaced it,
+        and that replacement must survive this caller's cleanup."""
+        with self._lock:
+            if self._server is state:
+                self._server = None
+        self._shutdown_state(state)
+
+    @staticmethod
+    def _shutdown_state(state: LumenServerState) -> None:
         if not state.ready.is_set():
             # Release any boot waiters before killing the process under them.
             state.error = state.error or "lumen-server was stopped during startup."
             state.ready.set()
-        if state.process.poll() is not None:
-            return
-        state.process.terminate()
+        process = state.process
+        if process is None or process.poll() is not None:
+            return  # placeholder (no process yet) or already exited
+        process.terminate()
         try:
-            state.process.wait(timeout=8)
+            process.wait(timeout=8)
         except subprocess.TimeoutExpired:
-            state.process.kill()
+            process.kill()
             try:
-                state.process.wait(timeout=4)
+                process.wait(timeout=4)
             except subprocess.TimeoutExpired:
                 pass
 

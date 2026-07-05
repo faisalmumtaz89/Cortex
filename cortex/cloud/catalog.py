@@ -8,15 +8,19 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from cortex.cloud.types import CloudModelRef, CloudProvider
 
+# Curated newest-first lists, each id validated with a real API call
+# (2026-07-05). Users can extend via ~/.cortex/cloud_models.json.
 DEFAULT_MODELS: Dict[CloudProvider, List[str]] = {
     CloudProvider.OPENAI: [
-        "gpt-5.1",
-        "gpt-5-mini",
-        "gpt-5-nano",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
     ],
     CloudProvider.ANTHROPIC: [
-        "claude-opus-4-6",
-        "claude-sonnet-4-5",
+        "claude-fable-5",
+        "claude-sonnet-5",
+        "claude-opus-4-8",
         "claude-haiku-4-5",
     ],
     # Azure model ids are deployment names on the configured resource.

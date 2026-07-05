@@ -132,6 +132,98 @@ def test_openai_allows_date_suffixed_release_names_only() -> None:
     assert not wrong.ok
 
 
+def test_date_suffix_aliasing_accepts_both_provider_forms() -> None:
+    """The two real-world pairs (validated live 2026-07-05): OpenAI dashed
+    dates and Anthropic compact dates both alias to the bare id."""
+    openai_pair = verify_turn_provenance(
+        provider=CloudProvider.OPENAI,
+        requested_model="gpt-5.5",
+        provenance={
+            "client_kind": "openai",
+            "reported_model": "gpt-5.5-2026-04-23",
+            "response_id": "resp_1",
+            "endpoint": "https://api.openai.com/v1",
+        },
+    )
+    assert openai_pair.ok
+
+    anthropic_pair = verify_turn_provenance(
+        provider=CloudProvider.ANTHROPIC,
+        requested_model="claude-haiku-4-5",
+        provenance={
+            "client_kind": "anthropic",
+            "reported_model": "claude-haiku-4-5-20251001",
+            "response_id": "msg_1",
+            "endpoint": "https://api.anthropic.com",
+        },
+    )
+    assert anthropic_pair.ok
+
+
+def test_variant_suffixes_are_different_models_not_aliases() -> None:
+    """-mini/-codex variants share the prefix but are DIFFERENT models: a
+    request for gpt-5.4 answered by gpt-5.4-mini must be rejected."""
+    mini = verify_turn_provenance(
+        provider=CloudProvider.OPENAI,
+        requested_model="gpt-5.4",
+        provenance={
+            "client_kind": "openai",
+            "reported_model": "gpt-5.4-mini-2026-03-17",
+            "response_id": "resp_1",
+            "endpoint": "https://api.openai.com/v1",
+        },
+    )
+    assert not mini.ok
+
+    codex = verify_turn_provenance(
+        provider=CloudProvider.OPENAI,
+        requested_model="gpt-5.5",
+        provenance={
+            "client_kind": "openai",
+            "reported_model": "gpt-5.5-codex",
+            "response_id": "resp_1",
+            "endpoint": "https://api.openai.com/v1",
+        },
+    )
+    assert not codex.ok
+
+
+def _openai_provenance(reported_model: str) -> dict:
+    return {
+        "client_kind": "openai",
+        "reported_model": reported_model,
+        "response_id": "resp_1",
+        "endpoint": "https://api.openai.com/v1",
+    }
+
+
+def test_date_pinned_request_is_satisfied_only_by_that_exact_snapshot() -> None:
+    """The date-release strip applies to the REPORTED side only. A user who
+    pins a snapshot (via ~/.cortex/cloud_models.json or a typed
+    provider:model selector) must get exactly that snapshot: a different
+    date — or a bare report that proves nothing about the snapshot — fails."""
+    exact = verify_turn_provenance(
+        provider=CloudProvider.OPENAI,
+        requested_model="gpt-5.5-2026-04-23",
+        provenance=_openai_provenance("gpt-5.5-2026-04-23"),
+    )
+    assert exact.ok
+
+    different_snapshot = verify_turn_provenance(
+        provider=CloudProvider.OPENAI,
+        requested_model="gpt-5.5-2026-04-23",
+        provenance=_openai_provenance("gpt-5.5-2026-05-30"),
+    )
+    assert not different_snapshot.ok
+
+    bare_report = verify_turn_provenance(
+        provider=CloudProvider.OPENAI,
+        requested_model="gpt-5.5-2026-04-23",
+        provenance=_openai_provenance("gpt-5.5"),
+    )
+    assert not bare_report.ok
+
+
 def test_azure_binds_identity_via_client_not_deployment_name() -> None:
     # Deployment names are user aliases; a present-but-different reported
     # model passes, an EMPTY reported model still fails.

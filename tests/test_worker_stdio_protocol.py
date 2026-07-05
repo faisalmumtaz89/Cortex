@@ -46,6 +46,7 @@ def _lumen_stub_env(
     cached: bool = True,
     with_server: bool = False,
     report_model: str | None = None,
+    boot_delay: float = 0.0,
 ) -> dict:
     """Worker env with a deterministic fake `lumen` CLI (no host cache/net).
 
@@ -53,7 +54,8 @@ def _lumen_stub_env(
     models listing to the all-cached variant, so a post-pull auto-load resolves
     the selector as cached (mirroring real lumen). `with_server=True` also
     provides a working fake `lumen-server` (binds --port, serves /v1/models)
-    so ensure_server/auto-load succeed end to end.
+    so ensure_server/auto-load succeed end to end; `boot_delay` postpones its
+    readiness so tests can act while a boot is deterministically in flight.
     """
     listing = LUMEN_LISTING_CACHED if cached else LUMEN_LISTING_EMPTY_CACHE
     fixture = tmp_path / "lumen-models.txt"
@@ -80,10 +82,11 @@ def _lumen_stub_env(
         server = tmp_path / "fake-lumen-server"
         server.write_text(
             "#!/usr/bin/env python3\n"
-            "import http.server, json, os, sys\n"
+            "import http.server, json, os, sys, time\n"
             "args = sys.argv[1:]\n"
             "port = int(args[args.index('--port') + 1])\n"
             "model = args[args.index('--model') + 1]\n"
+            f"time.sleep({boot_delay!r})  # simulated GPU model-load time\n"
             "# What the server CLAIMS answered — imposter tests override this.\n"
             "report = os.environ.get('FAKE_LUMEN_REPORT_MODEL') or model\n"
             "class H(http.server.BaseHTTPRequestHandler):\n"
@@ -437,6 +440,78 @@ def test_worker_download_existing_model_loads_it_without_background_start(
             and "now active" in str(event["params"]["payload"].get("message", ""))
             for event in command_events
         )
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+        subprocess.run(
+            ["pkill", "-f", str(tmp_path / "fake-lumen-server")],
+            check=False,
+            capture_output=True,
+        )
+
+
+def test_worker_download_command_blocked_while_boot_in_flight(tmp_path: Path) -> None:
+    """The /download command path must refuse to start a download while a
+    model boot is in flight (its chained auto-load would race the boot) —
+    the behavior pin for the third _booting_selector() guard site."""
+    repo_root = Path(__file__).resolve().parents[1]
+    env = _lumen_stub_env(tmp_path, with_server=True, boot_delay=3.0)
+
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cortex", "--worker-stdio"],
+        cwd=repo_root,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    assert process.stdin is not None
+    assert process.stdout is not None
+
+    def send(request_id: int, method: str, params: dict) -> None:
+        payload = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        process.stdin.write(json.dumps(payload) + "\n")
+        process.stdin.flush()
+
+    def recv_until(request_id: int, timeout: float = 60.0):
+        deadline = time.time() + timeout
+        events = []
+        while time.time() < deadline:
+            line = process.stdout.readline()
+            if not line:
+                break
+            frame = json.loads(line)
+            if frame.get("method") == "event":
+                events.append(frame)
+                continue
+            if frame.get("id") == request_id:
+                return frame, events
+        raise AssertionError(f"timed out waiting for response id={request_id}")
+
+    try:
+        send(1, "app.handshake", {"protocol_version": "1.0.0"})
+        recv_until(1)
+        send(2, "session.create_or_resume", {})
+        response, _events = recv_until(2)
+        session_id = response["result"]["session_id"]
+
+        # Kick off a background boot of the cached model (3s readiness delay
+        # keeps it deterministically in flight for the next command).
+        send(3, "command.execute", {"session_id": session_id, "command": "/model qwen3-5-9b:q4_0"})
+        boot_response, _boot_events = recv_until(3)
+        assert boot_response["result"]["ok"] is True
+        assert boot_response["result"]["background"] is True
+
+        # /download of an uncached model while that boot is in flight: refused.
+        send(4, "command.execute", {"session_id": session_id, "command": "/download qwen3-5-9b:q8_0"})
+        download_response, _download_events = recv_until(4)
+        assert download_response["result"]["ok"] is False
+        message = str(download_response["result"]["message"])
+        assert "Still starting local · qwen3-5-9b:q4_0" in message
+        assert "before downloading another model" in message
     finally:
         process.terminate()
         process.wait(timeout=5)
@@ -824,7 +899,7 @@ def test_worker_command_matrix_covers_all_core_command_paths(tmp_path: Path) -> 
             ("/benchmark --prompt", False, "Usage: /benchmark [tokens] [--prompt <text>]"),
             ("/benchmark --tokens 9000", False, "between 1 and 8192"),
             ('/benchmark --prompt ""', False, "Benchmark prompt cannot be empty."),
-            ("/setup", True, "Loading qwen3-5-9b:q4_0…"),
+            ("/setup", True, "local · qwen3-5-9b:q4_0 selected."),
             ("/clear", True, "cleared"),
             ("/save", True, "Saved conversation:"),
             ("download badrepo", False, "Not a slash command: download badrepo"),
@@ -886,10 +961,14 @@ def test_worker_command_matrix_covers_all_core_command_paths(tmp_path: Path) -> 
                 if command_response["result"].get("background") is True:
                     # Background model ops narrate through their own resolving
                     # progress message — no duplicate system.notice by design.
+                    # The RESULT is a terse selection confirmation; the
+                    # transcript frames alone carry the live load narration
+                    # for the same repo id (never a mirrored result message).
+                    repo_id = str(command_response["result"].get("repo_id", ""))
+                    assert repo_id, "background op must return its repo_id"
                     assert any(
                         event["params"]["event_type"] == "message.updated"
-                        and expected_message
-                        in str(event["params"]["payload"].get("content", ""))
+                        and repo_id in str(event["params"]["payload"].get("content", ""))
                         for event in command_events
                     )
                 else:

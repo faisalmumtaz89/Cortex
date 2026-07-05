@@ -21,7 +21,9 @@ from pathlib import Path
 import pytest
 
 from cortex.lumen_runtime import (
+    SWITCH_IN_FLIGHT_PREFIX,
     LumenRuntime,
+    LumenServerState,
     parse_models_output,
     parse_selector,
 )
@@ -73,20 +75,33 @@ def _write_script(path: Path, body: str) -> str:
     return str(path)
 
 
-def _stub_server(tmp_path: Path, *, ready_delay: float = 0.2, die: bool = False) -> str:
+def _stub_server(
+    tmp_path: Path, *, ready_delay: float = 0.2, die: bool = False, exit_delay: float = 0.0
+) -> str:
     """A fake lumen-server: parses --port, optionally exits immediately,
-    otherwise serves GET /v1/models after `ready_delay` seconds."""
+    otherwise serves GET /v1/models after `ready_delay` seconds. Every
+    instance drops a `<pid>.pid` file into `<tmp_path>/pids/` so tests can
+    assert no process outlives the runtime. `exit_delay` simulates a slow GPU
+    teardown by delaying the SIGTERM exit."""
+    pid_dir = tmp_path / "pids"
+    pid_dir.mkdir(exist_ok=True)
     body = textwrap.dedent(
         f"""\
         #!/usr/bin/env python3
-        import http.server, json, sys, time, threading
+        import http.server, json, os, signal, sys, time
 
         args = sys.argv[1:]
         port = int(args[args.index("--port") + 1])
         model = args[args.index("--model") + 1]
+        open({str(pid_dir)!r} + f"/{{os.getpid()}}.pid", "w").write(str(port))
         if {die!r}:
             print("boom: model load failed", flush=True)
             sys.exit(3)
+        if {exit_delay!r}:
+            def _slow_exit(signum, frame):
+                time.sleep({exit_delay})
+                os._exit(0)
+            signal.signal(signal.SIGTERM, _slow_exit)
         time.sleep({ready_delay})
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -279,6 +294,294 @@ def test_concurrent_ensure_server_waits_for_inflight_boot(tmp_path: Path) -> Non
     first_state = runtime.server
     assert first_state is not None
     runtime.stop()
+
+
+def test_turn_during_switch_is_refused_and_incoming_boot_survives(tmp_path: Path) -> None:
+    """THE mid-switch race: a turn still bound to the OUTGOING model must be
+    refused with a clear retry message while a switch's boot is in flight —
+    never tear the incoming server down. (Previously the racing turn stopped
+    the booting server; that boot's failure cleanup then stopped the turn's
+    replacement — mutual SIGTERM, zero servers left.)"""
+    import threading
+
+    runtime = LumenRuntime(
+        binary=_stub_cli(tmp_path),
+        server_binary=_stub_server(tmp_path, ready_delay=1.5),
+        startup_timeout_seconds=20,
+        log_path=tmp_path / "server.log",
+    )
+    ok, message = runtime.ensure_server("qwen3-5-9b:q4_0")
+    assert ok, message
+    outgoing = runtime.server
+    assert outgoing is not None
+
+    results: dict[str, tuple] = {}
+
+    def _switch() -> None:
+        results["switch"] = runtime.ensure_server("qwen3-5-9b:q8_0")
+
+    thread = threading.Thread(target=_switch)
+    thread.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and runtime.starting_selector() != "qwen3-5-9b:q8_0":
+        time.sleep(0.05)
+    assert runtime.starting_selector() == "qwen3-5-9b:q8_0"
+    incoming = runtime.server
+    assert incoming is not None
+
+    # The racing "turn" targets the outgoing model mid-boot: clean refusal.
+    turn_ok, turn_message = runtime.ensure_server("qwen3-5-9b:q4_0")
+    assert turn_ok is False
+    assert turn_message.startswith(SWITCH_IN_FLIGHT_PREFIX)
+    assert "qwen3-5-9b:q8_0" in turn_message
+    assert "retry in a moment" in turn_message
+
+    thread.join(timeout=20)
+    assert results["switch"][0] is True, results["switch"][1]
+    # Clean end state: the INCOMING server is up; exactly one process alive.
+    assert runtime.serving_selector() == "qwen3-5-9b:q8_0"
+    assert runtime.server is incoming
+    assert incoming.process.poll() is None
+    assert outgoing.process.poll() is not None  # replaced by the switch itself
+    runtime.stop()
+    assert incoming.process.poll() is not None
+
+
+def test_failed_boot_cleanup_discards_only_its_own_state(tmp_path: Path) -> None:
+    """A failed boot's cleanup must terminate ITS process only — never the
+    server a concurrent caller installed since (targeted discard, not a global
+    stop). This is the second half of the mutual-termination fix."""
+    runtime = LumenRuntime(
+        binary=_stub_cli(tmp_path),
+        server_binary=_stub_server(tmp_path),
+        startup_timeout_seconds=15,
+        log_path=tmp_path / "server.log",
+    )
+    ok, message = runtime.ensure_server("qwen3-5-9b:q4_0")
+    assert ok, message
+    current = runtime.server
+    assert current is not None
+
+    # A stale failed-boot state (its process already dead, as after a crash).
+    import subprocess as sp
+    import sys
+
+    dead = sp.Popen([sys.executable, "-c", "pass"])
+    dead.wait(timeout=10)
+    stale = LumenServerState(process=dead, selector="qwen3-5-9b:q8_0", port=1)
+
+    runtime._discard(stale)
+
+    # The live server installed by the other caller is untouched.
+    assert runtime.server is current
+    assert current.process is not None and current.process.poll() is None
+    assert runtime.serving_selector() == "qwen3-5-9b:q4_0"
+    runtime.stop()
+
+
+def _live_stub_pids(tmp_path: Path) -> list[int]:
+    """PIDs of stub servers (recorded via their pid files) still alive."""
+    pids: list[int] = []
+    pid_dir = tmp_path / "pids"
+    if not pid_dir.exists():
+        return pids
+    for pid_file in pid_dir.glob("*.pid"):
+        pid = int(pid_file.stem)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            continue
+        pids.append(pid)
+    return pids
+
+
+def test_failed_spawn_prep_discards_claim_and_next_boot_succeeds(tmp_path: Path) -> None:
+    """An exception BETWEEN the boot claim and the spawn (here: an unwritable
+    log path) must discard the placeholder — a wedged not-ready claim would
+    refuse every future boot against a startup nothing will ever finish."""
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("file where the log DIRECTORY should be", encoding="utf-8")
+    runtime = LumenRuntime(
+        binary=_stub_cli(tmp_path),
+        server_binary=_stub_server(tmp_path),
+        startup_timeout_seconds=15,
+        log_path=blocker / "server.log",  # parent is a FILE → mkdir raises
+    )
+    ok, message = runtime.ensure_server("qwen3-5-9b:q4_0")
+    assert ok is False
+    assert "Failed to launch lumen-server" in message
+    assert runtime.server is None  # claim discarded, runtime not wedged
+
+    # The runtime recovers fully once the obstacle is gone.
+    runtime.log_path = tmp_path / "server.log"
+    ok, message = runtime.ensure_server("qwen3-5-9b:q4_0")
+    assert ok, message
+    assert runtime.serving_selector() == "qwen3-5-9b:q4_0"
+    runtime.stop()
+    assert _live_stub_pids(tmp_path) == []
+
+
+def test_switch_teardown_does_not_block_concurrent_accessors(tmp_path: Path) -> None:
+    """Replacing a READY server must not stall pointer reads: the switch
+    claims its placeholder under the lock and reaps the outgoing server
+    OUTSIDE it, so status()/selector reads (the UI's data sources) and a
+    racing turn's refusal answer instantly even while the old process drags
+    out its SIGTERM exit."""
+    import threading
+
+    runtime = LumenRuntime(
+        binary=_stub_cli(tmp_path),
+        server_binary=_stub_server(tmp_path, ready_delay=0.2, exit_delay=3.0),
+        startup_timeout_seconds=20,
+        log_path=tmp_path / "server.log",
+    )
+    ok, message = runtime.ensure_server("qwen3-5-9b:q4_0")
+    assert ok, message
+    outgoing = runtime.server
+    assert outgoing is not None
+
+    results: dict[str, tuple] = {}
+    thread = threading.Thread(
+        target=lambda: results.update(switch=runtime.ensure_server("qwen3-5-9b:q8_0"))
+    )
+    thread.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and runtime.starting_selector() != "qwen3-5-9b:q8_0":
+        time.sleep(0.02)
+    assert runtime.starting_selector() == "qwen3-5-9b:q8_0"
+    # The claim is already visible while the outgoing process is mid-teardown.
+    assert outgoing.process is not None and outgoing.process.poll() is None
+
+    # Pointer reads and the racing turn's refusal must answer instantly (never
+    # queued behind the outgoing terminate()+wait()).
+    for accessor in (runtime.status, runtime.serving_selector, runtime.base_url):
+        started = time.time()
+        accessor()
+        assert time.time() - started < 0.5, f"{accessor.__name__} blocked on teardown"
+    started = time.time()
+    turn_ok, turn_message = runtime.ensure_server("qwen3-5-9b:q4_0")
+    assert time.time() - started < 0.5, "racing turn blocked on teardown"
+    assert turn_ok is False
+    assert turn_message.startswith(SWITCH_IN_FLIGHT_PREFIX)
+
+    thread.join(timeout=30)
+    assert results["switch"][0] is True, results["switch"][1]
+    assert runtime.serving_selector() == "qwen3-5-9b:q8_0"
+    runtime.stop()
+    assert _live_stub_pids(tmp_path) == []
+
+
+def test_stop_during_switch_claim_window_leaves_no_processes(tmp_path: Path) -> None:
+    """A stop() (user quit / signal path) landing inside the switch's claim
+    window must win: the switch aborts, the freshly spawned process never
+    outlives the runtime, and no lumen-server survives."""
+    import threading
+
+    runtime = LumenRuntime(
+        binary=_stub_cli(tmp_path),
+        server_binary=_stub_server(tmp_path, ready_delay=0.2, exit_delay=3.0),
+        startup_timeout_seconds=20,
+        log_path=tmp_path / "server.log",
+    )
+    ok, message = runtime.ensure_server("qwen3-5-9b:q4_0")
+    assert ok, message
+
+    results: dict[str, tuple] = {}
+    thread = threading.Thread(
+        target=lambda: results.update(switch=runtime.ensure_server("qwen3-5-9b:q8_0"))
+    )
+    thread.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and runtime.starting_selector() != "qwen3-5-9b:q8_0":
+        time.sleep(0.02)
+    assert runtime.starting_selector() == "qwen3-5-9b:q8_0"
+
+    runtime.stop()  # lands while the switch is still reaping the outgoing server
+
+    thread.join(timeout=30)
+    assert results["switch"][0] is False
+    assert "stopped during startup" in results["switch"][1]
+    assert runtime.server is None
+    assert _live_stub_pids(tmp_path) == []
+
+
+def test_same_selector_caller_coalesces_during_switch_claim(tmp_path: Path) -> None:
+    """A second caller asking for the INCOMING selector while the switch is
+    still reaping the outgoing server must wait for that boot instead of
+    double-starting: exactly one process per selector ever spawns."""
+    import threading
+
+    runtime = LumenRuntime(
+        binary=_stub_cli(tmp_path),
+        server_binary=_stub_server(tmp_path, ready_delay=0.5, exit_delay=2.0),
+        startup_timeout_seconds=20,
+        log_path=tmp_path / "server.log",
+    )
+    ok, message = runtime.ensure_server("qwen3-5-9b:q4_0")
+    assert ok, message
+
+    results: dict[str, tuple] = {}
+    switch = threading.Thread(
+        target=lambda: results.update(switch=runtime.ensure_server("qwen3-5-9b:q8_0"))
+    )
+    switch.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and runtime.starting_selector() != "qwen3-5-9b:q8_0":
+        time.sleep(0.02)
+    assert runtime.starting_selector() == "qwen3-5-9b:q8_0"
+
+    coalesced = runtime.ensure_server("qwen3-5-9b:q8_0")  # waits for that boot
+    switch.join(timeout=30)
+    assert results["switch"][0] is True, results["switch"][1]
+    assert coalesced == (True, "Lumen already serving qwen3-5-9b:q8_0.")
+    assert runtime.serving_selector() == "qwen3-5-9b:q8_0"
+    # Two boots total (q4_0, then q8_0): the coalesced caller spawned nothing.
+    assert len(list((tmp_path / "pids").glob("*.pid"))) == 2
+    runtime.stop()
+    assert _live_stub_pids(tmp_path) == []
+
+
+@pytest.mark.skipif(
+    os.environ.get("CORTEX_LUMEN_REAL") != "1",
+    reason="opt-in: real lumen engine (set CORTEX_LUMEN_REAL=1; needs cached 9B q4_0+q8_0)",
+)
+def test_real_lumen_switch_race_regression() -> None:
+    """Real-engine regression for the mid-switch turn race: boot 9B q4_0,
+    start a switch to q8_0, immediately fire a racing turn-style
+    ensure_server(q4_0) — the turn must be refused cleanly, the switch must
+    complete, and exactly one server survives. SHORT session; stops on exit."""
+    import threading
+
+    runtime = LumenRuntime(startup_timeout_seconds=180)
+    try:
+        ok, message = runtime.ensure_server("qwen3-5-9b:q4_0")
+        assert ok, message
+        assert runtime.serving_selector() == "qwen3-5-9b:q4_0"
+
+        results: dict[str, tuple] = {}
+        thread = threading.Thread(
+            target=lambda: results.update(switch=runtime.ensure_server("qwen3-5-9b:q8_0"))
+        )
+        thread.start()
+        deadline = time.time() + 30
+        while time.time() < deadline and runtime.starting_selector() != "qwen3-5-9b:q8_0":
+            time.sleep(0.05)
+        assert runtime.starting_selector() == "qwen3-5-9b:q8_0"
+
+        # Immediate racing turn bound to the outgoing model.
+        turn_ok, turn_message = runtime.ensure_server("qwen3-5-9b:q4_0")
+        assert turn_ok is False, turn_message
+        assert turn_message.startswith(SWITCH_IN_FLIGHT_PREFIX), turn_message
+
+        thread.join(timeout=240)
+        assert results["switch"][0] is True, results["switch"][1]
+        assert runtime.serving_selector() == "qwen3-5-9b:q8_0"
+        state = runtime.server
+        assert state is not None and state.process.poll() is None
+    finally:
+        runtime.stop()
+        final = runtime.server
+        assert final is None
 
 
 def test_log_tail_dedupes_repeated_failure_line(tmp_path: Path) -> None:

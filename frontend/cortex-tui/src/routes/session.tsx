@@ -16,6 +16,7 @@ import {
 } from "../commands"
 import { useStore } from "../context/store"
 import { readGitBranch } from "../lib/git_branch"
+import { displayPath } from "../lib/paths"
 import { spinnerFrame } from "../lib/spinner"
 import { terminalColumns } from "../lib/terminal_size"
 
@@ -360,13 +361,54 @@ export function SessionRoute(props: {
     setModelPickerOpen(true)
   }
   const closeModelPicker = () => setModelPickerOpen(false)
+
+  // ---- /login provider picker (bare /login) — same idiom as /model ----
+  interface LoginEntry {
+    provider: string
+    tag?: SelectionTag
+  }
+  const LOGIN_PROVIDERS = ["openai", "anthropic", "azure"] as const
+  const [loginPickerOpen, setLoginPickerOpen] = createSignal(false)
+  const [loginPickerIndex, setLoginPickerIndex] = createSignal(0)
+
+  const loginPickerEntries = createMemo<LoginEntry[]>(() =>
+    LOGIN_PROVIDERS.map((provider) => {
+      // Auth status flows from model.list's cloud rows (authenticated + source).
+      const row = store.state.models.cloud.find(
+        (item) => String(item.provider ?? "").trim() === provider,
+      )
+      const authenticated = Boolean(row?.authenticated)
+      const source = String(row?.auth_source ?? "").trim()
+      return {
+        provider,
+        tag: authenticated
+          ? {
+              text: source ? `logged in · ${source}` : "logged in",
+              color: UI_PALETTE.statusIdle,
+            }
+          : { text: "not configured", color: UI_PALETTE.statusBusy },
+      }
+    }),
+  )
+
+  const openLoginPicker = () => {
+    setLoginPickerIndex(0)
+    closePaletteAndClearInput()
+    setLoginPickerOpen(true)
+  }
+  const closeLoginPicker = () => setLoginPickerOpen(false)
+
   createEffect(() => {
-    // Keep the model picker in the store's overlay precedence for global Esc.
-    store.setPaletteOpen(paletteVisible() || modelPickerOpen())
+    // Keep the pickers in the store's overlay precedence for global Esc.
+    store.setPaletteOpen(paletteVisible() || modelPickerOpen() || loginPickerOpen())
   })
 
   // app.tsx's global Esc calls this; close whichever overlay is open.
   const dismissOverlays = () => {
+    if (loginPickerOpen()) {
+      closeLoginPicker()
+      return
+    }
     if (modelPickerOpen()) {
       closeModelPicker()
       return
@@ -419,6 +461,11 @@ export function SessionRoute(props: {
     // Bare /model opens the interactive picker (lists AND switches in one).
     if (command.name === "model") {
       openModelPicker()
+      return
+    }
+    // Bare /login opens the provider picker; Enter there pre-fills the key prompt.
+    if (command.name === "login") {
+      openLoginPicker()
       return
     }
     if (commandTakesArgs(command.name)) {
@@ -498,6 +545,30 @@ export function SessionRoute(props: {
       runSlashCommand(`/model ${entry.selector}`)
     } else if (action === "cancel") {
       closeModelPicker()
+    }
+    return true // swallow everything else (modal)
+  }
+
+  // Login picker is modal: it owns every key while open.
+  const handleLoginPickerKey = (event: KeyEvent): boolean => {
+    if (!loginPickerOpen()) {
+      return false
+    }
+    event.preventDefault()
+    const action = classifySelectionKey(event)
+    const entries = loginPickerEntries()
+    const count = entries.length
+    if (action === "up" && count > 0) {
+      setLoginPickerIndex((index) => (index - 1 + count) % count)
+    } else if (action === "down" && count > 0) {
+      setLoginPickerIndex((index) => (index + 1) % count)
+    } else if (action === "enter" && count > 0) {
+      const entry = entries[Math.min(loginPickerIndex(), count - 1)]
+      closeLoginPicker()
+      // Pre-fill the key prompt: arg-hint mode takes over ("/login openai ").
+      setInputText(`/login ${entry.provider} `)
+    } else if (action === "cancel") {
+      closeLoginPicker()
     }
     return true // swallow everything else (modal)
   }
@@ -601,7 +672,9 @@ export function SessionRoute(props: {
     }, 50)
   }
 
-  const permissionTarget = () => store.state.pendingPermission?.patterns.join(", ") || "*"
+  // Patterns/paths display repo-relative when inside the repo (display only).
+  const permissionTarget = () =>
+    store.state.pendingPermission?.patterns.map(displayPath).join(", ") || "*"
 
   const permissionSummary = () => {
     const pending = store.state.pendingPermission
@@ -613,7 +686,7 @@ export function SessionRoute(props: {
     const meta = (pending.metadata || {}) as Record<string, unknown>
     const args = (meta.arguments ?? {}) as Record<string, unknown>
     const tool = String(meta.tool ?? "")
-    const argPath = String(args.path ?? pending.patterns[0] ?? "")
+    const argPath = displayPath(String(args.path ?? pending.patterns[0] ?? ""))
 
     if (pending.permission === "read") {
       return `Read file: ${argPath}`
@@ -727,8 +800,11 @@ export function SessionRoute(props: {
 
   const onPromptKeyDown = (event: KeyEvent) => {
     if (!hasPendingPermission()) {
-      // Model picker is modal and owns all keys while open.
+      // Pickers are modal and own all keys while open.
       if (handleModelPickerKey(event)) {
+        return
+      }
+      if (handleLoginPickerKey(event)) {
         return
       }
       // Palette navigation/completion/execution wins over submit and history.
@@ -1055,6 +1131,20 @@ export function SessionRoute(props: {
                 ? "No local models — Lumen not detected. Tab for cloud."
                 : "No cloud models — /login openai|anthropic|azure. Tab for local."
             }
+          />
+        </Show>
+
+        {/* /login provider picker — Enter pre-fills "/login <provider> " so
+            the arg-hint prompt asks for the API key. */}
+        <Show when={loginPickerOpen()}>
+          <SelectionList
+            items={loginPickerEntries()}
+            selectedIndex={loginPickerIndex()}
+            getPrimary={(entry) => entry.provider}
+            getTag={(entry) => entry.tag}
+            title="Log in to a provider"
+            footer="↑↓ select · Enter choose · Esc cancel"
+            emptyLabel="No providers available."
           />
         </Show>
 

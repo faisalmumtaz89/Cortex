@@ -13,8 +13,10 @@ Guarantees, per backend:
   response stream must equal the selector's model (dot/dash separators
   normalized — lumen accepts both spellings of e.g. qwen3.5-9b).
 - openai/anthropic: the answering client kind must match the provider and the
-  reported model must equal the requested id, allowing only the provider's
-  own date/version suffixing (prefix match in either direction).
+  reported model must equal the requested id, allowing only the PROVIDER's
+  trailing date-release suffix (-YYYY-MM-DD or -YYYYMMDD) on the reported
+  side. A date-PINNED request is satisfied only by exactly that snapshot, and
+  variant suffixes like -mini/-pro/-codex are different models — never a match.
 - azure: deployments are user-named aliases of the underlying model, so name
   equality is not defined; identity is bound by client kind + the configured
   Azure endpoint instead. A missing reported model still fails.
@@ -34,6 +36,11 @@ from typing import Any, Dict, Optional
 from cortex.cloud.types import CloudProvider
 
 _SEPARATORS = re.compile(r"[.\-_\s]+")
+# Providers alias bare ids to date-stamped releases: gpt-5.5 →
+# gpt-5.5-2026-04-23 (dashed) and claude-haiku-4-5 → claude-haiku-4-5-20251001
+# (compact). Only such date suffixes are aliases; -mini/-pro/-codex are
+# DIFFERENT models and must not match.
+_DATE_SUFFIX = re.compile(r"-(\d{4}-\d{2}-\d{2}|\d{8})$")
 
 _EXPECTED_CLIENT_KIND: Dict[CloudProvider, str] = {
     CloudProvider.LUMEN: "lumen",
@@ -66,9 +73,15 @@ def _models_match(provider: CloudProvider, requested: str, reported: str) -> boo
         # Deployment name != model name by design; transport identity (client
         # kind + endpoint) is the Azure guarantee. Reported just has to exist.
         return True
-    # Providers suffix released models with dates/versions (gpt-5.1 →
-    # gpt-5.1-2026-01-15, claude-sonnet-4-5 → claude-sonnet-4-5-20250929).
-    return rep == req or rep.startswith(req) or req.startswith(rep)
+    # Exact equality always passes. Otherwise allow only the provider's
+    # date-release suffix on the REPORTED side: a bare requested id matches
+    # its date-stamped release (gpt-5.5 == gpt-5.5-2026-04-23,
+    # claude-haiku-4-5 == claude-haiku-4-5-20251001). The requested side is
+    # never stripped — a date-PINNED request must be answered by exactly that
+    # snapshot (a different snapshot, or a bare report, is no proof) — and
+    # gpt-5.4-mini can never satisfy a request for gpt-5.4 (prefix matching
+    # would have allowed it).
+    return rep == req or _DATE_SUFFIX.sub("", rep) == req
 
 
 def _endpoints_match(expected: Optional[str], reported: Optional[str]) -> bool:

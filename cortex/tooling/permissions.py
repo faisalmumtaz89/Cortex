@@ -34,11 +34,18 @@ class PermissionDeniedError(RuntimeError):
     """Raised when permission is denied by rule or user decision."""
 
 
+def default_store_path() -> Path:
+    """Default on-disk permission store. The single seam for the default —
+    tests point it at a scratch file (see tests/conftest.py) so the user's
+    real persisted rules can never leak into assertions."""
+    return Path.home() / ".cortex" / "tool_permissions.yaml"
+
+
 class PermissionStore:
     """Persistent rule store for tooling permissions."""
 
     def __init__(self, path: Optional[Path] = None):
-        self.path = (path or (Path.home() / ".cortex" / "tool_permissions.yaml")).expanduser()
+        self.path = (path or default_store_path()).expanduser()
 
     def load(self) -> List[PermissionRule]:
         if not self.path.exists():
