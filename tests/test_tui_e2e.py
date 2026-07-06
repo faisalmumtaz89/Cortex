@@ -808,6 +808,53 @@ def test_permission_modal_shows_command_and_executes_it(tui_project) -> None:
     assert (project / "proof.txt").read_text(encoding="utf-8").strip() == "proof"
 
 
+def test_interrupt_during_tool_resolves_the_tool_row(tui_project) -> None:
+    """Regression (2026-07-06 screenshot): Esc while a bash tool was executing
+    finalized the turn as interrupted but left the tool row spinning forever —
+    the tool's result frame arrived after the interrupt flag and was
+    swallowed. The row must resolve to a terminal state (here: the tool
+    actually completes, so ◆ completed), and no spinner may survive an
+    interrupted turn."""
+    project, start = tui_project
+    session = start(
+        [
+            [
+                {"tool_calls": [{"name": "bash", "arguments": {"command": "sleep 4 && echo done"}}]},
+                {"text": "NEVER_SHOWN_AFTER_INTERRUPT"},
+            ]
+        ]
+    )
+    _select_scripted_model(session)
+    session.send_line("run a slow command")
+
+    modal = session.wait_for("Permission required")
+    assert "sleep 4" in modal
+    session.send_key("Enter")  # Allow once — bash starts, 4s window
+
+    # The tool row is live (spinner) while sleep runs.
+    session.wait_until(
+        lambda frame: "Bash sleep 4" in frame
+        and any(ch in frame for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        description="running bash row with spinner",
+        timeout=10,
+    )
+    session.send_key("Escape")  # interrupt mid-execution
+
+    # The turn unwinds once bash finishes: interrupted notice + resolved row.
+    interrupted = session.wait_for("Interrupted.", timeout=20)
+    resolved = session.wait_until(
+        lambda frame: "Interrupted." in frame
+        and not any(ch in frame for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        description="no spinner survives the interrupted turn",
+        timeout=15,
+    )
+    # The bash row resolved (the tool genuinely ran to completion — its result
+    # frame must not be swallowed by the interrupt unwind).
+    assert "Bash sleep 4" in resolved
+    assert "NEVER_SHOWN_AFTER_INTERRUPT" not in resolved
+    assert "interrupted" in interrupted
+
+
 def test_absolute_tool_paths_display_repo_relative(tui_project) -> None:
     """Models sometimes pass ABSOLUTE paths in tool arguments. Tool rows and
     the permission modal must DISPLAY them repo-relative when they are inside

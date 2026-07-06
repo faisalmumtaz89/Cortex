@@ -7,7 +7,16 @@ from uuid import uuid4
 from cortex.app.session_service import SessionService
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
 from cortex.conversation_manager import MessageRole
-from cortex.tooling.types import AssistantTurnResult, FinishEvent, TextDeltaEvent
+from cortex.tooling.types import (
+    AssistantTurnResult,
+    FinishEvent,
+    TextDeltaEvent,
+    ToolCall,
+    ToolCallEvent,
+    ToolExecutionState,
+    ToolResult,
+    ToolResultEvent,
+)
 
 
 class _FakeConversation:
@@ -197,6 +206,147 @@ def test_interrupt_mid_turn_finalizes_partial_text(tmp_path: Path) -> None:
 
     # A finished turn no longer accepts interrupts.
     assert service.request_interrupt(session_id) is False
+
+
+def _tool_part_frames(events: list[tuple[str, dict[str, object]]], call_id: str) -> list[dict]:
+    return [
+        payload["part"]  # type: ignore[index]
+        for event_type, payload in events
+        if event_type == "message.part.updated"
+        and isinstance(payload.get("part"), dict)
+        and payload["part"].get("type") == "tool"  # type: ignore[union-attr]
+        and payload["part"].get("call_id") == call_id  # type: ignore[union-attr]
+    ]
+
+
+def _run_interrupted_tool_turn(tmp_path: Path, orchestrator_cls):
+    conversation_manager = _FakeConversationManager()
+    orchestrator = orchestrator_cls()
+    service = SessionService(
+        config=SimpleNamespace(conversation=SimpleNamespace(save_directory=tmp_path)),
+        conversation_manager=conversation_manager,
+        tooling_orchestrator=orchestrator,
+        model_service=_FakeModelService(),
+        tooling_bridge=_FakeBridge(),
+    )
+    orchestrator.service = service
+    session_id = "session-tools"
+    service.create_or_resume(session_id=session_id, conversation_id=None)
+
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def emit_event(*, session_id: str, event_type: str, payload: dict[str, object]) -> None:
+        events.append((event_type, payload))
+
+    result = service.submit_user_input(
+        session_id=session_id,
+        user_input="run the tool",
+        active_target_input=None,
+        stop_sequences=None,
+        emit_event=emit_event,
+    )
+    return result, events
+
+
+def test_interrupt_resolves_inflight_tool_row_to_terminal_state(tmp_path: Path) -> None:
+    """Regression (2026-07-06 screenshot): a tool row left in 'running' when
+    the turn unwound on interrupt spun forever — no terminal frame ever
+    arrived for it. The interrupt finalization must resolve every pending
+    tool call to state=error/'Interrupted.' BEFORE the final message frame."""
+
+    class _ToolThenInterrupt:
+        def __init__(self) -> None:
+            self.service: SessionService | None = None
+
+        def run_turn(self, *_args, **kwargs):
+            on_event = kwargs["on_event"]
+            on_event(ToolCallEvent(call=ToolCall(id="call_1", name="bash", arguments={"command": "sleep 99"})))
+            assert self.service is not None
+            assert self.service.request_interrupt("session-tools") is True
+            # The turn dies before this tool ever produces a result.
+            on_event(TextDeltaEvent(delta="never lands"))
+            raise AssertionError("interrupt should have unwound the turn")
+
+    result, events = _run_interrupted_tool_turn(tmp_path, _ToolThenInterrupt)
+
+    assert result["interrupted"] is True
+    frames = _tool_part_frames(events, "call_1")
+    assert [frame.get("state") for frame in frames] == ["running", "error"]
+    assert frames[-1].get("ok") is False
+    assert frames[-1].get("error") == "Interrupted."
+    # The terminal tool frame lands BEFORE the final assistant frame, so no
+    # renderer ever sees a finalized turn with a still-running row.
+    part_index = next(
+        i for i, (event_type, p) in enumerate(events)
+        if event_type == "message.part.updated"
+        and isinstance(p.get("part"), dict)
+        and p["part"].get("state") == "error"  # type: ignore[union-attr]
+    )
+    final_index = next(
+        i for i, (event_type, p) in enumerate(events)
+        if event_type == "message.updated" and p.get("final") and p.get("role") == "assistant"
+    )
+    assert part_index < final_index
+
+
+def test_tool_result_arriving_after_interrupt_is_not_swallowed(tmp_path: Path) -> None:
+    """The real-world repro: Esc lands while a tool executes; the tool then
+    finishes and its ToolResultEvent arrives with the interrupt already
+    pending. The result frame must be EMITTED (the tool genuinely ran) before
+    the turn unwinds — raising first swallowed it and left the row spinning."""
+
+    class _ResultAfterInterrupt:
+        def __init__(self) -> None:
+            self.service: SessionService | None = None
+
+        def run_turn(self, *_args, **kwargs):
+            on_event = kwargs["on_event"]
+            on_event(ToolCallEvent(call=ToolCall(id="call_1", name="bash", arguments={"command": "ls"})))
+            assert self.service is not None
+            assert self.service.request_interrupt("session-tools") is True
+            on_event(
+                ToolResultEvent(
+                    result=ToolResult(
+                        id="call_1",
+                        name="bash",
+                        state=ToolExecutionState.COMPLETED,
+                        ok=True,
+                        output="done",
+                    )
+                )
+            )
+            raise AssertionError("interrupt should have unwound after the result frame")
+
+    result, events = _run_interrupted_tool_turn(tmp_path, _ResultAfterInterrupt)
+
+    assert result["interrupted"] is True
+    frames = _tool_part_frames(events, "call_1")
+    # running → completed, and NO synthetic error frame afterwards: the call
+    # was no longer pending when the interrupt finalization ran.
+    assert [frame.get("state") for frame in frames] == ["running", "completed"]
+    assert frames[-1].get("ok") is True
+    assert frames[-1].get("output") == "done"
+
+
+def test_turn_error_resolves_inflight_tool_row_to_terminal_state(tmp_path: Path) -> None:
+    """The generic turn-failure path has the same obligation as interrupt:
+    a pending tool row must resolve (state=error/'Aborted.'), never spin."""
+
+    class _ToolThenCrash:
+        def __init__(self) -> None:
+            self.service: SessionService | None = None
+
+        def run_turn(self, *_args, **kwargs):
+            on_event = kwargs["on_event"]
+            on_event(ToolCallEvent(call=ToolCall(id="call_1", name="read_file", arguments={"path": "x"})))
+            raise RuntimeError("provider exploded mid-tool")
+
+    result, events = _run_interrupted_tool_turn(tmp_path, _ToolThenCrash)
+
+    assert result["ok"] is False
+    frames = _tool_part_frames(events, "call_1")
+    assert [frame.get("state") for frame in frames] == ["running", "error"]
+    assert frames[-1].get("error") == "Aborted."
 
 
 def test_session_service_turn_failure_returns_structured_result_without_raise(tmp_path: Path) -> None:

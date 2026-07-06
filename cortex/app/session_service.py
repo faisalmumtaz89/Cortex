@@ -227,25 +227,37 @@ class SessionService:
             },
         )
 
-        def on_event(event: ModelEvent) -> None:
-            if interrupt_event.is_set():
-                raise TurnInterruptedError()
-            if isinstance(event, TextDeltaEvent):
-                delta = event.delta or ""
-                if not delta:
-                    return
-                assistant_chunks.append(delta)
+        # call_id → tool name for every emitted tool call whose result frame
+        # has not been emitted yet. Abnormal turn endings (interrupt, error)
+        # resolve these to a terminal state — a row left in "running" would
+        # spin forever in the transcript.
+        pending_tool_calls: Dict[str, str] = {}
+
+        def resolve_dangling_tools(error_label: str) -> None:
+            for call_id, tool_name in pending_tool_calls.items():
                 emit_event(
                     session_id=session_id,
                     event_type="message.part.updated",
                     payload={
                         "message_id": assistant_message_id,
-                        "part": {"type": "text", "delta": delta},
+                        "part": {
+                            "type": "tool",
+                            "call_id": call_id,
+                            "tool": tool_name,
+                            "state": "error",
+                            "ok": False,
+                            "error": error_label,
+                        },
                     },
                 )
-                return
+            pending_tool_calls.clear()
 
+        def on_event(event: ModelEvent) -> None:
             if isinstance(event, ToolCallEvent):
+                if interrupt_event.is_set():
+                    # Never surface a new tool row for a turn that is unwinding.
+                    raise TurnInterruptedError()
+                pending_tool_calls[event.call.id] = event.call.name
                 emit_event(
                     session_id=session_id,
                     event_type="message.part.updated",
@@ -263,6 +275,10 @@ class SessionService:
                 return
 
             if isinstance(event, ToolResultEvent):
+                # The tool genuinely ran — emit its outcome even when an
+                # interrupt is already pending, THEN unwind. Raising first
+                # would swallow the result and leave the row spinning.
+                pending_tool_calls.pop(event.result.id, None)
                 emit_event(
                     session_id=session_id,
                     event_type="message.part.updated",
@@ -278,6 +294,25 @@ class SessionService:
                             "error": event.result.error,
                             "metadata": event.result.metadata,
                         },
+                    },
+                )
+                if interrupt_event.is_set():
+                    raise TurnInterruptedError()
+                return
+
+            if interrupt_event.is_set():
+                raise TurnInterruptedError()
+            if isinstance(event, TextDeltaEvent):
+                delta = event.delta or ""
+                if not delta:
+                    return
+                assistant_chunks.append(delta)
+                emit_event(
+                    session_id=session_id,
+                    event_type="message.part.updated",
+                    payload={
+                        "message_id": assistant_message_id,
+                        "part": {"type": "text", "delta": delta},
                     },
                 )
                 return
@@ -332,6 +367,7 @@ class SessionService:
                     on_retry=on_retry,
                 )
             except TurnInterruptedError:
+                resolve_dangling_tools("Interrupted.")
                 completed_ms = self._now_ms()
                 partial_text = "".join(assistant_chunks)
                 assistant_message = self.conversation_manager.add_message(
@@ -375,6 +411,7 @@ class SessionService:
                     "interrupted": True,
                 }
             except Exception as exc:
+                resolve_dangling_tools("Aborted.")
                 completed_ms = self._now_ms()
                 partial_text = "".join(assistant_chunks)
                 emit_event(
