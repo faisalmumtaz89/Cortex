@@ -28,6 +28,8 @@ Requires an Apple Silicon Mac (M1–M4), macOS 13.3+, Python 3.11+, and Xcode Co
 
 4. Describe what you want done. Cortex reads `AGENTS.md` (or `CLAUDE.md`) from your project, so your conventions travel with the agent.
 
+5. Stay current with `/update` — Cortex checks daily for new Cortex and Lumen releases and tells you when one is available (`/update lumen` upgrades the local engine in place; opt out with `auto_update_check: false`).
+
 ## How it works
 
 - Reading, searching, and listing files is free; every edit, write, and shell command asks first.
@@ -37,7 +39,7 @@ Requires an Apple Silicon Mac (M1–M4), macOS 13.3+, Python 3.11+, and Xcode Co
 
 ## Commands
 
-`/model` · `/download` · `/login` · `/status` · `/gpu` · `/benchmark` · `/clear` · `/save` · `/setup` · `/help` · `/quit`
+`/model` · `/download` · `/login` · `/status` · `/gpu` · `/benchmark` · `/update` · `/clear` · `/save` · `/setup` · `/help` · `/quit`
 
 ## Documentation
 

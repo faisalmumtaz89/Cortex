@@ -117,9 +117,13 @@ Advisory hints: `unified_memory`, `max_gpu_memory`, `memory_pool_size`, `kv_cach
 - `log_file` (default: `~/.cortex/cortex.log`)
 - `log_rotation`, `max_log_size`, `performance_logging`, `gpu_metrics_interval` — accepted, advisory.
 
+### Updates
+
+- `auto_update_check` (default: `true`) — once a day, the worker checks GitHub for new Cortex and Lumen releases (a single redirect probe per project, in a background thread that never blocks startup) and posts a one-line notice at session start when an update exists. Set `auto_update_check: false` to opt out. `/update` always works regardless of this setting. The last check result is cached in `~/.cortex/update-check.json`.
+
 ### UI / System / Developer / Paths
 
-Accepted for compatibility; mostly advisory in the OpenTUI runtime: `ui_theme`, `markdown_rendering`, `syntax_highlighting`, `show_*` toggles, `startup_checks`, `shutdown_timeout`, `crash_recovery`, `auto_update_check`, `debug_mode`, `profile_inference`, `metal_capture`, `verbose_gpu_logs`, `templates_dir`, `plugins_dir`.
+Accepted for compatibility; mostly advisory in the OpenTUI runtime: `ui_theme`, `markdown_rendering`, `syntax_highlighting`, `show_*` toggles, `startup_checks`, `shutdown_timeout`, `crash_recovery`, `debug_mode`, `profile_inference`, `metal_capture`, `verbose_gpu_logs`, `templates_dir`, `plugins_dir`.
 
 ## Notes
 

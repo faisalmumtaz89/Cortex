@@ -20,11 +20,11 @@
 ## Recommended Install
 
 ```bash
-# One-line installer
+# One-line installer (latest GitHub release)
 curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
 
-# Pin a specific version
-curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash -s -- 1.0.18
+# Pin a release version X.Y.Z (installs the vX.Y.Z GitHub release's wheel)
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash -s -- X.Y.Z
 
 # Or clone and run locally (installs from the source checkout)
 git clone https://github.com/faisalmumtaz89/Cortex.git
@@ -39,9 +39,11 @@ The installer:
 
 1. Verifies Apple Silicon and an arm64 Python 3.11+
 2. Creates an isolated runtime under `~/.cortex/install`
-3. Installs the `cortex-llm` package (or the source checkout)
-4. Builds the OpenTUI sidecar when missing or stale (installing Bun if needed)
+3. Downloads the `cortex-llm` wheel from the GitHub release (the single distribution channel), verifies it against the release's `.sha256` asset, and installs the verified wheel — or installs the source checkout when run from a clone
+4. Builds the OpenTUI sidecar when missing or stale (installing Bun if needed; release wheels already bundle it)
 5. Links the `cortex` launcher into `~/.local/bin`
+
+A checksum mismatch or a missing `.sha256` asset aborts the install — nothing is installed. If no release has been published yet, the installer says so and points at the source-checkout install instead. Prerelease versions are not installable via `install.sh` — pins are stable `X.Y.Z` only.
 
 If `~/.local/bin` is not on your `PATH`, the installer prints the line to add to your shell profile.
 
@@ -93,7 +95,7 @@ cortex
 /download qwen3-5-9b:q4_0
 ```
 
-Local models are downloaded and managed by the Lumen engine (`/model` lists what's supported; cache lives at `~/.cache/lumen/`).
+Local models are downloaded and managed by the Lumen engine (`/model` lists what's supported; the cache lives at `~/Library/Caches/lumen/` on macOS).
 
 **Cloud instead of local:**
 
@@ -110,6 +112,43 @@ model_path: ~/models
 ```
 
 Cortex also remembers the last loaded model across restarts (`~/.cortex/state.yaml`).
+
+## Upgrading
+
+Cortex checks once a day (in the background, never blocking startup) whether a newer Cortex or Lumen release exists and posts a one-line notice at session start when one does. Opt out with `auto_update_check: false` in `config.yaml`.
+
+**Cortex:**
+
+```bash
+/update            # inside Cortex: installed vs latest for Cortex and Lumen
+/update cortex     # install the latest published Cortex release (restart to apply)
+```
+
+Or re-run the installer from a shell:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
+```
+
+`/update cortex` only ever installs a pinned, published release that is strictly newer than the running version: it downloads that GitHub release's wheel asset, verifies it against the release's `.sha256` asset, and installs the verified wheel into the running environment. The new version applies when you restart Cortex. Quitting Cortex while the install step is running is safe — the worker finishes that step before exiting rather than interrupting it.
+
+Running from a source checkout (`git clone` + `./install.sh`)? `/update cortex` refuses and points you at `git pull` instead — installing the release wheel would replace your editable install.
+
+**Lumen (local inference engine):**
+
+```bash
+/update lumen      # inside Cortex: stops the managed server, upgrades, verifies
+```
+
+Because the update stops the managed `lumen-server`, `/update lumen` refuses to start while a turn, model load, or download is in progress — finish (or interrupt) the current work first.
+
+Or re-run the Lumen installer from a shell (stop Cortex first so no old server keeps running):
+
+```bash
+curl -fsSL https://servelumen.com/install.sh | bash
+```
+
+After `/update lumen` the managed `lumen-server` restarts automatically the next time a local model is used.
 
 ## Common Installation Issues
 

@@ -19,6 +19,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "clear", description: "Clear the conversation" },
   { name: "save", description: "Save the conversation to disk" },
   { name: "setup", description: "Load the first local model" },
+  { name: "update", description: "Check for updates, or update Lumen / Cortex", argHint: "[lumen|cortex]" },
   { name: "quit", description: "Exit Cortex" },
 ]
 

@@ -96,6 +96,12 @@ class SessionService:
         event.set()
         return True
 
+    def has_active_turn(self) -> bool:
+        """True while ANY session's generation turn is running (each live turn
+        registers its interrupt event for exactly the turn's lifetime)."""
+        with self._lock:
+            return bool(self._interrupts)
+
     @staticmethod
     def _now_ms() -> int:
         return int(datetime.now().timestamp() * 1000)
@@ -181,9 +187,11 @@ class SessionService:
         active_backend = active_target.backend
         turn_started_ms = self._now_ms()
 
+        # Captured by the turn closures below; REGISTERED (visible to
+        # request_interrupt / has_active_turn) only at the try boundary right
+        # before the turn runs, so no raise in the setup span can ever leak
+        # the registry entry — see the registration site below.
         interrupt_event = threading.Event()
-        with self._lock:
-            self._interrupts[session_id] = interrupt_event
 
         user_message = self.conversation_manager.add_message(
             MessageRole.USER,
@@ -354,8 +362,17 @@ class SessionService:
                 },
             )
 
-        self.tooling_bridge.bind_turn(session_id=session_id, emit_event=emit_event)
+        # EXCEPTION-SAFE registration: the registry entry is created
+        # immediately before a try whose finally removes it — a raise
+        # anywhere in the turn (bind_turn included) can never leak the entry.
+        # A leaked entry pins has_active_turn() True forever, permanently
+        # refusing /update lumen. The setup emissions above run unregistered
+        # on purpose: they take microseconds and nothing interruptible
+        # happens before run_turn.
+        with self._lock:
+            self._interrupts[session_id] = interrupt_event
         try:
+            self.tooling_bridge.bind_turn(session_id=session_id, emit_event=emit_event)
             try:
                 turn_result = self.tooling_orchestrator.run_turn(
                     user_input=user_input,
@@ -455,7 +472,9 @@ class SessionService:
         finally:
             self.tooling_bridge.unbind_turn()
             with self._lock:
-                self._interrupts.pop(session_id, None)
+                # Identity-guarded: never remove a newer turn's registration.
+                if self._interrupts.get(session_id) is interrupt_event:
+                    del self._interrupts[session_id]
 
         # The final frame carries VERIFIED provenance labels (what actually
         # answered), not just intent — a mismatch never reaches this point

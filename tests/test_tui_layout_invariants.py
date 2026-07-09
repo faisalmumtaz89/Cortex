@@ -138,23 +138,34 @@ def test_message_components_render_panel_metadata_rows() -> None:
     # "Loading… 58s" row that outlived its own completion).
     assert "const showLiveProgress = () =>" in system_source
     assert "const progress = () =>" in system_source
-    # Minimal one-line indicators: spinner + "Loading X…" — no GPU verbiage,
-    # no duration coaching, no elapsed timers; downloads show bytes only.
-    assert "Loading ${progress.repoID}…" in system_source
-    assert "into GPU memory" not in system_source
-    assert "large models" not in system_source
-    assert "elapsedSeconds" not in system_source
-    assert "Downloading ${progress.repoID}" in system_source
+    # The indicator LINES live in the pure lib module (bun-unit-tested in
+    # frontend/cortex-tui/tests/progress_lines.test.ts); the component only
+    # dispatches on kind. Minimal one-line indicators: spinner + "Loading X…"
+    # — no GPU verbiage, no duration coaching, no elapsed timers; downloads
+    # show bytes only; engine updates show the latest installer line.
+    lines_source = _read("frontend/cortex-tui/src/lib/progress_lines.ts")
+    assert "Loading ${progress.repoID}…" in lines_source
+    assert "Downloading ${progress.repoID}" in lines_source
+    for source in (system_source, lines_source):
+        assert "into GPU memory" not in source
+        assert "large models" not in source
+        assert "elapsedSeconds" not in source
     assert 'progress()?.kind === "model-load"' in system_source
     assert 'progress()?.kind === "download"' in system_source
+    assert 'progress()?.kind === "engine-update"' in system_source
     # The fake-fullness artifacts are gone: no empty progress bar, no
     # hardcoded "N downloaded" byte line.
     assert "progressBar(" not in system_source
+    assert "progressBar(" not in lines_source
     assert "downloaded`" not in system_source
+    assert "downloaded`" not in lines_source
 
 
 def test_store_merge_logic_protects_streamed_content_and_dedupes_per_message() -> None:
-    source = _read("frontend/cortex-tui/src/context/store.tsx")
+    # The store's event/merge logic lives in the pure session_store.ts module
+    # (store.tsx is only the context/provider wrapper) so bun unit tests can
+    # drive the real event path without a JSX transform.
+    source = _read("frontend/cortex-tui/src/context/session_store.ts")
 
     assert "const dedupeKey = `${messageID}:${callKey}:${status}:${statusHash}`" in source
     assert "if (!incomingFinal && nextContent.length < current.length)" in source

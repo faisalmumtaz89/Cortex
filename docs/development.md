@@ -120,3 +120,25 @@ ruff check cortex/ tests/
 | `ToolRegistry` | `cortex.tooling.registry` | Profile-aware tool registry |
 | `PermissionManager` | `cortex.tooling.permissions` | Permission rules and persisted approvals |
 | `TemplateRegistry` | `cortex.template_registry` | Chat template detection and management |
+
+## Releasing
+
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml` on `macos-14` (one release at a time via a `concurrency` group; re-runs are idempotent — the action updates the existing release by tag and replaces same-named assets):
+
+1. Verifies the tag matches `pyproject.toml`'s `version`.
+2. Builds the OpenTUI sidecar with a **pinned Bun version** (kept in sync with `frontend/cortex-tui/package.json`), then the wheel with `python -m build --wheel`.
+3. **Hard gates:** the job fails unless the wheel contains `cortex/ui_runtime/bin/cortex-tui` (the sidecar is gitignored, so a wheel built without the bun step would silently ship a TUI-less package) AND carries the `macosx…arm64` platform tag (declared in `setup.cfg` — the wheel bundles a Mach-O binary and must never be `any`).
+4. Generates the wheel's `.sha256` sibling (shasum's `<hex>  <filename>` format) — installers refuse a wheel without it.
+5. **Last**, creates the GitHub release with the wheel + `.sha256` attached.
+
+**Single-channel design:** GitHub Releases is the only distribution channel. `install.sh` and `/update cortex` *discover* the latest version through GitHub's `releases/latest` redirect and *install* the wheel asset from that same release, verifying it against the `.sha256` sibling before `pip install`. Because discovery and install source are one artifact, a version is either fully live (release exists, assets attached, gates passed) or does not exist — the dual-channel failure class where a release is discoverable on one channel but not yet (or never) installable on another cannot occur. This also makes the old package-index history irrelevant: the tag gate only has to match `pyproject.toml`, it never has to out-version a stale index entry.
+
+Notes:
+
+- The `.sha256` verification protects **integrity** (truncation, corruption, wrong asset), not authenticity beyond HTTPS — the checksum shares the wheel's origin, which is why installers hard-refuse any non-`https://github.com` asset base.
+- `pip install <wheel>` still resolves *new or changed dependencies* from the package index — single-channel applies to the `cortex-llm` artifact itself.
+- Prerelease tags are not installable: PEP 440 normalizes suffixes out of wheel filenames (`1.2.3-rc1` → `1.2.3rc1`), so version→asset-URL reconstruction only supports stable `X.Y.Z`, and the update check never acts on prerelease tags.
+- **Quitting during a self-update is safe, with one bounded caveat:** the `pip install <wheel>` step rewrites `cortex-llm` inside the very venv Cortex launches from, and killing pip mid-flight would skip its rollback and strand a half-removed install that cannot relaunch. So worker shutdown never signals an in-flight self-install pip — it waits (up to ~60s) for it to finish before exiting. Only a pip wedged past that bound is killed as a last resort; recovery from that worst case is re-running `install.sh` from a terminal. Wheel *downloads* interrupted by quitting are simply aborted — nothing is installed. (The Lumen installer is different: a kill there leaves Cortex itself untouched and the next `/update lumen` verifies and reports the mismatch, so it is reaped immediately.)
+- **Source checkouts refuse `/update cortex`:** installing the release wheel would replace the editable `pip install -e` dist (and, through the `site-packages/cortex` symlink that `install.sh`'s source mode creates, could overwrite working-tree files). The plan step detects the checkout and answers with a `git pull` pointer instead; the startup update notice does the same. `CORTEX_SELF_INSTALL_KIND=installed` (test-only) forces the normal wheel path — the test suite itself runs from a checkout.
+
+Bump `version` in `pyproject.toml` and `cortex/__init__.py.__version__` together before tagging — `/update cortex` compares the released tag against the installed version and only ever installs the pinned release.

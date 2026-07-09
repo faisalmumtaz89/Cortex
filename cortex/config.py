@@ -157,7 +157,9 @@ class SystemConfig(BaseModel):
     )
     shutdown_timeout: int = Field(default=5, ge=1)
     crash_recovery: bool = True
-    auto_update_check: bool = False
+    # Daily release check for Cortex and Lumen (opt-out). Consumed by the
+    # worker runtime; failures are silent and startup never waits on it.
+    auto_update_check: bool = True
 
 class DeveloperConfig(BaseModel):
     """Developer settings."""

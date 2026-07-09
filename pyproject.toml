@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cortex-llm"
-version = "1.0.18"
+version = "1.0.19"
 description = "Terminal AI coding agent for Apple Silicon — local MLX/GGUF models and cloud APIs"
 readme = "README.md"
 license = "MIT"

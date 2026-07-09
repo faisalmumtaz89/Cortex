@@ -40,6 +40,7 @@ const SLASH_COMMAND_ALIASES = new Set([
   "quit",
   "exit",
   "setup",
+  "update",
 ])
 
 function splitCommandArgs(raw: string): string[] {
@@ -148,13 +149,17 @@ export function RpcProvider(props: ParentProps) {
 
   client.onEvent((event) => {
     store.applyEvent(event)
-    // A background operation finished (download auto-load or a model boot):
-    // refresh the catalog so the picker/header show the new state.
+    // A background operation finished (download auto-load, a model boot, or
+    // an engine update): refresh the catalog so the picker/header show the
+    // new state.
     if (event.event_type === "message.updated") {
       const payload = event.payload as Record<string, unknown> | undefined
       const progress = payload?.progress as Record<string, unknown> | undefined
       const kind = progress ? String(progress.kind ?? "") : ""
-      if (payload?.final === true && (kind === "download" || kind === "model-load")) {
+      if (
+        payload?.final === true &&
+        (kind === "download" || kind === "model-load" || kind === "engine-update")
+      ) {
         void refreshModels()
       }
     }

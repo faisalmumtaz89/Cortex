@@ -25,11 +25,13 @@ class CommandService:
         clear_session: Callable[[str], Dict[str, object]],
         save_session: Callable[[str], Dict[str, object]],
         lumen_runtime,
+        update_service=None,
     ) -> None:
         self.model_service = model_service
         self.clear_session = clear_session
         self.save_session = save_session
         self.lumen_runtime = lumen_runtime
+        self.update_service = update_service
 
     @staticmethod
     def _parse_command_args(args: str) -> tuple[bool, list[str] | str]:
@@ -425,6 +427,31 @@ class CommandService:
             "models": models,
         }
 
+    # ---- /update ----------------------------------------------------------------
+
+    def _handle_update(
+        self,
+        args: str,
+        *,
+        progress_callback: Callable[[Dict[str, object]], None] | None = None,
+    ) -> Dict[str, object]:
+        if self.update_service is None:
+            return {"ok": False, "message": "Updates are not available in this runtime."}
+        action = args.strip().lower()
+        if action in {"", "status"}:
+            return cast(Dict[str, object], self.update_service.status_report())
+        if action == "lumen":
+            return cast(
+                Dict[str, object],
+                self.update_service.update_lumen(progress_callback=progress_callback),
+            )
+        if action == "cortex":
+            return cast(
+                Dict[str, object],
+                self.update_service.update_cortex(progress_callback=progress_callback),
+            )
+        return {"ok": False, "message": "Usage: /update [lumen|cortex]"}
+
     # ---- dispatch ---------------------------------------------------------------
 
     def execute(
@@ -453,7 +480,7 @@ class CommandService:
                 "ok": True,
                 "message": (
                     "Commands: /help /status /gpu /model [name | provider:model] /clear /save "
-                    "/login /download /benchmark /setup /quit"
+                    "/login /download /update [lumen|cortex] /benchmark /setup /quit"
                 ),
             }
         if cmd == "/status":
@@ -478,6 +505,8 @@ class CommandService:
                 cancel_requested=cancel_requested,
                 activation_guard=activation_guard,
             )
+        if cmd == "/update":
+            return self._handle_update(args, progress_callback=progress_callback)
         if cmd == "/benchmark":
             return self._handle_benchmark(args)
         if cmd == "/setup":

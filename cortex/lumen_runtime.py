@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from cortex.update_check import normalize_version
+
 INSTALL_HINT = "Install Lumen: curl -fsSL https://servelumen.com/install.sh | bash"
 
 # ensure_server's refusal while another model is mid-boot starts with this
@@ -133,33 +135,58 @@ def find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def lumen_cache_dir() -> Path:
-    """Lumen's model cache, mirroring its own resolution order:
-    $LUMEN_CACHE_DIR → $XDG_CACHE_HOME/lumen → ~/.cache/lumen."""
+def lumen_cache_dirs() -> List[Path]:
+    """Candidate Lumen model-cache directories, in Lumen's resolution order:
+    $LUMEN_CACHE_DIR → $XDG_CACHE_HOME/lumen → the platform defaults.
+
+    With no environment override there are TWO platform candidates: real
+    lumen on macOS caches at ~/Library/Caches/lumen (the OS cache dir), while
+    ~/.cache/lumen is the XDG-style fallback older setups used. Cortex watches
+    both — guessing one and guessing wrong is exactly how download byte/speed
+    progress silently read 0 forever.
+    """
     override = os.environ.get("LUMEN_CACHE_DIR", "").strip()
     if override:
-        return Path(override).expanduser()
+        return [Path(override).expanduser()]
     xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
     if xdg:
-        return Path(xdg).expanduser() / "lumen"
-    return Path.home() / ".cache" / "lumen"
+        return [Path(xdg).expanduser() / "lumen"]
+    home = Path.home()
+    return [home / "Library" / "Caches" / "lumen", home / ".cache" / "lumen"]
+
+
+def lumen_cache_dir() -> Path:
+    """The primary Lumen cache directory (backward-compatible single-path
+    view of lumen_cache_dirs): the first candidate that exists, else the
+    first candidate."""
+    candidates = lumen_cache_dirs()
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return candidate
+        except OSError:
+            continue
+    return candidates[0]
 
 
 def partial_download_bytes() -> int:
     """Bytes written so far by an in-flight `lumen pull` (its downloader
     streams into `*.part` files inside the cache, renamed on completion).
     `lumen pull` renders its progress bar only on a TTY — through a pipe we
-    get no byte lines — so Cortex measures real progress from the cache."""
+    get no byte lines — so Cortex measures real progress from the cache.
+    Summed across every existing cache candidate (see lumen_cache_dirs)."""
     total = 0
-    root = lumen_cache_dir()
-    try:
-        for part in root.rglob("*.part"):
-            try:
-                total += part.stat().st_size
-            except OSError:
+    for root in lumen_cache_dirs():
+        try:
+            if not root.exists():
                 continue
-    except OSError:
-        return total
+            for part in root.rglob("*.part"):
+                try:
+                    total += part.stat().st_size
+                except OSError:
+                    continue
+        except OSError:
+            continue
     return total
 
 
@@ -221,6 +248,28 @@ class LumenRuntime:
             return True, ""
         missing = self.binary if not cli else self.server_binary
         return False, f"Lumen binary not found: {missing}. {INSTALL_HINT}"
+
+    def installed_version(self) -> Optional[str]:
+        """Installed engine version from `lumen --version`, or None.
+
+        Lumen prints either `lumen v0.3.0` or a bare `0.3.0` depending on the
+        build — the version is the last whitespace token with any leading `v`
+        stripped (parse shared with cortex.update_check). Any failure (missing
+        binary, non-zero exit, unparseable output) returns None.
+        """
+        cli = self.resolve_binary(self.binary)
+        if cli is None:
+            return None
+        try:
+            result = subprocess.run(
+                [cli, "--version"], capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        output = result.stdout.strip() or result.stderr.strip()
+        return normalize_version(output)
 
     # ---- catalog -------------------------------------------------------
 

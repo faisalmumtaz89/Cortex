@@ -507,6 +507,9 @@ def _intercept_runtime(
         _boot_task_lock=threading.Lock(),
         _active_boot_thread=None,
         _active_boot_selector=None,
+        _update_task_lock=threading.Lock(),
+        _active_update_thread=None,
+        _active_update_component=None,
         _model_choice_seq=0,
     )
     fake._emit_event = lambda *, session_id, event_type, payload: events.append(
@@ -525,8 +528,11 @@ def _intercept_runtime(
         "_is_boot_active",
         "_current_boot_selector",
         "_booting_selector",
+        "_current_update_component",
     ):
         setattr(fake, name, MethodType(getattr(WorkerRuntime, name), fake))
+    # Staticmethod: already unbound — attach as-is (MethodType would eat an arg).
+    fake._update_display_name = WorkerRuntime._update_display_name
 
     if active_repo is not None:
         hold = threading.Event()

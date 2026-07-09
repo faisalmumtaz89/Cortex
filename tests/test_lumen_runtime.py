@@ -24,8 +24,11 @@ from cortex.lumen_runtime import (
     SWITCH_IN_FLIGHT_PREFIX,
     LumenRuntime,
     LumenServerState,
+    lumen_cache_dir,
+    lumen_cache_dirs,
     parse_models_output,
     parse_selector,
+    partial_download_bytes,
 )
 
 # Captured verbatim from `lumen models` (lumen v0.2.0, 2026-07-04).
@@ -582,6 +585,125 @@ def test_real_lumen_switch_race_regression() -> None:
         runtime.stop()
         final = runtime.server
         assert final is None
+
+
+def _version_stub(tmp_path: Path, *, output: str, exit_code: int = 0) -> str:
+    """A fake `lumen` whose --version prints `output` (both real formats:
+    `lumen v0.3.0` on installed builds, bare `0.3.0` on some source builds)."""
+    body = textwrap.dedent(
+        f"""\
+        #!/usr/bin/env python3
+        import sys
+        if sys.argv[1:2] == ["--version"]:
+            print({output!r})
+            sys.exit({exit_code})
+        sys.exit(1)
+        """
+    )
+    return _write_script(tmp_path / "fake-lumen-version", body)
+
+
+def test_installed_version_parses_prefixed_format(tmp_path: Path) -> None:
+    runtime = LumenRuntime(
+        binary=_version_stub(tmp_path, output="lumen v0.3.0"), server_binary="missing"
+    )
+    assert runtime.installed_version() == "0.3.0"
+
+
+def test_installed_version_parses_bare_format(tmp_path: Path) -> None:
+    runtime = LumenRuntime(binary=_version_stub(tmp_path, output="0.3.0"), server_binary="missing")
+    assert runtime.installed_version() == "0.3.0"
+
+
+def test_installed_version_none_on_failure_or_garbage(tmp_path: Path) -> None:
+    missing = LumenRuntime(binary="definitely-not-lumen", server_binary="missing")
+    assert missing.installed_version() is None
+
+    failing = LumenRuntime(
+        binary=_version_stub(tmp_path, output="lumen v0.3.0", exit_code=2),
+        server_binary="missing",
+    )
+    assert failing.installed_version() is None
+
+    garbage = LumenRuntime(
+        binary=_version_stub(tmp_path, output="not a version"), server_binary="missing"
+    )
+    assert garbage.installed_version() is None
+
+
+# ---- cache directory resolution (download progress reads .part bytes) ------
+
+
+def _clear_cache_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LUMEN_CACHE_DIR", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+
+
+def test_cache_dirs_env_override_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_cache_env(monkeypatch)
+    monkeypatch.setenv("LUMEN_CACHE_DIR", str(tmp_path / "override"))
+    assert lumen_cache_dirs() == [tmp_path / "override"]
+    assert lumen_cache_dir() == tmp_path / "override"
+
+
+def test_cache_dirs_xdg_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_cache_env(monkeypatch)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert lumen_cache_dirs() == [tmp_path / "xdg" / "lumen"]
+
+
+def test_cache_dirs_platform_defaults_cover_both_locations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real lumen on macOS caches at ~/Library/Caches/lumen; ~/.cache/lumen is
+    the XDG-style location. BOTH must be candidates — watching only the wrong
+    one is how byte progress read 0 forever."""
+    _clear_cache_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert lumen_cache_dirs() == [
+        tmp_path / "Library" / "Caches" / "lumen",
+        tmp_path / ".cache" / "lumen",
+    ]
+
+
+def test_cache_dir_prefers_the_existing_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_cache_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Neither exists → the primary (macOS) candidate.
+    assert lumen_cache_dir() == tmp_path / "Library" / "Caches" / "lumen"
+    # Only the XDG-style dir exists → it wins.
+    xdg_style = tmp_path / ".cache" / "lumen"
+    xdg_style.mkdir(parents=True)
+    assert lumen_cache_dir() == xdg_style
+    # The macOS dir appears → it takes precedence again.
+    macos = tmp_path / "Library" / "Caches" / "lumen"
+    macos.mkdir(parents=True)
+    assert lumen_cache_dir() == macos
+
+
+def test_partial_download_bytes_sums_across_existing_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_cache_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    macos = tmp_path / "Library" / "Caches" / "lumen"
+    xdg_style = tmp_path / ".cache" / "lumen" / "nested"
+    macos.mkdir(parents=True)
+    xdg_style.mkdir(parents=True)
+    (macos / "model.gguf.part").write_bytes(b"x" * 1000)
+    (xdg_style / "other.gguf.part").write_bytes(b"y" * 234)
+    (macos / "done.gguf").write_bytes(b"z" * 999)  # completed files never count
+    assert partial_download_bytes() == 1234
+
+
+def test_partial_download_bytes_zero_when_no_cache_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_cache_env(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert partial_download_bytes() == 0
 
 
 def test_log_tail_dedupes_repeated_failure_line(tmp_path: Path) -> None:

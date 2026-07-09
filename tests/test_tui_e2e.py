@@ -54,6 +54,9 @@ class TuiSession:
             "AZURE_OPENAI_API_KEY": "dummy-key",
             "AZURE_OPENAI_ENDPOINT": "https://dummy.invalid",
             "CORTEX_TUI_FORCE_BUNDLED": "1",
+            # Hermeticity: never probe GitHub for releases from the suite.
+            # The update e2e test opts back in with a local stub probe server.
+            "CORTEX_AUTO_UPDATE_CHECK": "false",
             "TERM": os.environ.get("TERM", "xterm-256color"),
         }
         env.update(extra_env or {})
@@ -175,7 +178,9 @@ def _fake_lumen_env(tmp_path: Path) -> dict:
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "if sys.argv[1:2] == ['models']:\n"
-        f"    print(open({str(fixture)!r}).read(), end='')\n",
+        f"    print(open({str(fixture)!r}).read(), end='')\n"
+        "elif sys.argv[1:2] == ['--version']:\n"
+        "    print('lumen v0.3.0')\n",
         encoding="utf-8",
     )
     stub.chmod(0o755)
@@ -946,6 +951,82 @@ def test_markdown_and_syntax_highlighting_render_with_color(tui_project) -> None
     assert "## Summary" not in plain
     assert "**integer" not in plain
     assert "```" not in plain
+
+
+def test_update_notice_status_panel_and_live_update_narration(tui_project, tmp_path) -> None:
+    """With the release probe stubbed to a local server: the daily update
+    check posts its notice exactly once at session start, /update renders the
+    installed-vs-latest status panel, and /update lumen narrates LIVE — the
+    indicator must carry the latest installer output line, not sit static —
+    then resolves in place with the exact final message."""
+    from tests.test_worker_update_flow import _probe_server, _update_stub_env
+
+    project, start = tui_project
+    with _probe_server(lumen_tag="v0.4.0", cortex_tag=None) as probe_base:
+        # Reuse the worker-test env builder (version-file lumen + sleeping
+        # stub installer), lifting only the CORTEX_* seams into the TUI env.
+        stub_env = _update_stub_env(tmp_path, probe_base=probe_base, installer_sleep=2.5)
+        session = start(
+            [[{"text": "IGNORED"}]],
+            extra_env={
+                "CORTEX_LUMEN_BINARY": stub_env["CORTEX_LUMEN_BINARY"],
+                "CORTEX_LUMEN_SERVER_BINARY": stub_env["CORTEX_LUMEN_SERVER_BINARY"],
+                "CORTEX_LUMEN_INSTALLER_URL": stub_env["CORTEX_LUMEN_INSTALLER_URL"],
+                "CORTEX_UPDATE_PROBE_BASE": probe_base,
+                "CORTEX_AUTO_UPDATE_CHECK": "true",  # opt back in (stubbed probe)
+            },
+        )
+        session.wait_for("Session ready")
+
+        # The startup notice renders in the transcript — exactly once.
+        frame = session.wait_for("Lumen 0.4.0 available — update with /update lumen", timeout=30)
+        assert frame.count("Lumen 0.4.0 available") == 1
+
+        # /update from the palette: Enter completes into arg-hint mode
+        # ("[lumen|cortex]"), a second Enter runs the bare status report.
+        session.send_key("/update")
+        time.sleep(1)
+        session.send_key("Enter")
+        session.wait_for("[lumen|cortex]", timeout=10)
+        session.send_key("Enter")
+        panel = session.wait_for(
+            "Lumen: 0.3.0 installed · 0.4.0 available — /update lumen", timeout=20
+        )
+        assert "✓ /update" in panel
+        assert "no published releases yet" in panel  # Cortex line (zero releases today)
+        assert panel.count("Lumen 0.4.0 available") == 1  # still exactly one notice
+
+        # Esc dismisses the panel cleanly.
+        session.send_key("Escape")
+        time.sleep(1)
+        assert "✓ /update" not in session.capture()
+
+        # /update lumen: the live indicator must show the LATEST installer
+        # output line as its phase detail (the 2.5s stub sleep keeps
+        # "Installing Lumen v0.4.0..." on screen), with a spinner.
+        session.send_key("/update lumen")
+        time.sleep(1)
+        session.send_key("Enter")
+        live = session.wait_until(
+            lambda f: any(
+                "Updating Lumen…" in line
+                and "Installing Lumen v0.4.0" in line
+                and any(ch in line for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+                for line in f.splitlines()
+            ),
+            description="live engine-update indicator with installer phase detail",
+            timeout=20,
+        )
+        assert "Working…" not in live  # background op: never the turn spinner
+
+        # Resolves in place: final message, no lingering live indicator.
+        session.wait_for("local · Lumen 0.4.0 installed — server restarts on next use.", timeout=30)
+        session.wait_until(
+            lambda f: "Updating Lumen…" not in f
+            and "local · Lumen 0.4.0 installed — server restarts on next use." in f,
+            description="engine-update indicator resolved into the final message",
+            timeout=10,
+        )
 
 
 def test_working_spinner_and_queued_input_dispatch(tui_project) -> None:

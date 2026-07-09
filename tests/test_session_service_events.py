@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from cortex.app.session_service import SessionService
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
 from cortex.conversation_manager import MessageRole
@@ -443,3 +445,115 @@ def test_mid_turn_model_switch_does_not_relabel_in_flight_turn(tmp_path: Path) -
     # And the verified record was stored for /status.
     assert model_service.recorded_provenance[-1]["label"] == "test-model"
     assert model_service.recorded_provenance[-1]["verified"] is True
+
+
+# ---- turn-registration lifecycle (has_active_turn feeds the /update guard) ----
+
+
+def _build_service(tmp_path: Path, *, orchestrator=None, bridge=None) -> SessionService:
+    return SessionService(
+        config=SimpleNamespace(conversation=SimpleNamespace(save_directory=tmp_path)),
+        conversation_manager=_FakeConversationManager(),
+        tooling_orchestrator=orchestrator or _FakeOrchestrator(),
+        model_service=_FakeModelService(),
+        tooling_bridge=bridge or _FakeBridge(),
+    )
+
+
+def _silent_emit(*, session_id: str, event_type: str, payload: dict[str, object]) -> None:
+    return None
+
+
+def test_setup_failure_never_leaks_turn_registration(tmp_path: Path) -> None:
+    """A raise in the pre-turn setup span (here: the very first emit_event —
+    the user-message frame) must never leak the interrupt registration. A
+    leaked entry would pin has_active_turn() True forever and permanently
+    refuse /update lumen."""
+    service = _build_service(tmp_path)
+    service.create_or_resume(session_id="s1", conversation_id=None)
+
+    def exploding_emit(*, session_id: str, event_type: str, payload: dict[str, object]) -> None:
+        raise RuntimeError("event pipe broken during setup")
+
+    with pytest.raises(RuntimeError, match="event pipe broken during setup"):
+        service.submit_user_input(
+            session_id="s1",
+            user_input="hello",
+            active_target_input=None,
+            stop_sequences=None,
+            emit_event=exploding_emit,
+        )
+    assert service.has_active_turn() is False
+    assert service._interrupts == {}
+
+
+def test_bind_turn_failure_never_leaks_turn_registration(tmp_path: Path) -> None:
+    """bind_turn sits between registration and the turn: if IT raises, the
+    finally must still unregister (this was the exact leak shape — the old
+    registration lived outside any try)."""
+
+    class _ExplodingBridge(_FakeBridge):
+        def bind_turn(self, *, session_id: str, emit_event) -> None:
+            raise RuntimeError("bridge bind failed")
+
+    service = _build_service(tmp_path, bridge=_ExplodingBridge())
+    service.create_or_resume(session_id="s1", conversation_id=None)
+
+    with pytest.raises(RuntimeError, match="bridge bind failed"):
+        service.submit_user_input(
+            session_id="s1",
+            user_input="hello",
+            active_target_input=None,
+            stop_sequences=None,
+            emit_event=_silent_emit,
+        )
+    assert service.has_active_turn() is False
+    assert service._interrupts == {}
+
+
+def test_has_active_turn_true_during_turn_and_false_after_success_and_failure(
+    tmp_path: Path,
+) -> None:
+    """The registration window covers the generation itself (the /update
+    guard's data source) and is empty again after BOTH turn outcomes."""
+    observed: dict[str, bool] = {}
+
+    class _ObservingOrchestrator:
+        service: SessionService | None = None
+
+        def run_turn(self, *_args, **kwargs):
+            assert self.service is not None
+            observed["active_during_turn"] = self.service.has_active_turn()
+            on_event = kwargs.get("on_event")
+            if on_event is not None:
+                on_event(FinishEvent(reason="stop"))
+            return AssistantTurnResult(text="done")
+
+    orchestrator = _ObservingOrchestrator()
+    service = _build_service(tmp_path, orchestrator=orchestrator)
+    orchestrator.service = service
+    service.create_or_resume(session_id="s1", conversation_id=None)
+    result = service.submit_user_input(
+        session_id="s1",
+        user_input="hello",
+        active_target_input=None,
+        stop_sequences=None,
+        emit_event=_silent_emit,
+    )
+    assert result.get("ok", True) is not False
+    assert observed["active_during_turn"] is True
+    assert service.has_active_turn() is False
+
+    # Orchestrator failure (caught → structured error result): still empty.
+    failing = _build_service(tmp_path, orchestrator=_RaisingOrchestrator())
+    failing.create_or_resume(session_id="s2", conversation_id=None)
+    failure = failing.submit_user_input(
+        session_id="s2",
+        user_input="hello",
+        active_target_input=None,
+        stop_sequences=None,
+        emit_event=_silent_emit,
+    )
+    assert failure["ok"] is False
+    assert failing.has_active_turn() is False
+    assert failing._interrupts == {}

@@ -18,6 +18,7 @@ from cortex.app.command_service import _CLOUD_LOGIN_PROVIDERS, CommandService
 from cortex.app.model_service import ModelService
 from cortex.app.permission_service import PermissionService
 from cortex.app.session_service import SessionService, _WorkerToolingBridge
+from cortex.app.update_service import UpdateService
 from cortex.cloud import CloudCredentialStore, CloudModelCatalog, CloudRouter
 from cortex.cloud.types import ActiveModelTarget, CloudProvider
 from cortex.lumen_runtime import (
@@ -120,11 +121,13 @@ class WorkerRuntime:
             model_service=self.model_service,
             tooling_bridge=self.tooling_bridge,
         )
+        self.update_service = UpdateService(lumen_runtime=self.lumen_runtime)
         self.command_service = CommandService(
             model_service=self.model_service,
             clear_session=self.session_service.clear_session,
             save_session=self.session_service.save_session,
             lumen_runtime=self.lumen_runtime,
+            update_service=self.update_service,
         )
         self._download_task_lock = threading.Lock()
         self._active_download_thread: threading.Thread | None = None
@@ -135,9 +138,21 @@ class WorkerRuntime:
         self._boot_task_lock = threading.Lock()
         self._active_boot_thread: threading.Thread | None = None
         self._active_boot_selector: str | None = None
+        # Background engine/self updates (installer runs take a while; the
+        # command returns immediately and these track the in-flight update).
+        self._update_task_lock = threading.Lock()
+        self._active_update_thread: threading.Thread | None = None
+        self._active_update_component: str | None = None
         # Monotonic model-choice counter: a background boot/download only
         # activates its model if the user hasn't picked something newer.
         self._model_choice_seq = 0
+        # Daily update check: the daemon thread computes a notice; the first
+        # session emits it exactly once (whichever side finishes second does
+        # the emit — see _emit_update_notice_if_ready).
+        self._update_notice_lock = threading.Lock()
+        self._pending_update_notice: str | None = None
+        self._update_notice_session_id: str | None = None
+        self._update_notice_emitted = False
         self._startup_notices: list[str] = self._restore_startup_target()
         if os.environ.get("CORTEX_SCRIPTED_MODEL", "").strip():
             # A scripted override answers EVERY turn with canned output — make
@@ -148,6 +163,55 @@ class WorkerRuntime:
         self._startup_notices_emitted = False
 
         self._register_methods()
+
+        if self._auto_update_check_enabled():
+            # Fire-and-forget daily release check (opt-out via the
+            # auto_update_check config key). Daemon thread: startup must
+            # never wait on the network, and check failures stay silent.
+            threading.Thread(
+                target=self._run_startup_update_check,
+                name="cortex-update-check",
+                daemon=True,
+            ).start()
+
+    def _auto_update_check_enabled(self) -> bool:
+        # Missing attribute (stub configs in tests) counts as DISABLED: the
+        # check may only run when a real config explicitly carries the key —
+        # a fake must never be able to trigger a network probe.
+        return bool(getattr(getattr(self.config, "system", None), "auto_update_check", False))
+
+    def _run_startup_update_check(self) -> None:
+        """Compute the update notice off-thread and hand it to the notice
+        gate. Never raises; never blocks startup."""
+        try:
+            notice = self.update_service.startup_notice()
+        except Exception:  # pragma: no cover - defensive path
+            logger.debug("startup update check failed", exc_info=True)
+            return
+        if not notice:
+            return
+        with self._update_notice_lock:
+            self._pending_update_notice = notice
+        self._emit_update_notice_if_ready()
+
+    def _emit_update_notice_if_ready(self) -> None:
+        """Emit the update notice exactly once, as soon as BOTH a session and
+        the check result exist (either side may finish first)."""
+        with self._update_notice_lock:
+            notice = self._pending_update_notice
+            session_id = self._update_notice_session_id
+            if not notice or not session_id or self._update_notice_emitted:
+                return
+            self._update_notice_emitted = True
+        # origin marks this as OUT-OF-BAND for the frontend: it is emitted
+        # exactly once, asynchronously — the store must transcribe it even if
+        # a slash command happens to be in flight (command notices are
+        # dropped as duplicates of the command result; this one is not).
+        self._emit_event(
+            session_id=session_id,
+            event_type="system.notice",
+            payload={"message": notice, "origin": "update-check"},
+        )
 
     def _restore_startup_target(self) -> list[str]:
         """Restore the previously active model target from persisted state."""
@@ -564,6 +628,158 @@ class WorkerRuntime:
             thread.start()
             return True
 
+    # ---- /update background operations -----------------------------------
+
+    @staticmethod
+    def _update_display_name(component: str) -> str:
+        return "Lumen" if component == "lumen" else "Cortex"
+
+    def _current_update_component(self) -> str | None:
+        """Component of the in-flight background update, if any."""
+        with self._update_task_lock:
+            alive = (
+                self._active_update_thread is not None and self._active_update_thread.is_alive()
+            )
+            return self._active_update_component if alive else None
+
+    def _run_background_engine_update(self, *, session_id: str, component: str) -> None:
+        """Run an engine/self update off the RPC thread as a live system
+        progress message (kind "engine-update"), mirroring the background
+        download narration: one message, installer output lines as phases,
+        resolved in place by the final ready/failed frame."""
+        progress_message_id = f"engine-update:{uuid.uuid4().hex}"
+        headline = f"Updating {self._update_display_name(component)}…"
+
+        def _emit(*, content: str, phase: str, final: bool) -> None:
+            self._emit_event(
+                session_id=session_id,
+                event_type="message.updated",
+                payload={
+                    "message_id": progress_message_id,
+                    "role": "system",
+                    "content": content,
+                    "final": final,
+                    "progress": {
+                        "kind": "engine-update",
+                        "repo_id": component,
+                        "phase": phase,
+                    },
+                },
+            )
+
+        def _progress_callback(payload: Dict[str, object]) -> None:
+            phase = str(payload.get("phase", "") or "").strip()
+            if phase:
+                _emit(content=headline, phase=phase, final=False)
+
+        try:
+            _emit(content=headline, phase="starting", final=False)
+            result = self.command_service.execute(
+                session_id=session_id,
+                command=f"/update {component}",
+                progress_callback=_progress_callback,
+            )
+            ok = bool(result.get("ok"))
+            message = str(result.get("message", "")) or (
+                f"{self._update_display_name(component)} update "
+                f"{'complete' if ok else 'failed'}."
+            )
+            # One operation = one transcript message (resolved in place).
+            _emit(content=message, phase="ready" if ok else "failed", final=True)
+        except Exception as exc:  # pragma: no cover - defensive path
+            _emit(
+                content=f"{self._update_display_name(component)} update failed: {exc}",
+                phase="failed",
+                final=True,
+            )
+
+    def _start_background_engine_update(self, *, session_id: str, component: str) -> bool:
+        with self._update_task_lock:
+            if self._active_update_thread is not None and self._active_update_thread.is_alive():
+                return False
+            self._active_update_component = component
+            thread = threading.Thread(
+                target=self._run_background_engine_update,
+                kwargs={"session_id": session_id, "component": component},
+                name="cortex-engine-update",
+                daemon=True,
+            )
+            self._active_update_thread = thread
+            thread.start()
+            return True
+
+    def _intercept_update(self, *, session_id: str, component: str) -> Dict[str, object]:
+        """/update lumen|cortex → background operation with mutual exclusion.
+
+        Updates, model boots, and downloads are pairwise exclusive: an update
+        stops/replaces the engine under any concurrent boot, and a boot or
+        download against half-replaced binaries is undefined behavior. A
+        Lumen update additionally refuses while a TURN is running — stopping
+        the server would kill a live local generation mid-stream. The quick
+        no-op answers (up to date / no releases / probe failure) resolve
+        synchronously — a background narration for nothing would be noise.
+        """
+        updating = self._current_update_component()
+        if updating is not None:
+            return {
+                "ok": False,
+                "message": (
+                    f"{self._update_display_name(updating)} update already in progress — "
+                    "wait for it to finish."
+                ),
+            }
+        booting = self._booting_selector()
+        if booting is not None:
+            return {
+                "ok": False,
+                "message": (
+                    f"Still starting local · {booting} — wait for it to finish "
+                    "before updating."
+                ),
+            }
+        downloading = self._current_download_repo_id()
+        if downloading is not None:
+            return {
+                "ok": False,
+                "message": (
+                    f"A download ({downloading}) is in progress — wait for it to "
+                    "finish before updating."
+                ),
+            }
+        if component == "lumen" and self.session_service.has_active_turn():
+            # Updating Lumen stops the managed server — killing it under a
+            # live local generation would end the turn with a stream error.
+            return {
+                "ok": False,
+                "message": (
+                    "A turn is still running — wait for it to finish before "
+                    "updating Lumen (the update stops the local server)."
+                ),
+            }
+
+        plan = (
+            self.update_service.plan_lumen_update()
+            if component == "lumen"
+            else self.update_service.plan_cortex_update()
+        )
+        if not bool(plan.get("ok")) or not bool(plan.get("update_available")):
+            # Nothing to do (or the release feed is unreachable): answer
+            # synchronously with the plan's message.
+            message = str(plan.get("message", ""))
+            self._emit_event(
+                session_id=session_id,
+                event_type="system.notice",
+                payload={"message": message},
+            )
+            return {"ok": bool(plan.get("ok")), "message": message}
+
+        if not self._start_background_engine_update(session_id=session_id, component=component):
+            return {"ok": False, "message": "Another update is already running."}
+        # Terse confirmation only: the transcript's live "Updating …" row
+        # solely owns update state (same contract as boots/downloads).
+        message = str(plan.get("message", f"Updating {self._update_display_name(component)}…"))
+        return {"ok": True, "message": message, "background": True, "repo_id": component}
+
     def _register_typed_method(
         self,
         *,
@@ -682,6 +898,10 @@ class WorkerRuntime:
             event_type="system.notice",
             payload={"message": " · ".join(notice_parts)},
         )
+        with self._update_notice_lock:
+            if self._update_notice_session_id is None:
+                self._update_notice_session_id = session_id
+        self._emit_update_notice_if_ready()
         return result
 
     def _rpc_session_submit_user_input(self, params: SessionSubmitUserInputParams):
@@ -774,6 +994,16 @@ class WorkerRuntime:
                     "before downloading another model."
                 ),
             }
+        updating = self._current_update_component()
+        if updating is not None:
+            # Never download against half-replaced engine binaries.
+            return {
+                "ok": False,
+                "message": (
+                    f"{self._update_display_name(updating)} update in progress — "
+                    "wait for it to finish before downloading a model."
+                ),
+            }
 
         # Background op — NOT a turn: session.status stays untouched so the
         # generic "Working…" spinner never runs; the download indicator owns
@@ -824,6 +1054,16 @@ class WorkerRuntime:
         download = self._current_download_repo_id()
         if download is not None:
             return {"ok": False, "message": self._download_busy_message(selector)}
+        updating = self._current_update_component()
+        if updating is not None:
+            # The update stops/replaces the engine — never boot underneath it.
+            return {
+                "ok": False,
+                "message": (
+                    f"{self._update_display_name(updating)} update in progress — "
+                    "wait for it to finish before switching models."
+                ),
+            }
 
         # Background op — NOT a turn: session.status stays untouched so the
         # generic "Working…" spinner never runs; the load indicator owns the
@@ -884,6 +1124,15 @@ class WorkerRuntime:
             if intercepted is not None:
                 return intercepted
 
+        if command_keyword == "/update":
+            update_action = command_args.strip().lower()
+            if update_action in {"lumen", "cortex"}:
+                # Background op (see _intercept_update); bare /update and
+                # /update status fall through to the synchronous handler.
+                return self._intercept_update(
+                    session_id=params.session_id, component=update_action
+                )
+
         if command_keyword == "/download":
             download_action = command_args.strip().lower()
             if download_action in {"cancel", "--cancel"}:
@@ -912,6 +1161,16 @@ class WorkerRuntime:
                         "message": (
                             f"Still starting local · {booting} — wait for it to "
                             "finish before downloading another model."
+                        ),
+                    }
+                updating = self._current_update_component()
+                if updating is not None:
+                    # Never download against half-replaced engine binaries.
+                    return {
+                        "ok": False,
+                        "message": (
+                            f"{self._update_display_name(updating)} update in progress — "
+                            "wait for it to finish before downloading a model."
                         ),
                     }
                 # Background op — session.status untouched (see intercepts).
@@ -1023,9 +1282,15 @@ class WorkerRuntime:
         def _terminate(signum, _frame) -> None:
             logger.info("Worker received signal %s — shutting down", signum)
             try:
-                self.lumen_runtime.stop()
+                # An in-flight installer (own process group) must not be
+                # orphaned half-applied — reap it and its temp file first
+                # (bounded), since os._exit skips every finally/atexit.
+                self.update_service.shutdown()
             finally:
-                os._exit(0)
+                try:
+                    self.lumen_runtime.stop()
+                finally:
+                    os._exit(0)
 
         for signame in ("SIGTERM", "SIGHUP", "SIGINT"):
             signum = getattr(signal, signame, None)
@@ -1038,7 +1303,10 @@ class WorkerRuntime:
         try:
             self.rpc_server.run_forever()
         finally:
-            # Quitting Cortex must never leave a lumen-server behind.
+            # Quitting Cortex must never orphan an in-flight installer (the
+            # update thread is a daemon; os._exit skips its finally cleanup)…
+            self.update_service.shutdown()
+            # …and must never leave a lumen-server behind.
             self.lumen_runtime.stop()
             # In-flight turn threads (non-daemon) would otherwise keep this
             # process alive long after stdin EOF; everything that must be

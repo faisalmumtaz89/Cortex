@@ -354,7 +354,7 @@ class ModelService:
             "ok": False,
             "message": (
                 "Local model files are managed by Lumen. "
-                "Remove cached models from ~/.cache/lumen with the lumen CLI."
+                "Remove cached models from ~/Library/Caches/lumen with the lumen CLI."
             ),
         }
 

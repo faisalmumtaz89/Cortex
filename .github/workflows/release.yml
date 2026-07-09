@@ -1,0 +1,110 @@
+# Release pipeline: pushing a tag `vX.Y.Z` builds the TUI sidecar, packages
+# the wheel (which MUST bundle the sidecar and carry a macOS-arm64 platform
+# tag — hard gates below), and attaches the wheel plus its `.sha256` sibling
+# to a GitHub release.
+#
+# GitHub Releases is the SINGLE distribution channel: install.sh and
+# /update cortex discover the latest version via GitHub's releases/latest
+# redirect AND download the wheel asset from that same release. Discovery and
+# install source are one artifact, so a version is either fully live (release
+# exists with verified-installable assets) or does not exist at all — there
+# is no dual-channel window where a release is discoverable but not
+# installable.
+#
+# ORDERING IS LOAD-BEARING: release creation stays LAST. Every gate must pass
+# before the release — and with it, discoverability — goes live.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# One release at a time; never cancel a half-published run (re-runs are
+# idempotent instead: softprops updates the existing release by tag and
+# replaces same-named assets — overwrite_files is pinned explicitly below).
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the GitHub release
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned: the shipped sidecar's toolchain must be reproducible
+          # (keep in sync with frontend/cortex-tui/package.json).
+          bun-version: "1.3.9"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify tag matches the package version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          if [[ "${tag_version}" != "${package_version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match pyproject version ${package_version}" >&2
+            exit 1
+          fi
+
+      - name: Build TUI sidecar
+        run: |
+          cd frontend/cortex-tui
+          bun install
+          bun run build
+
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build --wheel
+
+      - name: Fail unless the wheel bundles the sidecar and targets macOS arm64
+        run: |
+          wheel="$(ls dist/*.whl)"
+          echo "Inspecting ${wheel}"
+          case "$(basename "${wheel}")" in
+            *macosx*arm64*.whl) ;;
+            *)
+              echo "Wheel is not tagged for macOS arm64 — a 65MB Mach-O sidecar must never ship in an 'any' wheel (setup.cfg [bdist_wheel] plat_name)." >&2
+              exit 1
+              ;;
+          esac
+          if ! unzip -l "${wheel}" | grep -q "cortex/ui_runtime/bin/cortex-tui"; then
+            echo "cortex/ui_runtime/bin/cortex-tui is missing from the wheel — the published package would have no TUI." >&2
+            unzip -l "${wheel}" >&2
+            exit 1
+          fi
+
+      # Installers refuse to install a wheel without this sibling: the asset
+      # name is `<wheel>.sha256` and the content is shasum's standard
+      # "<64-hex>  <wheel filename>" line (first whitespace token = digest).
+      - name: Generate the wheel's sha256 sidecar asset
+        run: |
+          cd dist
+          wheel="$(basename "$(ls ./*.whl)")"
+          shasum -a 256 "${wheel}" > "${wheel}.sha256"
+          cat "${wheel}.sha256"
+
+      # The release IS the install source: install.sh and /update cortex
+      # resolve the version through the releases/latest redirect, download the
+      # wheel asset, and verify it against the .sha256 sibling. Created LAST,
+      # strictly after every gate above.
+      - name: Create GitHub release with wheel + sha256 assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.whl
+            dist/*.whl.sha256
+          # Explicit (today's @v2 default): a re-run against an existing
+          # release must REPLACE same-named assets, never duplicate them.
+          overwrite_files: true
+          generate_release_notes: true

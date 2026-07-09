@@ -44,6 +44,7 @@ const SLASH_COMMAND_ALIASES = new Set([
   "quit",
   "exit",
   "setup",
+  "update",
 ])
 
 function isSlashCommandLike(raw: string): boolean {

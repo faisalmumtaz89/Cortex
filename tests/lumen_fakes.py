@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from cortex.lumen_runtime import LumenModel
@@ -33,14 +34,21 @@ class FakeLumenRuntime:
         ensure_message: str = "",
         pull_ok: bool = True,
         available_ok: bool = True,
+        version: Optional[str] = "0.3.0",
+        version_file: Optional[Path] = None,
     ) -> None:
         self.models = list(DEFAULT_CATALOG if models is None else models)
         self.ensure_ok = ensure_ok
         self.ensure_message = ensure_message
         self.pull_ok = pull_ok
         self.available_ok = available_ok
+        self.version = version
+        # When set, installed_version() reads this file — lets update tests
+        # observe a stub installer "replacing the binary" (rewriting the file).
+        self.version_file = version_file
         self.ensure_calls: List[str] = []
         self.pull_calls: List[str] = []
+        self.list_models_calls = 0
         self.stopped = 0
         self._active: Optional[str] = None
         self._starting: Optional[str] = None  # tests set to simulate a boot in flight
@@ -51,7 +59,17 @@ class FakeLumenRuntime:
             return True, ""
         return False, "Lumen binary not found: lumen. Install Lumen: https://servelumen.com"
 
+    def installed_version(self) -> Optional[str]:
+        if self.version_file is not None:
+            try:
+                text = self.version_file.read_text(encoding="utf-8").strip()
+            except OSError:
+                return None
+            return text or None
+        return self.version
+
     def list_models(self) -> List[LumenModel]:
+        self.list_models_calls += 1
         return [] if not self.available_ok else list(self.models)
 
     def ensure_server(self, selector: str) -> Tuple[bool, str]:

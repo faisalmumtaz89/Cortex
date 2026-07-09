@@ -58,6 +58,7 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 | `/setup` | Load the first available local model if none is active |
 | `/benchmark [tokens] [--prompt <text>]` | Performance test (local models only) |
 | `/login <provider> [api_key]` | Manage OpenAI/Anthropic/Azure credentials |
+| `/update [lumen\|cortex]` | Show installed vs latest versions, or update the Lumen engine / Cortex itself |
 | `/clear` | Clear conversation history |
 | `/save` | Save the conversation as JSON |
 | `/quit` or `/exit` | Exit Cortex |

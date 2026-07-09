@@ -1,5 +1,9 @@
-import type { DownloadProgressRecord, MessageRecord } from "../../context/store"
-import { spinnerFrame } from "../../lib/spinner"
+import type { MessageRecord } from "../../context/store"
+import {
+  downloadIndicatorLine,
+  engineUpdateIndicatorLine,
+  loadIndicatorLine,
+} from "../../lib/progress_lines"
 import { UI_PALETTE } from "../ui_palette"
 
 const SPINE_BORDER = {
@@ -16,54 +20,7 @@ const SPINE_BORDER = {
   rightT: "",
 }
 
-function formatBytes(value: number | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return "0 B"
-  }
-  const units = ["B", "KB", "MB", "GB", "TB"]
-  let amount = value
-  let index = 0
-  while (amount >= 1024 && index < units.length - 1) {
-    amount /= 1024
-    index += 1
-  }
-  if (index === 0) {
-    return `${Math.round(amount)} ${units[index]}`
-  }
-  return `${amount.toFixed(1)} ${units[index]}`
-}
-
-function formatRate(value: number | undefined): string | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 1) {
-    return null
-  }
-  return `${formatBytes(value)}/s`
-}
-
 const TERMINAL_PHASES = new Set(["complete", "completed", "ready", "failed", "cancelled"])
-
-/** GPU-memory load: exactly one minimal line. */
-function loadIndicatorLine(progress: DownloadProgressRecord): string {
-  return `${spinnerFrame()} Loading ${progress.repoID}…`
-}
-
-/** Download: one minimal line — transferred bytes (and rate) are the only
- * progress signal worth words. */
-function downloadIndicatorLine(progress: DownloadProgressRecord): string {
-  const parts: string[] = [`${spinnerFrame()} Downloading ${progress.repoID}…`]
-  if (progress.bytesDownloaded > 0) {
-    let bytesPart = formatBytes(progress.bytesDownloaded)
-    if (typeof progress.bytesTotal === "number" && progress.bytesTotal > 0) {
-      bytesPart += ` / ${formatBytes(progress.bytesTotal)}`
-    }
-    const rate = formatRate(progress.speedBps)
-    if (rate) {
-      bytesPart += ` (${rate})`
-    }
-    parts.push(bytesPart)
-  }
-  return parts.join(" · ")
-}
 
 export function SystemMessage(props: { message: MessageRecord; index: number }) {
   // Everything below is a reactive accessor ON PURPOSE: component bodies run
@@ -120,6 +77,11 @@ export function SystemMessage(props: { message: MessageRecord; index: number }) 
         )}
         {showLiveProgress() && progress()?.kind === "download" && (
           <text fg={UI_PALETTE.textMuted}>{downloadIndicatorLine(progress()!)}</text>
+        )}
+        {showLiveProgress() && progress()?.kind === "engine-update" && (
+          <text fg={UI_PALETTE.textMuted}>
+            {engineUpdateIndicatorLine(progress()!, props.message.content)}
+          </text>
         )}
       </box>
     </box>
