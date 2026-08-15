@@ -23,7 +23,7 @@ Requires an Apple Silicon Mac (M1–M4), macOS 13.3+, Python 3.11+, and Xcode Co
 
 3. Pick a model with `/model`:
 
-   - **Local** — Qwen3.5 / 3.6 models served by Lumen. Selecting one downloads and loads it automatically; Cortex manages the server for you.
+   - **Local** — Qwen3.5 / 3.6 / 3.8 models served by Lumen. Selecting one downloads and loads it automatically; Cortex manages the server for you.
    - **Cloud** — `/login openai <api_key>` (or `anthropic` / `azure`), or set the provider's environment key.
 
 4. Describe what you want done. Cortex reads `AGENTS.md` (or `CLAUDE.md`) from your project, so your conventions travel with the agent.
