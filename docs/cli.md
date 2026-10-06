@@ -10,7 +10,7 @@ Cortex is a terminal AI coding agent. `cortex` launches the interactive TUI; `co
 cortex
 ```
 
-This launches the OpenTUI frontend (single terminal writer), which spawns the Python backend in worker mode (`python -m cortex --worker-stdio`) and talks to it over line-delimited JSON-RPC 2.0.
+This launches the OpenTUI frontend (single terminal writer), which spawns the Python backend in worker mode (`python -P -m cortex --worker-stdio`; `-P` keeps the project directory off its import path) and talks to it over line-delimited JSON-RPC 2.0.
 
 If the OpenTUI sidecar is unavailable in a source checkout, run `./install.sh` at the repository root to build and install it.
 

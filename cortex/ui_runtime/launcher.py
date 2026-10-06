@@ -85,7 +85,9 @@ def _build_worker_env() -> dict:
             if key.startswith("OTUI_"):
                 env.pop(key, None)
     env["CORTEX_WORKER_CMD"] = sys.executable
-    env["CORTEX_WORKER_ARGS"] = "-m cortex --worker-stdio"
+    # -P: the worker runs in the user's project, which must never shadow the
+    # modules Cortex imports.
+    env["CORTEX_WORKER_ARGS"] = "-P -m cortex --worker-stdio"
     # The sidecar process runs from the repo/frontend dir; the worker (and so
     # the agent's tool sandbox) must run in the directory the user launched
     # Cortex from.

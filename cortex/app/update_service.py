@@ -776,7 +776,8 @@ class UpdateService:
         override = os.environ.get(CORTEX_PIP_ENV, "").strip()
         if override:
             return [override, "install", str(wheel_path)]
-        return [sys.executable, "-m", "pip", "install", str(wheel_path)]
+        # -P: the worker runs in the user's project, which must never shadow pip.
+        return [sys.executable, "-P", "-m", "pip", "install", str(wheel_path)]
 
     def _run_installer(
         self,

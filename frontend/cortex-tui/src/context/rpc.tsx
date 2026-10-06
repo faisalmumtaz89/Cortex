@@ -101,7 +101,7 @@ function parseWorkerCommand(): { cmd: string; args: string[]; cwd: string } {
 
   return {
     cmd: process.env.PYTHON || "python3",
-    args: ["-m", "cortex", "--worker-stdio"],
+    args: ["-P", "-m", "cortex", "--worker-stdio"],
     cwd,
   }
 }

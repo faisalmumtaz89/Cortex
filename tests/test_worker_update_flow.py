@@ -225,11 +225,11 @@ def _cortex_release_assets(tag: str, wheel_bytes: bytes) -> tuple[str, dict[str,
     }
 
 
-def _worker_session(env: dict):
+def _worker_session(env: dict, cwd: Path = REPO_ROOT):
     """Spawn a worker; returns (process, send, recv_until, read_events_until)."""
     process = subprocess.Popen(
-        [sys.executable, "-m", "cortex", "--worker-stdio"],
-        cwd=REPO_ROOT,
+        [sys.executable, "-P", "-m", "cortex", "--worker-stdio"],
+        cwd=cwd,
         env=env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -617,6 +617,32 @@ def test_update_cortex_background_flow_end_to_end(tmp_path: Path) -> None:
         finally:
             process.terminate()
             process.wait(timeout=5)
+
+
+def test_self_update_pip_never_imports_modules_from_the_project(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    (project / "pip").mkdir(parents=True)
+    marker = tmp_path / "imported-from-project"
+    (project / "pip" / "__init__.py").write_text("", encoding="utf-8")
+    (project / "pip" / "__main__.py").write_text(
+        f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8"
+    )
+    _wheel_name, assets = _cortex_release_assets("v9.9.9", b"not a real wheel")
+    with _probe_server(lumen_tag="v0.4.0", cortex_tag="v9.9.9", assets=assets) as base:
+        env = _update_stub_env(tmp_path, probe_base=base)
+        env["CORTEX_SELF_INSTALL_KIND"] = "installed"
+        env.pop("CORTEX_SELF_PIP")
+        process, send, recv_until, read_events_until = _worker_session(env, cwd=project)
+        try:
+            session_id = _bootstrap(send, recv_until)
+            send(3, "command.execute", {"session_id": session_id, "command": "/update cortex"})
+            recv_until(3)
+            read_events_until(_final_update_frame)
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+
+    assert not marker.exists()
 
 
 def test_update_cortex_refused_from_source_checkout(tmp_path: Path) -> None:

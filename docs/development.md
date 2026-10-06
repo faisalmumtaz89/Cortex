@@ -65,8 +65,8 @@ Cortex/
 ## Runtime Split
 
 - Frontend: OpenTUI sidecar (`frontend/cortex-tui`), spawned by `cortex`
-- Backend: Python worker (`python -m cortex --worker-stdio`), JSON-RPC 2.0 over stdio
-- Headless: `python -m cortex -p "..."` reuses the worker wiring for one turn
+- Backend: Python worker (`python -P -m cortex --worker-stdio`), JSON-RPC 2.0 over stdio
+- Headless: `python -P -m cortex -p "..."` reuses the worker wiring for one turn
 
 Never print to stdout in worker code — stdout is the JSON-RPC channel. Diagnostics go to stderr or the log file.
 
@@ -86,7 +86,7 @@ Behavioral claims must be validated against the real runtime, not inferred from 
 
 1. **E2E suite** — `tests/test_agent_runtime_e2e.py` spawns the real worker subprocess in a scratch repository and drives full agent turns over JSON-RPC. The model is replaced with a deterministic script (`CORTEX_SCRIPTED_MODEL` pointing at a JSON script file); everything else — orchestrator, tool registry, permission engine, event stream, persistence — runs for real. Assertions check observable effects: files on disk, event sequences, exit codes.
 2. **Full suite** — `python -m pytest tests/ -q` must be green before and after any change.
-3. **Manual verification** — `python -m cortex -p "prompt" --model ...` exercises a real turn end to end.
+3. **Manual verification** — `python -P -m cortex -p "prompt" --model ...` exercises a real turn end to end.
 
 If a change cannot be observed through one of these, add the scenario to the E2E suite first, then make the change.
 

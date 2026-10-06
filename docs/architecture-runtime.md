@@ -3,7 +3,7 @@
 Cortex is split into two processes with a strict protocol boundary:
 
 1. **Frontend** — OpenTUI sidecar (Bun + SolidJS, `frontend/cortex-tui`) owns all terminal rendering. It spawns the worker and reconciles its event stream.
-2. **Backend** — Python worker (`python -m cortex --worker-stdio`) owns models, sessions, and tools.
+2. **Backend** — Python worker (`python -P -m cortex --worker-stdio`) owns models, sessions, and tools.
 
 They communicate over line-delimited JSON-RPC 2.0 on the worker's stdio, plus structured event frames emitted as JSON-RPC notifications. The split enforces a single terminal writer and separates UI concerns from inference/tool execution.
 
@@ -20,7 +20,7 @@ They communicate over line-delimited JSON-RPC 2.0 on the worker's stdio, plus st
 
 ## Headless Mode
 
-`python -m cortex -p "prompt" [--model <selector>] [--full-auto]` (`cortex/app/headless.py`) runs one agent turn through the same `WorkerRuntime` wiring the TUI uses. Assistant text streams to stdout; tool activity and errors go to stderr. Permission policy is rule-based instead of interactive: reads allowed, mutations denied unless `--full-auto`. Exit codes: `0` success, `1` turn error, `2` setup error.
+`cortex -p "prompt" [--model <selector>] [--full-auto]` (`cortex/app/headless.py`) runs one agent turn through the same `WorkerRuntime` wiring the TUI uses. Assistant text streams to stdout; tool activity and errors go to stderr. Permission policy is rule-based instead of interactive: reads allowed, mutations denied unless `--full-auto`. Exit codes: `0` success, `1` turn error, `2` setup error.
 
 ## Agent Turn Flow
 

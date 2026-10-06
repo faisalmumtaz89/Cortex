@@ -2,7 +2,7 @@
 
 ## Worker Transport
 
-- Worker mode: `python -m cortex --worker-stdio`
+- Worker mode: `python -P -m cortex --worker-stdio`
 - Transport: line-delimited JSON-RPC 2.0 frames over stdio
 - Events are emitted as JSON-RPC notifications (`method: "event"`).
 
@@ -53,7 +53,7 @@ Key log dimensions in `~/.cortex/cortex.log`:
 
 ```bash
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"app.handshake","params":{"protocol_version":"1.0.0"}}' \
-| python -m cortex --worker-stdio
+| python -P -m cortex --worker-stdio
 ```
 
 2. Verify stdout purity:
@@ -63,4 +63,4 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"app.handshake","params":{"proto
 
 3. Full turn without a real model: set `CORTEX_SCRIPTED_MODEL` to a JSON script (`{"responses": [...]}`) and drive the worker over stdio — this is exactly what `tests/test_agent_runtime_e2e.py` does, and its `WorkerHarness` is the reference client implementation.
 
-4. One-shot end-to-end check without the TUI: `python -m cortex -p "prompt"` (tool activity on stderr, reply on stdout).
+4. One-shot end-to-end check without the TUI: `python -P -m cortex -p "prompt"` (tool activity on stderr, reply on stdout).

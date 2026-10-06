@@ -44,6 +44,7 @@ class TuiSession:
         home_dir: Path,
         script_path: Path,
         extra_env: dict | None = None,
+        python_flags: str = "",
     ):
         self.name = f"cortex-tui-test-{uuid.uuid4().hex[:8]}"
         env = {
@@ -63,7 +64,7 @@ class TuiSession:
         env_prefix = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
         launch = (
             f"cd {shlex.quote(str(project_dir))} && "
-            f"env {env_prefix} {shlex.quote(sys.executable)} -m cortex"
+            f"env {env_prefix} {shlex.quote(sys.executable)} {python_flags} -m cortex"
         )
         subprocess.run(
             ["tmux", "new-session", "-d", "-s", self.name, "-x", "130", "-y", "40", launch],
@@ -143,11 +144,17 @@ def tui_project(tmp_path: Path):
 
     sessions: list[TuiSession] = []
 
-    def start(responses, *, extra_env: dict | None = None) -> TuiSession:
+    def start(
+        responses, *, extra_env: dict | None = None, python_flags: str = ""
+    ) -> TuiSession:
         script = tmp_path / "script.json"
         script.write_text(json.dumps({"responses": responses}), encoding="utf-8")
         session = TuiSession(
-            project_dir=project, home_dir=home, script_path=script, extra_env=extra_env
+            project_dir=project,
+            home_dir=home,
+            script_path=script,
+            extra_env=extra_env,
+            python_flags=python_flags,
         )
         sessions.append(session)
         return session
@@ -680,6 +687,23 @@ def test_closing_the_terminal_ends_the_tui_and_its_worker(tui_project) -> None:
     while alive() and time.time() < deadline:
         time.sleep(0.25)
     assert not alive(), f"processes outlived their terminal: {sorted(alive())}"
+
+
+def test_worker_never_imports_modules_from_the_project(tui_project) -> None:
+    project, start = tui_project
+    marker = project / "imported-from-project"
+    (project / "yaml.py").write_text(
+        f"open({str(marker)!r}, 'w').close()\nraise SystemExit(3)\n", encoding="utf-8"
+    )
+    # -P keeps the project off the launcher's own sys.path, as the installed
+    # `cortex` script does, so only the worker spawn is under test.
+    session = start([[{"text": "IGNORED"}]], python_flags="-P")
+    session.wait_until(
+        lambda frame: "Session ready" in frame or marker.exists(),
+        description="worker ready or project module imported",
+        timeout=40.0,
+    )
+    assert not marker.exists()
 
 
 def test_slash_palette_esc_clears_input_entirely(tui_project) -> None:

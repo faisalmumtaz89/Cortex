@@ -9,9 +9,9 @@ write_file, bash) inside the user's repository.
 
 - `frontend/cortex-tui/` — OpenTUI (Bun + SolidJS) terminal frontend. It spawns
   the worker and renders its event stream.
-- `python -m cortex --worker-stdio` — Python worker: JSON-RPC 2.0, one frame
+- `python -P -m cortex --worker-stdio` — Python worker: JSON-RPC 2.0, one frame
   per line on stdio. Entry: `cortex/__main__.py` → `cortex/app/worker_runtime.py`.
-- `python -m cortex -p "..."` — headless single turn through the same worker
+- `python -P -m cortex -p "..."` — headless single turn through the same worker
   wiring (`cortex/app/headless.py`).
 
 Key packages: `cortex/app/` (services), `cortex/tooling/` (agent loop, tools,
@@ -35,7 +35,7 @@ from reading code. The empirical gates, in order of authority:
    rebuild the sidecar first (`cd frontend/cortex-tui && bun run build`).
 3. The full suite: `.venv/bin/python -m pytest tests/ -q` — must be green
    before and after any change.
-4. For manual verification: `python -m cortex -p "prompt" --model ...`
+4. For manual verification: `python -P -m cortex -p "prompt" --model ...`
    exercises a real turn end to end and prints it.
 
 If a change cannot be observed through one of these, add the scenario to the

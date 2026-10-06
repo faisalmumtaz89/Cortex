@@ -5,7 +5,7 @@
 Cortex uses a split runtime:
 
 - `cortex` launches an OpenTUI frontend sidecar (terminal renderer)
-- the frontend talks to the Python backend worker (`python -m cortex --worker-stdio`) over JSON-RPC
+- the frontend talks to the Python backend worker (`python -P -m cortex --worker-stdio`) over JSON-RPC
 - `cortex -p "..."` runs one headless agent turn through the same worker wiring
 
 **Available slash commands:**
@@ -45,7 +45,7 @@ npm install
 3. Verify the worker path manually:
 
 ```bash
-python -m cortex --worker-stdio
+python -P -m cortex --worker-stdio
 ```
 
 If the worker handshake fails, check protocol version compatibility between frontend and backend (`1.0.0`). See `docs/protocol-debugging.md`.

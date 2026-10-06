@@ -146,7 +146,7 @@ def test_build_worker_env_strips_otui_environment_by_default(monkeypatch) -> Non
     assert "OTUI_NO_NATIVE_RENDER" not in env
     assert "OTUI_DEBUG" not in env
     assert "OTUI_OVERRIDE_STDOUT" not in env
-    assert env["CORTEX_WORKER_ARGS"] == "-m cortex --worker-stdio"
+    assert env["CORTEX_WORKER_ARGS"] == "-P -m cortex --worker-stdio"
 
 
 def test_build_worker_env_can_preserve_otui_environment_for_debugging(monkeypatch) -> None:
