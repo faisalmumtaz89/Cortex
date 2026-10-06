@@ -345,8 +345,8 @@ class ModelService:
                 return {
                     "ok": False,
                     "message": (
-                        "Azure OpenAI endpoint not configured. Set AZURE_OPENAI_ENDPOINT "
-                        "or cloud_azure_endpoint in config.yaml, then re-select the model."
+                        "Azure OpenAI endpoint not configured. Set AZURE_OPENAI_ENDPOINT or "
+                        "cloud_azure_endpoint in ~/.cortex/config.yaml, then re-select the model."
                     ),
                 }
             # Persist so later sessions work without the env var.
@@ -360,7 +360,7 @@ class ModelService:
                     "message": (
                         "OpenAI-compatible base URL not configured. Set "
                         "OPENAI_COMPATIBLE_BASE_URL or cloud_openai_compatible_base_url in "
-                        "config.yaml, then re-select the model."
+                        "~/.cortex/config.yaml, then re-select the model."
                     ),
                 }
             self.config.set_state_value("openai_compatible_base_url", base_url)

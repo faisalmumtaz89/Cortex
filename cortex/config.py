@@ -182,7 +182,7 @@ class Config:
 
     def __init__(self, config_path: Optional[Path] = None):
         """Initialize configuration."""
-        self.config_path = config_path or Path("config.yaml")
+        self.config_path = config_path or Path.home() / ".cortex" / "config.yaml"
         self._raw_config: Dict[str, Any] = {}
         self._state: Dict[str, Any] = {}
 

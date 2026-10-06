@@ -10,13 +10,13 @@
 
 ## Overview
 
-Cortex reads configuration from `config.yaml` in the directory it starts in. The file uses a flat key structure (no nested sections) and **every key is optional** — anything omitted falls back to the defaults in `cortex/config.py`. The repository's `config.yaml` is a commented template of the most useful keys.
+Cortex reads configuration from `~/.cortex/config.yaml`. It never reads a `config.yaml` from the project it runs in, so a cloned repository's `config.yaml` cannot change Cortex's settings, such as where requests and API keys are sent. The file uses a flat key structure (no nested sections) and **every key is optional** — anything omitted falls back to the defaults in `cortex/config.py`. The `config.yaml` at the root of the Cortex repository is a commented template of the most useful keys.
 
 Any flat key can also be overridden with a `CORTEX_<KEY>` environment variable (values parsed as YAML): `CORTEX_TOOLS_MAX_ITERATIONS=80` overrides `tools_max_iterations`, `CORTEX_TOOLS_ENABLED=false` disables tooling. Env overrides beat `config.yaml`. Unknown `CORTEX_*` variables are ignored.
 
 Files Cortex writes outside the project:
 
-- `~/.cortex/state.yaml` — runtime state such as `last_used_model` and the last-used backend, kept out of `config.yaml` so switching models does not pollute git diffs.
+- `~/.cortex/state.yaml` — runtime state such as `last_used_model` and the last-used backend, kept separate from `config.yaml` so Cortex never rewrites your configuration.
 - `~/.cortex/tool_permissions.yaml` — persisted "Allow always" tool permission rules.
 - `~/.cortex/cloud_models.json` — optional additions to the cloud model catalog.
 
@@ -131,4 +131,4 @@ Accepted for compatibility; mostly advisory in the OpenTUI runtime: `ui_theme`, 
 
 - `config.yaml` is flat; do not add nested sections like `gpu:` or `inference:`.
 - Malformed tooling values are normalized rather than fatal (e.g. `tools_profile: readonly` → `read_only`, booleans coerced).
-- To reset to defaults, remove `config.yaml` and restart Cortex.
+- To reset to defaults, remove `~/.cortex/config.yaml` and restart Cortex.

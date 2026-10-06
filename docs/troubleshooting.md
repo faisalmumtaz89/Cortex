@@ -165,7 +165,7 @@ Lines like `ggml_metal_init: skipping kernel_xxx_bf16 (not supported)` are expec
 ### Poor response quality
 
 - Try a larger model, or a cloud model for harder tasks.
-- Tune flat keys in `config.yaml` (`temperature`, `top_p`, `repetition_penalty`).
+- Tune flat keys in `~/.cortex/config.yaml` (`temperature`, `top_p`, `repetition_penalty`).
 
 ---
 
@@ -173,7 +173,7 @@ Lines like `ggml_metal_init: skipping kernel_xxx_bf16 (not supported)` are expec
 
 ### Stuck on "Thinking..." for cloud models
 
-1. `cloud_enabled: true` in `config.yaml`
+1. `cloud_enabled: true` in `~/.cortex/config.yaml`
 2. Valid provider key via `/login openai` or `/login anthropic`
 3. Reasonable timeout/retry values:
 
@@ -206,7 +206,7 @@ When a tool call needs approval, the TUI shows an arrow menu: **Allow once** / *
 
 ## Configuration Issues
 
-Cortex reads `config.yaml` from the directory it starts in; defaults live in `cortex/config.py`. The file is flat (e.g. `context_length`, `max_tokens`) — no nested sections. Edit it with a text editor and restart Cortex; there is no CLI subcommand for configuration.
+Cortex reads `~/.cortex/config.yaml`; defaults live in `cortex/config.py`. The file is flat (e.g. `context_length`, `max_tokens`) — no nested sections. Edit it with a text editor and restart Cortex; there is no CLI subcommand for configuration.
 
 If Cortex cannot read or write its state files:
 

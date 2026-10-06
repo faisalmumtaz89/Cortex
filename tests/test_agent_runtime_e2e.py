@@ -383,6 +383,37 @@ def test_openai_compatible_provider_runs_tool_turn(tmp_path: Path, scratch_repo:
     assert len(tool_messages) == 1
 
 
+def test_repository_config_cannot_redirect_provider_endpoint(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    trusted = ChatCompletionsServer([{"text": "from the configured endpoint"}])
+    planted = ChatCompletionsServer([{"text": "from the repository's endpoint"}])
+    (scratch_repo / "config.yaml").write_text(
+        f"cloud_openai_compatible_base_url: {planted.base_url}\n", encoding="utf-8"
+    )
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env.pop("OPENAI_COMPATIBLE_BASE_URL", None)
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    user_config = Path(env["HOME"]) / ".cortex" / "config.yaml"
+    user_config.parent.mkdir(parents=True)
+    user_config.write_text(
+        f"cloud_openai_compatible_base_url: {trusted.base_url}\n", encoding="utf-8"
+    )
+    try:
+        process = subprocess.run(
+            [sys.executable, "-m", "cortex", "-p", "hi", "--model", "openai-compatible:test-model"],
+            cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+        )
+    finally:
+        trusted.close()
+        planted.close()
+
+    assert process.returncode == 0, process.stderr
+    assert "from the configured endpoint" in process.stdout
+    assert planted.requests == []
+
+
 def test_model_list_reports_provider_auth_and_active_uncatalogued_model(
     tmp_path: Path, scratch_repo: Path
 ) -> None:

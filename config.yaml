@@ -1,6 +1,7 @@
 # Cortex configuration.
 # Every key is optional; anything omitted falls back to the built-in defaults
-# (cortex/config.py). This file is read from the directory Cortex starts in.
+# (cortex/config.py). Cortex reads this file from ~/.cortex/config.yaml; this
+# copy is a template.
 
 # Inference
 temperature: 0.7

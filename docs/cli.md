@@ -99,13 +99,13 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `AZURE_OPENAI_API_KEY` environment
 variables are used as fallbacks. Azure additionally requires the resource
 endpoint via `AZURE_OPENAI_ENDPOINT` (or `cloud_azure_endpoint` in
-`config.yaml`); Azure model ids are your deployment names, selected as
+`~/.cortex/config.yaml`); Azure model ids are your deployment names, selected as
 `/model azure:<deployment>` (e.g. `azure:gpt-5.5`).
 
 Any other endpoint that serves the OpenAI Chat Completions API (DeepSeek,
 OpenRouter, vLLM, and similar) is reached through the `openai-compatible`
 provider. Set its base URL via `OPENAI_COMPATIBLE_BASE_URL` (or
-`cloud_openai_compatible_base_url` in `config.yaml`), provide the key with
+`cloud_openai_compatible_base_url` in `~/.cortex/config.yaml`), provide the key with
 `/login openai-compatible <api_key>` or `OPENAI_COMPATIBLE_API_KEY`, and select
 the model as `/model openai-compatible:<model>`.
 
@@ -137,4 +137,4 @@ Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds 
 
 ## Configuration
 
-Cortex reads an optional `config.yaml` from the directory it starts in. Common keys: `model_path`, `default_model`, `temperature`, `max_tokens`, `tools_profile`. See the [Configuration Guide](configuration.md).
+Cortex reads an optional `~/.cortex/config.yaml`. Common keys: `model_path`, `default_model`, `temperature`, `max_tokens`, `tools_profile`. See the [Configuration Guide](configuration.md).

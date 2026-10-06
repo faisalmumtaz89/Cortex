@@ -104,7 +104,7 @@ Local models are downloaded and managed by the Lumen engine (`/model` lists what
 /model openai:gpt-5.1
 ```
 
-**Default model (optional)** — edit `config.yaml` in the directory you run Cortex from:
+**Default model (optional)** — edit `~/.cortex/config.yaml`:
 
 ```yaml
 default_model: Nanbeige4.1-3B-bf16
@@ -115,7 +115,7 @@ Cortex also remembers the last loaded model across restarts (`~/.cortex/state.ya
 
 ## Upgrading
 
-Cortex checks once a day (in the background, never blocking startup) whether a newer Cortex or Lumen release exists and posts a one-line notice at session start when one does. Opt out with `auto_update_check: false` in `config.yaml`.
+Cortex checks once a day (in the background, never blocking startup) whether a newer Cortex or Lumen release exists and posts a one-line notice at session start when one does. Opt out with `auto_update_check: false` in `~/.cortex/config.yaml`.
 
 **Cortex:**
 
