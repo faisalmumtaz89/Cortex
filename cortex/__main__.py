@@ -8,25 +8,6 @@ import sys
 from io import TextIOBase
 from typing import Any
 
-# Disable multiprocessing resource tracking before any imports that might use it.
-# This prevents semaphore leak warnings from HuggingFace tokenizer internals.
-os.environ["PYTHONWARNINGS"] = "ignore::UserWarning:multiprocessing.resource_tracker"
-
-# Monkey-patch resource tracker before it's used by subprocess-heavy libs.
-try:
-    from multiprocessing import resource_tracker
-
-    def _dummy_register(*args, **kwargs):
-        return None
-
-    def _dummy_unregister(*args, **kwargs):
-        return None
-
-    resource_tracker.register = _dummy_register
-    resource_tracker.unregister = _dummy_unregister
-except ImportError:
-    pass
-
 from cortex.ui_runtime.launcher import launch_tui
 
 

@@ -323,6 +323,32 @@ def test_headless_full_auto_executes_bash(tmp_path: Path, scratch_repo: Path) ->
     assert (scratch_repo / "created.txt").exists()
 
 
+def test_bash_commands_inherit_no_worker_warning_filters(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    # Warning filters change how the user's own tooling behaves (pytest stops capturing
+    # DeprecationWarning when sys.warnoptions is non-empty), so commands must see none from Cortex.
+    command = f'"{sys.executable}" -c "import sys; print(sys.warnoptions)" > warnoptions.txt'
+    script = _write_script(
+        tmp_path / "script.json",
+        [
+            [
+                {"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+                {"text": "Recorded the warning options."},
+            ]
+        ],
+    )
+    env = _worker_env(tmp_path, script)
+    env.pop("PYTHONWARNINGS", None)
+    env.pop("PYTHONDEVMODE", None)
+    process = _run_headless(
+        cwd=scratch_repo, env=env, prompt="record the warning options", extra_args=["--full-auto"]
+    )
+
+    assert process.returncode == 0, process.stderr
+    assert (scratch_repo / "warnoptions.txt").read_text(encoding="utf-8").strip() == "[]"
+
+
 def test_headless_default_denies_writes(tmp_path: Path, scratch_repo: Path) -> None:
     script = _write_script(
         tmp_path / "script.json",
