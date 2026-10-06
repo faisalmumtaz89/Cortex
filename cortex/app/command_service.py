@@ -12,7 +12,7 @@ from cortex.app.command_output import format_auth_status, format_gpu_status, for
 from cortex.cloud.types import CloudProvider
 from cortex.lumen_runtime import LumenModel
 
-_CLOUD_LOGIN_PROVIDERS = {"openai", "anthropic", "azure"}
+_CLOUD_LOGIN_PROVIDERS = {"openai", "anthropic", "azure", "openai-compatible"}
 
 
 class CommandService:
@@ -540,7 +540,7 @@ class CommandService:
             if not args:
                 return {
                     "ok": False,
-                    "message": "Usage: /login openai|anthropic|azure [api_key]",
+                    "message": "Usage: /login openai|anthropic|azure|openai-compatible [api_key]",
                 }
             login_parts = args.split(maxsplit=1)
             provider_name = login_parts[0].strip().lower()
@@ -555,7 +555,7 @@ class CommandService:
                     "ok": False,
                     "message": (
                         "Unsupported provider. Use /login openai, /login anthropic, "
-                        "or /login azure."
+                        "/login azure, or /login openai-compatible."
                     ),
                 }
             provider = CloudProvider.from_value(provider_name)

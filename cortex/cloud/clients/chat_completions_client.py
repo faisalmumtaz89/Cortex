@@ -1,10 +1,8 @@
-"""Client for the managed local Lumen server (OpenAI Chat Completions wire).
+"""Client for any endpoint that serves the OpenAI Chat Completions API.
 
-Lumen implements `/v1/chat/completions` with SSE streaming and native tool
-calls (verified against lumen v0.2.0/v0.3.0). The cloud OpenAI client speaks
-the newer Responses API, which Lumen does not serve, so local turns use this
-dedicated client. It emits the same normalized event stream as the cloud
-clients (TextDeltaEvent / ToolCallEvent / ToolResultEvent / FinishEvent).
+Streams `/chat/completions` over SSE with native tool calls and runs the tool
+loop locally. It emits the same normalized event stream as the other clients
+(TextDeltaEvent / ToolCallEvent / ToolResultEvent / FinishEvent).
 """
 
 from __future__ import annotations
@@ -27,24 +25,29 @@ from cortex.tooling.types import (
 logger = logging.getLogger(__name__)
 
 
-class LumenClient:
-    """OpenAI-compatible chat client bound to the local lumen-server."""
+class ChatCompletionsClient:
+    """Chat Completions client bound to one base URL."""
 
-    def __init__(self, *, base_url: str, timeout_seconds: int = 600):
+    def __init__(self, *, base_url: str, api_key: str, timeout_seconds: int):
         self.base_url = base_url
-        self.client = OpenAI(api_key="lumen", base_url=base_url, timeout=timeout_seconds)
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds)
 
     def _provenance(self, reported_model: str, response_id: str) -> Dict[str, object]:
         """Response-side identity proof for post-turn verification."""
         return {
-            "client_kind": "lumen",
+            "client_kind": "chat_completions",
             "reported_model": reported_model,
             "response_id": response_id[:40],
             "endpoint": self.base_url,
         }
 
     def validate_key(self) -> Tuple[bool, str]:
-        return True, "local"
+        """Validate API key using a low-cost API call."""
+        try:
+            self.client.models.list()
+            return True, "API key is valid."
+        except Exception as exc:
+            return False, f"Authentication failed: {exc}"
 
     @staticmethod
     def _serialize_tools(tools) -> List[Dict[str, object]]:
@@ -84,7 +87,7 @@ class LumenClient:
         temperature: float,
         top_p: float,
         tools=None,
-        tool_choice: str = "auto",  # accepted for interface parity; Lumen is always auto
+        tool_choice: str = "auto",
         tool_executor=None,
         max_tool_iterations: int = 8,
     ):
@@ -105,8 +108,6 @@ class LumenClient:
                 "stream": True,
             }
             if use_tools:
-                # Lumen's strict wire schema accepts `tools` but rejects
-                # `tool_choice` (400 unknown_field) — auto is its behavior.
                 kwargs["tools"] = serialized_tools
 
             stream = self.client.chat.completions.create(**cast(Any, kwargs))
@@ -195,4 +196,4 @@ class LumenClient:
                     }
                 )
 
-        raise RuntimeError("Lumen tool loop exceeded max iterations")
+        raise RuntimeError("Chat Completions tool loop exceeded max iterations")

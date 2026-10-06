@@ -18,6 +18,7 @@ context_length: 8192
 cloud_default_openai_model: gpt-5.1
 cloud_default_anthropic_model: claude-sonnet-4-5
 # cloud_azure_endpoint: https://<resource>.cognitiveservices.azure.com
+# cloud_openai_compatible_base_url: https://<host>/v1
 
 # Agent tooling
 tools_enabled: true

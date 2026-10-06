@@ -13,6 +13,7 @@ class CloudProvider(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     AZURE = "azure"
+    OPENAI_COMPATIBLE = "openai-compatible"
     # Internal provider for the managed local Lumen server (OpenAI-compatible).
     # Not a login target and never listed in the cloud catalog.
     LUMEN = "lumen"

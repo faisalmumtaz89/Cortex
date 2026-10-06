@@ -9,7 +9,7 @@ import threading
 import uuid
 from typing import Callable, Dict, Iterable, Optional, Tuple
 
-from cortex.cloud.clients import AnthropicClient, LumenClient, OpenAIClient
+from cortex.cloud.clients import AnthropicClient, ChatCompletionsClient, OpenAIClient
 from cortex.cloud.credentials import ENV_KEY_MAP, CloudCredentialStore
 from cortex.cloud.types import CloudModelRef, CloudProvider
 from cortex.tooling.types import FinishEvent, TextDeltaEvent
@@ -39,17 +39,29 @@ class CloudRouter:
         retries = int(getattr(cloud_cfg, "cloud_max_retries", 2))
         return max(0, retries)
 
-    def _azure_endpoint(self) -> str:
-        """Azure resource endpoint: env, then config, then persisted state."""
-        endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip()
-        if not endpoint:
+    def _configured_url(self, env_name: str, config_key: str, state_key: str) -> str:
+        """A provider URL from the environment, then config.yaml, then persisted state."""
+        url = os.environ.get(env_name, "").strip()
+        if not url:
             cloud_cfg = getattr(self.config, "cloud", None)
-            endpoint = str(getattr(cloud_cfg, "cloud_azure_endpoint", "") or "").strip()
-        if not endpoint:
+            url = str(getattr(cloud_cfg, config_key, "") or "").strip()
+        if not url:
             get_state = getattr(self.config, "get_state_value", None)
             if callable(get_state):
-                endpoint = str(get_state("azure_endpoint", "") or "").strip()
-        return endpoint.rstrip("/")
+                url = str(get_state(state_key, "") or "").strip()
+        return url.rstrip("/")
+
+    def _azure_endpoint(self) -> str:
+        """Azure resource endpoint."""
+        return self._configured_url("AZURE_OPENAI_ENDPOINT", "cloud_azure_endpoint", "azure_endpoint")
+
+    def openai_compatible_base_url(self) -> str:
+        """Base URL of the OpenAI-compatible endpoint."""
+        return self._configured_url(
+            "OPENAI_COMPATIBLE_BASE_URL",
+            "cloud_openai_compatible_base_url",
+            "openai_compatible_base_url",
+        )
 
     def _build_client(self, provider: CloudProvider, api_key: str):
         timeout_seconds = self._timeout_seconds()
@@ -69,16 +81,27 @@ class CloudRouter:
                 timeout_seconds=timeout_seconds,
                 base_url=f"{endpoint}/openai/v1/",
             )
-        if provider == CloudProvider.LUMEN:
-            base_url = self.lumen_base_url() if self.lumen_base_url else None
+        if provider == CloudProvider.OPENAI_COMPATIBLE:
+            base_url = self.openai_compatible_base_url()
             if not base_url:
+                raise RuntimeError(
+                    "OpenAI-compatible base URL not configured. Set OPENAI_COMPATIBLE_BASE_URL "
+                    "or cloud_openai_compatible_base_url in config.yaml."
+                )
+            return ChatCompletionsClient(
+                base_url=base_url, api_key=api_key, timeout_seconds=timeout_seconds
+            )
+        if provider == CloudProvider.LUMEN:
+            lumen_url = self.lumen_base_url() if self.lumen_base_url else None
+            if not lumen_url:
                 raise RuntimeError(
                     "Lumen server is not running. Select a local model with /model first."
                 )
-            # Lumen speaks Chat Completions (not the Responses API), so it gets
-            # its own client. Generation timeout is generous: local decode of a
-            # long answer legitimately takes minutes on big prompts.
-            return LumenClient(base_url=base_url, timeout_seconds=max(600, timeout_seconds))
+            # Generation timeout is generous: local decode of a long answer
+            # legitimately takes minutes on big prompts.
+            return ChatCompletionsClient(
+                base_url=lumen_url, api_key="lumen", timeout_seconds=max(600, timeout_seconds)
+            )
         if provider == CloudProvider.ANTHROPIC:
             return AnthropicClient(api_key=api_key, timeout_seconds=timeout_seconds)
         raise ValueError(f"Unsupported cloud provider: {provider}")

@@ -312,6 +312,8 @@ class ToolingOrchestrator:
             runtime = self.cli.lumen_runtime
             expected_endpoint = runtime.base_url()
             lumen_ready = bool(runtime.status().get("ready"))
+        elif model_ref.provider == CloudProvider.OPENAI_COMPATIBLE:
+            expected_endpoint = self.cli.cloud_router.openai_compatible_base_url()
 
         verdict = verify_turn_provenance(
             provider=model_ref.provider,

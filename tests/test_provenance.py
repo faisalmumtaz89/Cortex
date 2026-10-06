@@ -22,7 +22,7 @@ LUMEN_ENDPOINT = "http://127.0.0.1:8399/v1"
 
 def _lumen_provenance(model: str = "qwen3-5-9b", endpoint: str = LUMEN_ENDPOINT) -> dict:
     return {
-        "client_kind": "lumen",
+        "client_kind": "chat_completions",
         "reported_model": model,
         "response_id": "chatcmpl-lumen-1",
         "endpoint": endpoint,
@@ -250,6 +250,29 @@ def test_azure_binds_identity_via_client_not_deployment_name() -> None:
         },
     )
     assert not empty.ok
+
+
+def test_openai_compatible_binds_identity_via_client_and_configured_endpoint() -> None:
+    def verdict(*, kind="chat_completions", model="org/model", endpoint="https://gw.example/v1"):
+        return verify_turn_provenance(
+            provider=CloudProvider.OPENAI_COMPATIBLE,
+            requested_model="model",
+            provenance={
+                "client_kind": kind,
+                "reported_model": model,
+                "response_id": "chatcmpl-1",
+                "endpoint": endpoint,
+            },
+            expected_endpoint="https://gw.example/v1",
+        )
+
+    # Gateways rename models, so a different reported name passes.
+    assert verdict().ok
+    assert not verdict(model="").ok
+    assert not verdict(kind="openai").ok
+    mismatch = verdict(endpoint="https://other.example/v1")
+    assert not mismatch.ok
+    assert "configured endpoint" in mismatch.reason
 
 
 def test_scripted_passes_but_is_flagged() -> None:

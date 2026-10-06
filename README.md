@@ -2,7 +2,7 @@
 
 ![Cortex demo](demo.gif)
 
-Cortex is an agentic coding tool that lives in your terminal. It reads, searches, and edits your code, runs commands, and shows every change as a reviewable diff — powered by local models running GPU-resident on your Mac through the [Lumen](https://github.com/faisalmumtaz89/Lumen) inference engine, with optional cloud models from OpenAI, Anthropic, and Azure OpenAI.
+Cortex is an agentic coding tool that lives in your terminal. It reads, searches, and edits your code, runs commands, and shows every change as a reviewable diff — powered by local models running GPU-resident on your Mac through the [Lumen](https://github.com/faisalmumtaz89/Lumen) inference engine, with optional cloud models from OpenAI, Anthropic, Azure OpenAI, and any OpenAI-compatible endpoint.
 
 Requires an Apple Silicon Mac (M1–M4), macOS 13.3+, Python 3.11+, and Xcode Command Line Tools.
 
@@ -24,7 +24,7 @@ Requires an Apple Silicon Mac (M1–M4), macOS 13.3+, Python 3.11+, and Xcode Co
 3. Pick a model with `/model`:
 
    - **Local** — Qwen3.5 / 3.6 / 3.8 models served by Lumen. Selecting one downloads and loads it automatically; Cortex manages the server for you.
-   - **Cloud** — `/login openai <api_key>` (or `anthropic` / `azure`), or set the provider's environment key.
+   - **Cloud** — `/login openai <api_key>` (or `anthropic` / `azure` / `openai-compatible`), or set the provider's environment key.
 
 4. Describe what you want done. Cortex reads `AGENTS.md` (or `CLAUDE.md`) from your project, so your conventions travel with the agent.
 

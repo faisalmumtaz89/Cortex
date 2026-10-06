@@ -35,6 +35,7 @@ context_length: 8192
 cloud_default_openai_model: gpt-5.1
 cloud_default_anthropic_model: claude-sonnet-4-5
 # cloud_azure_endpoint: https://<resource>.cognitiveservices.azure.com
+# cloud_openai_compatible_base_url: https://<host>/v1
 
 # Agent tooling
 tools_enabled: true
@@ -86,6 +87,7 @@ log_file: ~/.cortex/cortex.log
 - `cloud_default_openai_model` (default: `gpt-5.1`)
 - `cloud_default_anthropic_model` (default: `claude-sonnet-4-5`)
 - `cloud_azure_endpoint` (default: empty) — Azure OpenAI resource endpoint; `AZURE_OPENAI_ENDPOINT` env var takes precedence. Azure model ids are deployment names (`azure:<deployment>`).
+- `cloud_openai_compatible_base_url` (default: empty) — base URL of an endpoint that serves the OpenAI Chat Completions API, used by `openai-compatible:<model>`; `OPENAI_COMPATIBLE_BASE_URL` env var takes precedence.
 
 ### Performance
 

@@ -713,6 +713,25 @@ def test_slash_palette_login_masks_api_key(tui_project) -> None:
     assert "****" in result
 
 
+def test_login_picker_shows_each_provider_auth_status(tui_project) -> None:
+    project, start = tui_project
+    session = start(
+        [[{"text": "IGNORED"}]], extra_env={"OPENAI_COMPATIBLE_API_KEY": "sk-compatible-test"}
+    )
+    session.wait_for("Session ready")
+
+    session.send_key("/login")
+    time.sleep(1)
+    session.send_key("Enter")
+    picker = session.wait_for("Log in to a provider", timeout=10)
+
+    def row(provider: str) -> str:
+        return next(line for line in picker.splitlines() if f" {provider} " in line)
+
+    assert "logged in" in row("openai-compatible"), picker
+    assert "not configured" in row("anthropic"), picker
+
+
 def test_bare_login_opens_provider_picker_and_prefills_key_prompt(tui_project) -> None:
     project, start = tui_project
     session = start([[{"text": "IGNORED"}]])

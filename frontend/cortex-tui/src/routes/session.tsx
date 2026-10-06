@@ -368,14 +368,13 @@ export function SessionRoute(props: {
     provider: string
     tag?: SelectionTag
   }
-  const LOGIN_PROVIDERS = ["openai", "anthropic", "azure"] as const
+  const LOGIN_PROVIDERS = ["openai", "anthropic", "azure", "openai-compatible"] as const
   const [loginPickerOpen, setLoginPickerOpen] = createSignal(false)
   const [loginPickerIndex, setLoginPickerIndex] = createSignal(0)
 
   const loginPickerEntries = createMemo<LoginEntry[]>(() =>
     LOGIN_PROVIDERS.map((provider) => {
-      // Auth status flows from model.list's cloud rows (authenticated + source).
-      const row = store.state.models.cloud.find(
+      const row = store.state.models.providers.find(
         (item) => String(item.provider ?? "").trim() === provider,
       )
       const authenticated = Boolean(row?.authenticated)
@@ -1130,7 +1129,7 @@ export function SessionRoute(props: {
             emptyLabel={
               modelPickerTab() === "local"
                 ? "No local models — Lumen not detected. Tab for cloud."
-                : "No cloud models — /login openai|anthropic|azure. Tab for local."
+                : "No cloud models — /login openai|anthropic|azure|openai-compatible. Tab for local."
             }
           />
         </Show>

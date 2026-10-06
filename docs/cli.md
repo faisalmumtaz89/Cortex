@@ -57,7 +57,7 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 | `/download <model[:quant]>` | Download a local model via Lumen |
 | `/setup` | Load the first available local model if none is active |
 | `/benchmark [tokens] [--prompt <text>]` | Performance test (local models only) |
-| `/login <provider> [api_key]` | Manage OpenAI/Anthropic/Azure credentials |
+| `/login <provider> [api_key]` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials |
 | `/update [lumen\|cortex]` | Show installed vs latest versions, or update the Lumen engine / Cortex itself |
 | `/clear` | Clear conversation history |
 | `/save` | Save the conversation as JSON |
@@ -89,9 +89,10 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 ### `/login` — credentials
 
 ```bash
-/login openai <api_key>       # validate and store an OpenAI key
-/login anthropic <api_key>    # validate and store an Anthropic key
+/login openai <api_key>       # store an OpenAI key
+/login anthropic <api_key>    # store an Anthropic key
 /login azure <api_key>        # store an Azure OpenAI key
+/login openai-compatible <api_key>  # store a key for an OpenAI-compatible endpoint
 /login openai                 # show auth status for a provider
 ```
 
@@ -100,6 +101,13 @@ variables are used as fallbacks. Azure additionally requires the resource
 endpoint via `AZURE_OPENAI_ENDPOINT` (or `cloud_azure_endpoint` in
 `config.yaml`); Azure model ids are your deployment names, selected as
 `/model azure:<deployment>` (e.g. `azure:gpt-5.5`).
+
+Any other endpoint that serves the OpenAI Chat Completions API (DeepSeek,
+OpenRouter, vLLM, and similar) is reached through the `openai-compatible`
+provider. Set its base URL via `OPENAI_COMPATIBLE_BASE_URL` (or
+`cloud_openai_compatible_base_url` in `config.yaml`), provide the key with
+`/login openai-compatible <api_key>` or `OPENAI_COMPATIBLE_API_KEY`, and select
+the model as `/model openai-compatible:<model>`.
 
 
 ### `/benchmark` — local performance test

@@ -160,7 +160,11 @@ type State = {
   commandInFlight: boolean
   commandResult?: { command: string; ok: boolean; text: string; background?: boolean }
   // Full model lists (for the interactive /model picker) + permission-menu highlight.
-  models: { local: Record<string, unknown>[]; cloud: Record<string, unknown>[] }
+  models: {
+    local: Record<string, unknown>[]
+    cloud: Record<string, unknown>[]
+    providers: Record<string, unknown>[]
+  }
   // Selector of the local model currently downloading in the background (drives
   // the picker's "downloading…" tag); cleared on the final progress frame.
   activeDownloadRepoId?: string
@@ -188,7 +192,7 @@ function freshState(): State {
     lastInterrupted: false,
     paletteOpen: false,
     commandInFlight: false,
-    models: { local: [], cloud: [] },
+    models: { local: [], cloud: [], providers: [] },
     activeDownloadRepoId: undefined,
     activeLoadSelector: undefined,
     permissionChoiceIndex: 0,
@@ -803,6 +807,7 @@ export function createSessionStore() {
 
     const localRaw = Array.isArray(payload.local) ? payload.local : []
     const cloudRaw = Array.isArray(payload.cloud) ? payload.cloud : []
+    const providersRaw = Array.isArray(payload.providers) ? payload.providers : []
     const firstLocalEntry = localRaw.find(
       (item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).name === "string",
     ) as Record<string, unknown> | undefined
@@ -828,7 +833,11 @@ export function createSessionStore() {
       setState("activeBackend", activeLabel === "No model loaded" ? undefined : activeBackend)
       setState("localModelCount", localRaw.length)
       setState("firstLocalModelName", firstLocalName && firstLocalName.length > 0 ? firstLocalName : undefined)
-      setState("models", { local: asRecords(localRaw), cloud: asRecords(cloudRaw) })
+      setState("models", {
+        local: asRecords(localRaw),
+        cloud: asRecords(cloudRaw),
+        providers: asRecords(providersRaw),
+      })
     })
   }
 

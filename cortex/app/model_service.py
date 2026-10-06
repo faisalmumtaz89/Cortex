@@ -7,9 +7,10 @@ process, and generation reaches it through the OpenAI-compatible endpoint.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from cortex.cloud import CloudCredentialStore, CloudModelCatalog, CloudRouter
+from cortex.cloud.credentials import ENV_KEY_MAP
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
 from cortex.lumen_runtime import LumenModel, LumenRuntime, parse_selector
 
@@ -150,9 +151,18 @@ class ModelService:
                 }
             )
 
+        auth: Dict[CloudProvider, Tuple[bool, Optional[str]]] = {
+            provider: self.cloud_router.get_auth_status(provider)
+            for provider in CloudProvider
+            if provider != CloudProvider.LUMEN
+        }
+        refs = self.cloud_catalog.list_models()
+        active_ref = self.active_target.cloud_model
+        if active_ref is not None and active_ref not in refs:
+            refs.append(active_ref)
         cloud = []
-        for ref in self.cloud_catalog.list_models():
-            is_auth, source = self.cloud_router.get_auth_status(ref.provider)
+        for ref in refs:
+            is_auth, source = auth[ref.provider]
             cloud.append(
                 {
                     "provider": ref.provider.value,
@@ -186,6 +196,10 @@ class ModelService:
             },
             "local": local,
             "cloud": cloud,
+            "providers": [
+                {"provider": provider.value, "authenticated": bool(is_auth), "auth_source": source}
+                for provider, (is_auth, source) in auth.items()
+            ],
         }
 
     # ---- status -----------------------------------------------------------
@@ -320,7 +334,8 @@ class ModelService:
                 "ok": False,
                 "message": (
                     f"{provider_enum.value} is not authenticated. "
-                    f"Run /login {provider_enum.value} <api_key>."
+                    f"Run /login {provider_enum.value} <api_key> or set "
+                    f"{ENV_KEY_MAP[provider_enum]}."
                 ),
             }
 
@@ -336,6 +351,19 @@ class ModelService:
                 }
             # Persist so later sessions work without the env var.
             self.config.set_state_value("azure_endpoint", endpoint)
+
+        if provider_enum == CloudProvider.OPENAI_COMPATIBLE:
+            base_url = self.cloud_router.openai_compatible_base_url()
+            if not base_url:
+                return {
+                    "ok": False,
+                    "message": (
+                        "OpenAI-compatible base URL not configured. Set "
+                        "OPENAI_COMPATIBLE_BASE_URL or cloud_openai_compatible_base_url in "
+                        "config.yaml, then re-select the model."
+                    ),
+                }
+            self.config.set_state_value("openai_compatible_base_url", base_url)
 
         ref = CloudModelRef(provider=provider_enum, model_id=normalized_model_id)
         self.active_target = ActiveModelTarget.cloud(ref)

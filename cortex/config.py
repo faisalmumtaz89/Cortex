@@ -94,6 +94,7 @@ class CloudConfig(BaseModel):
     cloud_default_openai_model: str = Field(default="gpt-5.5")
     cloud_default_anthropic_model: str = Field(default="claude-fable-5")
     cloud_azure_endpoint: str = Field(default="")
+    cloud_openai_compatible_base_url: str = Field(default="")
 
 
 class LumenConfig(BaseModel):
@@ -316,6 +317,7 @@ class Config:
                     "cloud_default_openai_model",
                     "cloud_default_anthropic_model",
                     "cloud_azure_endpoint",
+                    "cloud_openai_compatible_base_url",
                 ]
             }))
 

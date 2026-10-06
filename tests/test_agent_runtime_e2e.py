@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 import pytest
+from chat_completions_server import ChatCompletionsServer
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -347,6 +348,68 @@ def test_bash_commands_inherit_no_worker_warning_filters(
 
     assert process.returncode == 0, process.stderr
     assert (scratch_repo / "warnoptions.txt").read_text(encoding="utf-8").strip() == "[]"
+
+
+def test_openai_compatible_provider_runs_tool_turn(tmp_path: Path, scratch_repo: Path) -> None:
+    server = ChatCompletionsServer(
+        [
+            {"tool_calls": [{"name": "bash", "arguments": {"command": "echo ok > made.txt"}}]},
+            {"text": "Created made.txt."},
+        ]
+    )
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    try:
+        process = subprocess.run(
+            [
+                sys.executable, "-m", "cortex", "-p", "create made.txt",
+                "--model", f"openai-compatible:{server.model}", "--full-auto",
+            ],
+            cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+        )
+    finally:
+        server.close()
+
+    assert process.returncode == 0, process.stderr
+    assert "Created made.txt." in process.stdout
+    assert (scratch_repo / "made.txt").read_text(encoding="utf-8").strip() == "ok"
+    assert server.authorization == ["Bearer sk-compatible-test"] * 2
+    first, second = server.requests
+    assert first["model"] == server.model and first["stream"] is True
+    assert "bash" in {tool["function"]["name"] for tool in first["tools"]}
+    tool_messages = [message for message in second["messages"] if message["role"] == "tool"]
+    assert len(tool_messages) == 1
+
+
+def test_model_list_reports_provider_auth_and_active_uncatalogued_model(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env.pop("ANTHROPIC_API_KEY", None)
+    env["OPENAI_COMPATIBLE_BASE_URL"] = "http://127.0.0.1:9/v1"
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        _start_session(harness)
+        selected = harness.wait_response(
+            harness.send(
+                "model.select",
+                {"backend": "cloud", "provider": "openai-compatible", "model_id": "org/model:free"},
+            )
+        )
+        assert selected["result"]["ok"], selected
+        listing = harness.wait_response(harness.send("model.list", {}))["result"]
+    finally:
+        harness.close()
+
+    providers = {row["provider"]: row for row in listing["providers"]}
+    assert providers["openai-compatible"]["authenticated"] is True
+    assert providers["anthropic"]["authenticated"] is False
+    active = [row for row in listing["cloud"] if row["active"]]
+    assert [row["selector"] for row in active] == ["openai-compatible:org/model:free"]
 
 
 def test_headless_default_denies_writes(tmp_path: Path, scratch_repo: Path) -> None:

@@ -78,7 +78,12 @@ class CloudModelCatalog:
         """List cloud models, optionally filtered by provider."""
         providers: Sequence[CloudProvider]
         if provider is None:
-            providers = [CloudProvider.OPENAI, CloudProvider.ANTHROPIC, CloudProvider.AZURE]
+            providers = [
+                CloudProvider.OPENAI,
+                CloudProvider.ANTHROPIC,
+                CloudProvider.AZURE,
+                CloudProvider.OPENAI_COMPATIBLE,
+            ]
         else:
             providers = [provider]
 

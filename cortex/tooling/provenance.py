@@ -20,6 +20,10 @@ Guarantees, per backend:
 - azure: deployments are user-named aliases of the underlying model, so name
   equality is not defined; identity is bound by client kind + the configured
   Azure endpoint instead. A missing reported model still fails.
+- openai-compatible: the gateway decides how it names models, so name
+  equality is not defined; the client kind must be the Chat Completions client
+  and the client must have been built for the configured base URL. A missing
+  reported model still fails.
 - scripted (CORTEX_SCRIPTED_MODEL): passes verification but is labeled
   "(scripted)" and the worker banners the override at startup — it can never
   masquerade silently as a real model.
@@ -43,7 +47,8 @@ _SEPARATORS = re.compile(r"[.\-_\s]+")
 _DATE_SUFFIX = re.compile(r"-(\d{4}-\d{2}-\d{2}|\d{8})$")
 
 _EXPECTED_CLIENT_KIND: Dict[CloudProvider, str] = {
-    CloudProvider.LUMEN: "lumen",
+    CloudProvider.LUMEN: "chat_completions",
+    CloudProvider.OPENAI_COMPATIBLE: "chat_completions",
     CloudProvider.OPENAI: "openai",
     CloudProvider.AZURE: "openai",  # Azure is served through the OpenAI client
     CloudProvider.ANTHROPIC: "anthropic",
@@ -69,9 +74,9 @@ def _models_match(provider: CloudProvider, requested: str, reported: str) -> boo
         return False
     if provider == CloudProvider.LUMEN:
         return rep == req
-    if provider == CloudProvider.AZURE:
-        # Deployment name != model name by design; transport identity (client
-        # kind + endpoint) is the Azure guarantee. Reported just has to exist.
+    if provider in (CloudProvider.AZURE, CloudProvider.OPENAI_COMPATIBLE):
+        # Served names are aliases chosen by the deployment or gateway; transport
+        # identity (client kind + endpoint) is the guarantee. Reported just has to exist.
         return True
     # Exact equality always passes. Otherwise allow only the provider's
     # date-release suffix on the REPORTED side: a bare requested id matches
@@ -124,15 +129,16 @@ def verify_turn_provenance(
             ),
         )
 
+    if not _endpoints_match(expected_endpoint, reported_endpoint):
+        return ProvenanceVerdict(
+            ok=False,
+            reason=(
+                f"answered from endpoint {reported_endpoint!r} instead of the "
+                f"configured endpoint {expected_endpoint!r}"
+            ),
+        )
+
     if provider == CloudProvider.LUMEN:
-        if not _endpoints_match(expected_endpoint, reported_endpoint):
-            return ProvenanceVerdict(
-                ok=False,
-                reason=(
-                    f"answered from endpoint {reported_endpoint!r} instead of the "
-                    f"managed lumen-server at {expected_endpoint!r}"
-                ),
-            )
         if lumen_ready is not True:
             return ProvenanceVerdict(
                 ok=False,
