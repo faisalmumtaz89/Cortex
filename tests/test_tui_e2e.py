@@ -108,6 +108,26 @@ class TuiSession:
             time.sleep(0.3)
         raise AssertionError(f"timed out waiting for {description}.\n--- last frame ---\n{frame}")
 
+    def process_tree(self) -> set[int]:
+        """PIDs of every process started in the pane (launcher, sidecar, worker)."""
+        result = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", self.name, "#{pane_pid}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        table = subprocess.run(["ps", "-eo", "pid=,ppid="], capture_output=True, text=True).stdout
+        children: dict[int, list[int]] = {}
+        for line in table.splitlines():
+            pid, ppid = (int(field) for field in line.split())
+            children.setdefault(ppid, []).append(pid)
+        tree, pending = set(), [int(result.stdout.strip())]
+        while pending:
+            pid = pending.pop()
+            tree.add(pid)
+            pending.extend(children.get(pid, []))
+        return tree
+
     def close(self) -> None:
         subprocess.run(["tmux", "kill-session", "-t", self.name], capture_output=True)
 
@@ -639,6 +659,27 @@ def test_single_ctrl_c_exits_cleanly(tui_project) -> None:
             break
         time.sleep(0.25)
     assert not alive, "TUI still running 8s after a single Ctrl+C"
+
+
+def test_closing_the_terminal_ends_the_tui_and_its_worker(tui_project) -> None:
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]])
+    session.wait_for("Session ready")
+    tree = session.process_tree()
+    assert len(tree) >= 3, tree  # launcher, sidecar, worker
+
+    session.close()
+
+    def alive() -> set[int]:
+        table = subprocess.run(["ps", "-eo", "pid=,stat="], capture_output=True, text=True).stdout
+        running = {int(pid) for pid, stat in (line.split() for line in table.splitlines())
+                   if not stat.startswith("Z")}
+        return tree & running
+
+    deadline = time.time() + 8
+    while alive() and time.time() < deadline:
+        time.sleep(0.25)
+    assert not alive(), f"processes outlived their terminal: {sorted(alive())}"
 
 
 def test_slash_palette_esc_clears_input_entirely(tui_project) -> None:
