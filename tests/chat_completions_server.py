@@ -16,8 +16,10 @@ from typing import Dict, List
 class ChatCompletionsServer:
     """Script entries: {"text": str} and/or {"tool_calls": [{"name": str, "arguments": dict}]},
     optionally with {"finish": str} to override the finish reason,
-    {"delay": seconds} to wait before the reply (a model still reasoning) and
-    {"omit_ids": True} to send tool calls without ids, as some servers do."""
+    {"delay": seconds} to wait before the reply (a model still reasoning),
+    {"omit_ids": True} to send tool calls without ids, as some servers do, and
+    {"reasoning": str} to stream the model's reasoning first, in the delta fields
+    {"reasoning_field": str or list} (default "reasoning_content")."""
 
     def __init__(self, script: List[Dict[str, object]], *, model: str = "test-model"):
         self.script = list(script)
@@ -68,6 +70,11 @@ class ChatCompletionsServer:
             }
 
         chunks = [chunk({"role": "assistant"})]
+        reasoning = str(step.get("reasoning") or "")
+        fields = step.get("reasoning_field") or "reasoning_content"
+        fields = [fields] if isinstance(fields, str) else list(fields)
+        for offset in range(0, len(reasoning), 8):
+            chunks.append(chunk({field: reasoning[offset : offset + 8] for field in fields}))
         if step.get("text"):
             chunks.append(chunk({"content": step["text"]}))
         calls = list(step.get("tool_calls") or [])

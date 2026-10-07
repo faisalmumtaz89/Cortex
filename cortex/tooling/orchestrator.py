@@ -26,6 +26,7 @@ from cortex.tooling.types import (
     ErrorEvent,
     FinishEvent,
     ModelEvent,
+    ReasoningEvent,
     ReplyCutOffError,
     TextDeltaEvent,
     ToolCall,
@@ -73,28 +74,34 @@ def conversation_history(conversation) -> List[Dict[str, object]]:
 
 
 def _assistant_history(parts, full: bool, call_ids: Set[str]) -> List[Dict[str, object]]:
-    """One assistant reply as messages: its text and tool calls, each call
-    followed by its result. Calls that never got a result are left out."""
+    """One assistant reply as messages: each step's text, reasoning and tool
+    calls, each call followed by its result. Calls that never got a result are
+    left out."""
     history: List[Dict[str, object]] = []
     text = ""
+    reasoning: Dict[str, object] = {}
     calls: List[Dict[str, object]] = []
     outputs: List[Dict[str, object]] = []
     waiting: Dict[str, Dict[str, Any]] = {}
 
     def close_step() -> None:
-        nonlocal text, calls, outputs
+        nonlocal text, reasoning, calls, outputs
         if calls:
-            history.append({"role": "assistant", "content": text or None, "tool_calls": calls})
+            history.append(
+                {"role": "assistant", "content": text or None, **reasoning, "tool_calls": calls}
+            )
             history.extend(outputs)
         elif text.strip():
-            history.append({"role": "assistant", "content": text})
-        text, calls, outputs = "", [], []
+            history.append({"role": "assistant", "content": text, **reasoning})
+        text, reasoning, calls, outputs = "", {}, [], []
 
     for part in parts:
+        if part.get("type") in ("text", "reasoning") and calls:
+            close_step()
         if part.get("type") == "text":
-            if calls:
-                close_step()
             text += part.get("delta") or ""
+        elif part.get("type") == "reasoning" and part.get("field"):
+            reasoning = {str(part["field"]): str(part.get("text") or "")}
         elif part.get("type") == "tool" and part.get("state") == "running":
             waiting[str(part.get("call_id"))] = part
         elif part.get("type") == "tool":
@@ -269,6 +276,9 @@ class ToolingOrchestrator:
                     "metadata": event.result.metadata,
                 }
             )
+
+        if isinstance(event, ReasoningEvent):
+            result.parts.append({"type": "reasoning", "field": event.field, "text": event.text})
 
         if isinstance(event, ErrorEvent):
             result.parts.append({"type": "error", "error": event.error, "metadata": event.metadata})

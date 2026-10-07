@@ -75,9 +75,13 @@ class TextDeltaEvent:
 
 
 @dataclass(frozen=True)
-class ReasoningDeltaEvent:
-    type: Literal["reasoning_delta"] = "reasoning_delta"
-    delta: str = ""
+class ReasoningEvent:
+    """The reasoning a model streamed for one step of its reply, and the
+    message field it arrived in; it is sent back in that field."""
+
+    type: Literal["reasoning"] = "reasoning"
+    field: str = ""
+    text: str = ""
 
 
 @dataclass(frozen=True)
@@ -118,7 +122,7 @@ class FinishEvent:
 
 ModelEvent = Union[
     TextDeltaEvent,
-    ReasoningDeltaEvent,
+    ReasoningEvent,
     ToolCallEvent,
     ToolResultEvent,
     ErrorEvent,

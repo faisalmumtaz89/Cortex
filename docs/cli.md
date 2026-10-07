@@ -90,7 +90,10 @@ OpenRouter, vLLM, and similar) is reached through the `openai-compatible`
 provider. Set its base URL via `OPENAI_COMPATIBLE_BASE_URL` (or
 `cloud_openai_compatible_base_url` in `~/.cortex/config.yaml`), provide the key with
 `/login openai-compatible <api_key>` or `OPENAI_COMPATIBLE_API_KEY`, and select
-the model as `/model openai-compatible:<model>`.
+the model as `/model openai-compatible:<model>`. The reasoning such models stream
+(`reasoning_content` or `reasoning`) is sent back with the reply step it belongs
+to, in the same field, for the rest of the conversation: the model continues
+from it at each tool step, and DeepSeek requires it whenever tools are offered.
 
 
 ## Agent Tools and Permissions

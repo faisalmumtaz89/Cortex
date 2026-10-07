@@ -766,6 +766,58 @@ def test_interrupted_turn_keeps_the_tool_calls_that_ran(
     assert "def main" in replayed[0][2]
 
 
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
+def test_tool_steps_send_back_the_reasoning_behind_their_calls(
+    tmp_path: Path, scratch_repo: Path, field: str
+) -> None:
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"reasoning": "The app lives in src/app.py, read it first.", "reasoning_field": field,
+             "tool_calls": [{"name": "read_file", "arguments": {"path": "src/app.py"}}]},
+            {"reasoning": "main returns 1.", "reasoning_field": field,
+             "tool_calls": [{"name": "list_dir", "arguments": {"path": "src"}}]},
+            {"reasoning": "Both read; answer.", "reasoning_field": field,
+             "text": "main returns 1."},
+            {"text": "Next."},
+        ],
+        ["what does main return", "next"],
+    )
+
+    steps = [message for message in requests[2]["messages"] if message.get("tool_calls")]
+    assert [step.get(field) for step in steps] == [
+        "The app lives in src/app.py, read it first.",
+        "main returns 1.",
+    ]
+    # The next turn replays every step's reasoning, the final answer's included.
+    replies = [m for m in requests[3]["messages"] if m["role"] == "assistant"]
+    assert [reply.get(field) for reply in replies] == [
+        "The app lives in src/app.py, read it first.",
+        "main returns 1.",
+        "Both read; answer.",
+    ]
+    assert replies[-1]["content"] == "main returns 1."
+    assert all(len(reply) == 3 + bool(reply.get("tool_calls")) for reply in replies)
+
+
+def test_reasoning_sent_in_two_fields_goes_back_once(tmp_path: Path, scratch_repo: Path) -> None:
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"reasoning": "Read it.", "reasoning_field": ["reasoning_content", "reasoning"],
+             "tool_calls": [{"name": "read_file", "arguments": {"path": "src/app.py"}}]},
+            {"text": "Done."},
+        ],
+        ["read app.py"],
+    )
+
+    (step,) = [message for message in requests[1]["messages"] if message.get("tool_calls")]
+    assert step["reasoning_content"] == "Read it."
+    assert "reasoning" not in step
+
+
 def test_long_conversation_keeps_its_first_turn(tmp_path: Path, scratch_repo: Path) -> None:
     turns = 20
     requests = _converse_with_gateway(

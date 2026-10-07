@@ -2,7 +2,8 @@
 
 Streams `/chat/completions` over SSE with native tool calls and runs the tool
 loop locally. It emits the same normalized event stream as the other clients
-(TextDeltaEvent / ToolCallEvent / ToolResultEvent / FinishEvent).
+(TextDeltaEvent / ToolCallEvent / ToolResultEvent / FinishEvent), plus a
+ReasoningEvent for each step whose reasoning the model streams.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from openai import OpenAI
 
 from cortex.tooling.types import (
     FinishEvent,
+    ReasoningEvent,
     TextDeltaEvent,
     ToolCall,
     ToolCallEvent,
@@ -25,6 +27,10 @@ from cortex.tooling.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Delta fields that carry a model's reasoning: DeepSeek's API uses
+# reasoning_content; vLLM and OpenRouter-style gateways use reasoning.
+_REASONING_FIELDS = ("reasoning_content", "reasoning")
 
 
 class ChatCompletionsClient:
@@ -110,6 +116,8 @@ class ChatCompletionsClient:
             stream = self.client.chat.completions.create(**cast(Any, kwargs))
 
             text_parts: List[str] = []
+            reasoning_field = ""
+            reasoning_parts: List[str] = []
             pending: Dict[int, Dict[str, str]] = {}
             finish_reason: Optional[str] = None
 
@@ -127,6 +135,13 @@ class ChatCompletionsClient:
                     choice = choices[0]
                     delta = getattr(choice, "delta", None)
                     if delta is not None:
+                        for field in _REASONING_FIELDS:
+                            piece = getattr(delta, field, None)
+                            if isinstance(piece, str) and piece:
+                                # Servers that send both fields repeat the text.
+                                reasoning_field = reasoning_field or field
+                                if field == reasoning_field:
+                                    reasoning_parts.append(piece)
                         content = getattr(delta, "content", None)
                         if content:
                             text_parts.append(str(content))
@@ -145,6 +160,13 @@ class ChatCompletionsClient:
                     if getattr(choice, "finish_reason", None):
                         finish_reason = str(choice.finish_reason)
 
+            # The reasoning goes back with the step it led to, in this turn and
+            # every later one: models that think between tool steps continue
+            # from it, and DeepSeek rejects a conversation that omits it.
+            reasoning = "".join(reasoning_parts)
+            if reasoning:
+                yield ReasoningEvent(field=reasoning_field, text=reasoning)
+
             # A reply cut off by max_tokens ends the turn: its tool calls may
             # be incomplete and must not run.
             if not pending or not use_tools or finish_reason == "length":
@@ -159,23 +181,21 @@ class ChatCompletionsClient:
             ordered = sorted(pending.items())
             for _, slot in ordered:
                 slot["id"] = slot["id"] or f"call_{uuid.uuid4().hex[:24]}"
-            conversation.append(
-                {
-                    "role": "assistant",
-                    "content": "".join(text_parts) or None,
-                    "tool_calls": [
-                        {
-                            "id": slot["id"],
-                            "type": "function",
-                            "function": {
-                                "name": slot["name"],
-                                "arguments": slot["args"] or "{}",
-                            },
-                        }
-                        for _, slot in ordered
-                    ],
-                }
-            )
+            assistant_step: Dict[str, object] = {
+                "role": "assistant",
+                "content": "".join(text_parts) or None,
+                "tool_calls": [
+                    {
+                        "id": slot["id"],
+                        "type": "function",
+                        "function": {"name": slot["name"], "arguments": slot["args"] or "{}"},
+                    }
+                    for _, slot in ordered
+                ],
+            }
+            if reasoning:
+                assistant_step[reasoning_field] = reasoning
+            conversation.append(assistant_step)
             for _, slot in ordered:
                 raw_args = slot["args"] or "{}"
                 try:

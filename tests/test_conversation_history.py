@@ -51,6 +51,34 @@ def test_reply_steps_become_tool_calls_followed_by_their_results():
     ]
 
 
+def test_each_step_carries_back_its_reasoning():
+    history = conversation_history(_conversation(
+        (MessageRole.USER, "go", None),
+        (MessageRole.ASSISTANT, "Done.", [
+            {"type": "reasoning", "field": "reasoning_content", "text": "first"},
+            _call("call_1", "read_file", {}),
+            _result("call_1", "read_file", "one"),
+            {"type": "reasoning", "field": "reasoning_content", "text": "second"},
+            _call("call_2", "read_file", {}),
+            _result("call_2", "read_file", "two"),
+            {"type": "text", "delta": "Done."},
+            {"type": "reasoning", "field": "reasoning_content", "text": "third"},
+            {"type": "finish", "reason": "stop"},
+        ]),
+    ))
+
+    replies = [message for message in history if message["role"] == "assistant"]
+    steps = [
+        (reply["content"], reply["reasoning_content"], len(reply.get("tool_calls") or []))
+        for reply in replies
+    ]
+    assert steps == [
+        (None, "first", 1),
+        (None, "second", 1),
+        ("Done.", "third", 0),
+    ]
+
+
 def test_ids_and_names_take_a_form_every_provider_accepts():
     history = conversation_history(_conversation(
         (MessageRole.USER, "go", None),
@@ -91,6 +119,7 @@ def test_older_turns_keep_the_ends_of_long_results_and_arguments():
             _result("call_1", "write_file", body),
         ]),
     ]
+    turns[1][2].insert(0, {"type": "reasoning", "field": "reasoning_content", "text": body})
     for index in range(3):
         turns += [(MessageRole.USER, f"q{index}", None), (MessageRole.ASSISTANT, f"a{index}", [])]
 
@@ -103,3 +132,4 @@ def test_older_turns_keep_the_ends_of_long_results_and_arguments():
         assert "characters omitted" in text
         assert len(text) < 2000
     assert '"path": "big.txt"' in arguments
+    assert history[1]["reasoning_content"] == body
