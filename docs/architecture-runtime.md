@@ -3,9 +3,9 @@
 Cortex is split into two processes with a strict protocol boundary:
 
 1. **Frontend** — OpenTUI sidecar (Bun + SolidJS, `frontend/cortex-tui`) owns all terminal rendering. It spawns the worker and reconciles its event stream.
-2. **Backend** — Python worker (`python -P -m cortex --worker-stdio`) owns models, sessions, and tools.
+2. **Backend** — Python worker (`python -P -m cortex --worker-stdio`) owns model access, sessions, and tools.
 
-They communicate over line-delimited JSON-RPC 2.0 on the worker's stdio, plus structured event frames emitted as JSON-RPC notifications. The split enforces a single terminal writer and separates UI concerns from inference/tool execution.
+They communicate over line-delimited JSON-RPC 2.0 on the worker's stdio, plus structured event frames emitted as JSON-RPC notifications. The split enforces a single terminal writer and separates UI concerns from model calls and tool execution.
 
 ## Components
 
@@ -15,8 +15,7 @@ They communicate over line-delimited JSON-RPC 2.0 on the worker's stdio, plus st
 - Protocol server and contracts: `cortex/protocol/rpc_server.py`, `cortex/protocol/schema.py`, `cortex/protocol/types.py`
 - Services: `cortex/app/session_service.py`, `cortex/app/command_service.py`, `cortex/app/model_service.py`, `cortex/app/permission_service.py`
 - Agent loop: `cortex/tooling/orchestrator.py` with `cortex/tooling/registry.py` (tools), `cortex/tooling/permissions.py` (rules), `cortex/tooling/agent_prompt.py` (system prompt + `AGENTS.md` project context)
-- Local inference: `cortex/inference_engine.py`, `cortex/model_manager.py`, `cortex/metal/` (MLX + GGUF)
-- Cloud inference: `cortex/cloud/` (OpenAI/Anthropic clients + router)
+- Model access: `cortex/cloud/` (OpenAI, Anthropic, and Chat Completions clients + router)
 
 ## Headless Mode
 
@@ -25,8 +24,8 @@ They communicate over line-delimited JSON-RPC 2.0 on the worker's stdio, plus st
 ## Agent Turn Flow
 
 1. The frontend submits user input via `session.submit_user_input`.
-2. `SessionService` builds the turn and hands it to the `ToolingOrchestrator`, which assembles the system prompt (identity, working directory, `AGENTS.md`/`CLAUDE.md` project context, and — for local models — the `<tool_calls>` protocol from `cortex/tooling/local_protocol.py`).
-3. The model streams text and tool calls. Cloud models use native tool calling; local models emit a `<tool_calls>` JSON block that the orchestrator parses.
+2. `SessionService` builds the turn and hands it to the `ToolingOrchestrator`, which assembles the system prompt (identity, working directory, and `AGENTS.md`/`CLAUDE.md` project context).
+3. The model streams text and native tool calls.
 4. Each tool call passes through the `PermissionManager`. Reads are allowed by default rules; `edit`/`bash` permissions trigger a `permission.asked` event, which the frontend answers via the `permission.reply` method (allow once / allow always / reject).
 5. Tool results are fed back to the model until it answers without tool calls, up to `tools_max_iterations`.
 
@@ -54,8 +53,7 @@ Worker mode reserves real stdout for JSON-RPC frames and redirects normal `print
 
 ## Scope
 
-- Target platform: `darwin-arm64` only.
-- Local inference: MLX (primary) and GGUF (llama.cpp).
+- Target platform: `darwin-arm64` only (the bundled TUI sidecar binary).
 - OpenTUI is the only interactive runtime; headless mode is the only non-interactive one.
 
 ## Non-Goals (Current Phase)

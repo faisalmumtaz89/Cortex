@@ -11,15 +11,11 @@ export interface SlashCommand {
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "help", description: "List available commands" },
   { name: "status", description: "Show model & session status" },
-  { name: "gpu", description: "Show GPU / memory status" },
-  { name: "model", description: "Pick a model (or /model <name | provider:model>)", argHint: "<name | provider:model>" },
-  { name: "download", description: "Download a local model (Lumen)", argHint: "<model[:quant]>  \u00b7  /download cancel" },
+  { name: "model", description: "Pick a model (or /model <provider:model>)", argHint: "<provider:model>" },
   { name: "login", description: "Log in to a cloud provider (picker, then paste the key)", argHint: "<provider> <api_key>" },
-  { name: "benchmark", description: "Benchmark local token throughput", argHint: "[tokens] [--prompt <text>]" },
   { name: "clear", description: "Clear the conversation" },
   { name: "save", description: "Save the conversation to disk" },
-  { name: "setup", description: "Load the first local model" },
-  { name: "update", description: "Check for updates, or update Lumen / Cortex", argHint: "[lumen|cortex]" },
+  { name: "update", description: "Check for updates, or update Cortex", argHint: "[cortex]" },
   { name: "quit", description: "Exit Cortex" },
 ]
 

@@ -15,8 +15,7 @@ class ActiveTargetInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    backend: str = Field(pattern=r"^(local|cloud)$")
-    local_model: Optional[str] = None
+    backend: str = Field(default="cloud", pattern=r"^cloud$")
     provider: Optional[str] = None
     model_id: Optional[str] = None
 
@@ -95,16 +94,9 @@ class CommandExecuteParams(BaseModel):
 class ModelSelectParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    backend: str = Field(pattern=r"^(local|cloud)$")
-    local_model: Optional[str] = None
+    backend: str = Field(default="cloud", pattern=r"^cloud$")
     provider: Optional[str] = None
     model_id: Optional[str] = None
-
-
-class ModelDeleteLocalParams(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model_name: str = Field(min_length=1)
 
 
 class CloudAuthStatusParams(BaseModel):
@@ -148,7 +140,6 @@ METHOD_PARAM_MODELS: Dict[str, Type[BaseModel]] = {
     "command.execute": CommandExecuteParams,
     "model.list": ModelListParams,
     "model.select": ModelSelectParams,
-    "model.delete_local": ModelDeleteLocalParams,
     "cloud.auth.status": CloudAuthStatusParams,
     "cloud.auth.save_key": CloudAuthSaveKeyParams,
     "cloud.auth.delete_key": CloudAuthDeleteKeyParams,

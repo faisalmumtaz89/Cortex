@@ -13,13 +13,10 @@ Cortex uses a split runtime:
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all available commands |
-| `/status` | Show current setup (GPU, model, settings) |
-| `/gpu` | Show GPU information and memory status |
-| `/model` | List/switch local and cloud models |
-| `/download` | Download a model from HuggingFace |
-| `/setup` | Load the first local model if none is active |
-| `/benchmark` | Run performance benchmark (local models) |
-| `/login` | Manage OpenAI/Anthropic/HuggingFace credentials |
+| `/status` | Show the active model and the model that answered the last turn |
+| `/model` | List and switch models |
+| `/login` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials |
+| `/update` | Show installed vs latest version, or update Cortex |
 | `/save` | Save current conversation |
 | `/clear` | Clear conversation history |
 | `/quit` | Exit Cortex |
@@ -52,44 +49,7 @@ If the worker handshake fails, check protocol version compatibility between fron
 
 ---
 
-## GPU Not Detected
-
-Cortex runs on Apple Silicon Macs (M1–M4) with Metal and the MLX framework. If GPU validation fails, local models are unavailable (cloud models still work).
-
-**Check your hardware:**
-
-```bash
-# Verify you are on Apple Silicon (expected output: arm64)
-python -c "import platform; print(platform.machine())"
-
-# Verify Metal support
-system_profiler SPDisplaysDataType | grep Metal
-
-# Check your macOS version (13.3+ recommended for MLX)
-sw_vers
-```
-
-Inside Cortex, `/gpu` shows chip name, GPU cores, memory, and Metal/MLX support status; `/status` summarizes the current setup.
-
----
-
 ## Installation Issues
-
-### MLX framework not available
-
-MLX is the primary inference backend. If MLX is not installed or fails to load:
-
-```bash
-pip uninstall mlx mlx-lm
-pip install "mlx>=0.30.4" "mlx-lm>=0.30.5" --upgrade
-```
-
-If MLX compilation fails during installation:
-
-```bash
-xcode-select --install
-pip install "mlx>=0.30.4" "mlx-lm>=0.30.5" --verbose --no-cache-dir
-```
 
 ### Python version
 
@@ -116,56 +76,31 @@ curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.
 
 ---
 
-## Model Loading Issues
+## Model Selection Issues
 
-### No models found
+### No model loaded
 
-If you see "No model loaded" after starting Cortex:
+If you see "No model loaded" after starting Cortex, add a provider key and pick a model:
 
-1. `/download qwen3-5-9b:q4_0` to fetch a local model, then `/model qwen3-5-9b:q4_0`.
-2. `/model` to list and load models that are already downloaded.
-3. Or select a cloud model: `/model openai:gpt-5.1` or `/model anthropic:claude-sonnet-4-5` (configure keys with `/login`).
+1. `/login openai <api_key>` (or `anthropic` / `azure` / `openai-compatible`), or set the provider's environment variable.
+2. `/model` to open the picker, or `/model openai:gpt-5.1` to select directly.
 
+### Model not authenticated
 
-### Model format not supported
+`/model` refuses a provider without a key ("<provider> is not authenticated"). Run `/login <provider> <api_key>` or set the environment variable named in the message, then select the model again.
 
-Local models run exclusively through the Lumen engine. Only Lumen-supported models load (`/model` lists them); download with `/download <model:quant>`. Server logs: `~/.cortex/lumen-server.log`.
+### Azure or OpenAI-compatible endpoint not configured
 
-### Model too large for available memory
+Azure needs its resource endpoint (`AZURE_OPENAI_ENDPOINT` or `cloud_azure_endpoint`), and the `openai-compatible` provider needs its base URL (`OPENAI_COMPATIBLE_BASE_URL` or `cloud_openai_compatible_base_url`). Set the value in the environment or `~/.cortex/config.yaml`, then select the model again.
 
-Apple Silicon uses unified memory shared between CPU and GPU. If your model is too large:
+### Model provenance mismatch
 
-- Use a smaller or more aggressively quantized variant (4-bit MLX or Q4 GGUF).
-- Check available memory with `/gpu`.
-- Close other memory-intensive applications before loading.
-
-### Previously used model not found
-
-If Cortex reports that a previously used model was not found at startup, the files were moved or deleted. Use `/model` to select another model or `/download` to re-fetch it.
-
----
-
-## Performance Issues
-
-### Slow token generation
-
-1. Run `/benchmark` to measure tokens/second and first-token latency. The GPU utilization number is a CPU-based proxy and may show 0% for GGUF models.
-2. Check `/gpu` for current memory usage.
-
-Common causes: model barely fits in memory, background processes consuming resources, or thermal throttling.
-
-### High first-token latency
-
-The first token takes longer because the model must process the entire prompt; long conversations increase this. Use `/clear` to reset the context if it has grown very large.
-
-### GGUF "skipping kernel" messages
-
-Lines like `ggml_metal_init: skipping kernel_xxx_bf16 (not supported)` are expected — a BF16 kernel is unavailable on your GPU and the runtime falls back to FP16. GPU acceleration is still active.
+Every turn is rejected unless the response proves it came from the selected provider and model. A mismatch usually means a proxy or gateway rewrote the model name, or the endpoint is not the one you configured — check `cloud_openai_compatible_base_url` / `cloud_azure_endpoint` and the model id you selected.
 
 ### Poor response quality
 
-- Try a larger model, or a cloud model for harder tasks.
-- Tune flat keys in `~/.cortex/config.yaml` (`temperature`, `top_p`, `repetition_penalty`).
+- Try a stronger model.
+- Tune flat keys in `~/.cortex/config.yaml` (`temperature`, `top_p`).
 
 ---
 
@@ -173,9 +108,8 @@ Lines like `ggml_metal_init: skipping kernel_xxx_bf16 (not supported)` are expec
 
 ### Stuck on "Thinking..." for cloud models
 
-1. `cloud_enabled: true` in `~/.cortex/config.yaml`
-2. Valid provider key via `/login openai` or `/login anthropic`
-3. Reasonable timeout/retry values:
+1. Valid provider key via `/login <provider>` (or the provider's environment variable)
+2. Reasonable timeout/retry values:
 
 ```yaml
 cloud_timeout_seconds: 60
@@ -206,7 +140,7 @@ When a tool call needs approval, the TUI shows an arrow menu: **Allow once** / *
 
 ## Configuration Issues
 
-Cortex reads `~/.cortex/config.yaml`; defaults live in `cortex/config.py`. The file is flat (e.g. `context_length`, `max_tokens`) — no nested sections. Edit it with a text editor and restart Cortex; there is no CLI subcommand for configuration.
+Cortex reads `~/.cortex/config.yaml`; defaults live in `cortex/config.py`. The file is flat (e.g. `temperature`, `max_tokens`) — no nested sections. Edit it with a text editor and restart Cortex; there is no CLI subcommand for configuration.
 
 If Cortex cannot read or write its state files:
 
@@ -221,29 +155,23 @@ chmod -R 755 ~/.cortex/
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| "GPU validation failed" | Not on Apple Silicon or Metal/MLX missing | Verify with `python -c "import platform; print(platform.machine())"` |
-| "No model loaded" | No model selected | `/model`, `/setup`, or `/download ... --load` |
-| "Missing API key for openai/anthropic" | Cloud model selected without credentials | `/login openai <key>` or `/login anthropic <key>` |
-| "Failed to load model" | Corrupted, unsupported format, or insufficient memory | Check `/gpu`, use an MLX or GGUF variant |
-| "Not downloaded" (local model) | Model not in the Lumen cache | `/download <model:quant>` first |
-| "MLX not available" | MLX not installed or not on Apple Silicon | `pip install "mlx>=0.30.4" "mlx-lm>=0.30.5" --upgrade` |
+| "No model loaded" | No model selected | `/login <provider> <key>`, then `/model` |
+| "No API key configured for <provider>" | Model selected without credentials | `/login <provider> <key>` or the environment variable named in the message |
+| "Unsupported provider" | `/model` selector without a known provider | `/model <provider>:<model>` with openai, anthropic, azure, or openai-compatible |
 | "Permission denied by rule" / rejected tool calls | Headless without `--full-auto`, or a persisted deny rule | Pass `--full-auto`, or edit `~/.cortex/tool_permissions.yaml` |
 | "Unknown command" | Typo in slash command | `/help` |
-| "huggingface-hub not installed" | Missing dependency for `/login huggingface` | `pip install huggingface-hub` |
 
 ---
 
 ## Collecting Diagnostic Information
 
-From inside Cortex: `/status`, `/gpu`, and `/benchmark` (with a local model loaded).
+From inside Cortex: `/status` and `/update`.
 
 From the terminal:
 
 ```bash
-system_profiler SPHardwareDataType
-system_profiler SPDisplaysDataType
+cortex --version
 python --version
-pip list | grep -E "mlx|llama|cortex"
 sw_vers
 ```
 

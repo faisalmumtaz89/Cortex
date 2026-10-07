@@ -17,14 +17,23 @@ from cortex.tooling.orchestrator import ToolingOrchestrator
 from cortex.tooling.provenance import normalize_model_name, verify_turn_provenance
 from cortex.tooling.types import ErrorEvent, FinishEvent, TextDeltaEvent
 
-LUMEN_ENDPOINT = "http://127.0.0.1:8399/v1"
+GATEWAY_ENDPOINT = "https://gw.example/v1"
 
 
-def _lumen_provenance(model: str = "qwen3-5-9b", endpoint: str = LUMEN_ENDPOINT) -> dict:
+def _openai_provenance(reported_model: str) -> dict:
+    return {
+        "client_kind": "openai",
+        "reported_model": reported_model,
+        "response_id": "resp_1",
+        "endpoint": "https://api.openai.com/v1",
+    }
+
+
+def _gateway_provenance(model: str = "org/model", endpoint: str = GATEWAY_ENDPOINT) -> dict:
     return {
         "client_kind": "chat_completions",
         "reported_model": model,
-        "response_id": "chatcmpl-lumen-1",
+        "response_id": "chatcmpl-1",
         "endpoint": endpoint,
     }
 
@@ -32,9 +41,10 @@ def _lumen_provenance(model: str = "qwen3-5-9b", endpoint: str = LUMEN_ENDPOINT)
 # ---- rule table -------------------------------------------------------------
 
 
-def test_normalize_treats_dot_and_dash_as_equal() -> None:
-    assert normalize_model_name("qwen3.5-9b") == normalize_model_name("qwen3-5-9b")
-    assert normalize_model_name("Qwen3_5 9B") == normalize_model_name("qwen3.5-9b")
+def test_normalize_treats_case_and_separators_as_equal() -> None:
+    assert normalize_model_name("GPT-5.5") == normalize_model_name("gpt_5_5")
+    assert normalize_model_name("gpt-5.5") == normalize_model_name("gpt 5-5")
+    assert normalize_model_name("gpt-5.5") != normalize_model_name("gpt-5.4")
 
 
 def test_missing_provenance_fails() -> None:
@@ -45,65 +55,43 @@ def test_missing_provenance_fails() -> None:
     assert "no provenance" in verdict.reason
 
 
-def test_lumen_reported_model_must_match_selector_model() -> None:
+def test_openai_reported_model_must_match_requested_model() -> None:
     verdict = verify_turn_provenance(
-        provider=CloudProvider.LUMEN,
-        requested_model="qwen3-5-9b",
-        provenance=_lumen_provenance(model="evil-model"),
-        expected_endpoint=LUMEN_ENDPOINT,
-        lumen_ready=True,
+        provider=CloudProvider.OPENAI,
+        requested_model="gpt-5.1",
+        provenance=_openai_provenance("evil-model"),
     )
     assert not verdict.ok
     assert "evil-model" in verdict.reason
 
 
-def test_lumen_accepts_dotted_spelling_of_same_model() -> None:
+def test_openai_accepts_case_and_separator_spellings_of_same_model() -> None:
     verdict = verify_turn_provenance(
-        provider=CloudProvider.LUMEN,
-        requested_model="qwen3-5-9b",
-        provenance=_lumen_provenance(model="qwen3.5-9b"),
-        expected_endpoint=LUMEN_ENDPOINT,
-        lumen_ready=True,
+        provider=CloudProvider.OPENAI,
+        requested_model="gpt-5.1",
+        provenance=_openai_provenance("GPT-5-1"),
     )
     assert verdict.ok
 
 
-def test_lumen_endpoint_must_be_the_managed_server() -> None:
-    verdict = verify_turn_provenance(
-        provider=CloudProvider.LUMEN,
-        requested_model="qwen3-5-9b",
-        provenance=_lumen_provenance(endpoint="http://127.0.0.1:9999/v1"),
-        expected_endpoint=LUMEN_ENDPOINT,
-        lumen_ready=True,
-    )
-    assert not verdict.ok
-    assert "endpoint" in verdict.reason
-
-
-def test_lumen_dead_server_fails_even_with_matching_record() -> None:
-    verdict = verify_turn_provenance(
-        provider=CloudProvider.LUMEN,
-        requested_model="qwen3-5-9b",
-        provenance=_lumen_provenance(),
-        expected_endpoint=LUMEN_ENDPOINT,
-        lumen_ready=False,
-    )
-    assert not verdict.ok
-    assert "alive" in verdict.reason or "ready" in verdict.reason
-
-
 def test_wrong_client_kind_fails() -> None:
-    provenance = _lumen_provenance()
-    provenance["client_kind"] = "openai"
+    provenance = _openai_provenance("gpt-5.1")
+    provenance["client_kind"] = "chat_completions"
     verdict = verify_turn_provenance(
-        provider=CloudProvider.LUMEN,
-        requested_model="qwen3-5-9b",
+        provider=CloudProvider.OPENAI,
+        requested_model="gpt-5.1",
         provenance=provenance,
-        expected_endpoint=LUMEN_ENDPOINT,
-        lumen_ready=True,
     )
     assert not verdict.ok
-    assert "openai client" in verdict.reason
+    assert "instead of the openai client" in verdict.reason
+
+    anthropic = verify_turn_provenance(
+        provider=CloudProvider.ANTHROPIC,
+        requested_model="claude-haiku-4-5",
+        provenance=_openai_provenance("claude-haiku-4-5"),
+    )
+    assert not anthropic.ok
+    assert "instead of the anthropic client" in anthropic.reason
 
 
 def test_openai_allows_date_suffixed_release_names_only() -> None:
@@ -188,15 +176,6 @@ def test_variant_suffixes_are_different_models_not_aliases() -> None:
     assert not codex.ok
 
 
-def _openai_provenance(reported_model: str) -> dict:
-    return {
-        "client_kind": "openai",
-        "reported_model": reported_model,
-        "response_id": "resp_1",
-        "endpoint": "https://api.openai.com/v1",
-    }
-
-
 def test_date_pinned_request_is_satisfied_only_by_that_exact_snapshot() -> None:
     """The date-release strip applies to the REPORTED side only. A user who
     pins a snapshot (via ~/.cortex/cloud_models.json or a typed
@@ -253,26 +232,26 @@ def test_azure_binds_identity_via_client_not_deployment_name() -> None:
 
 
 def test_openai_compatible_binds_identity_via_client_and_configured_endpoint() -> None:
-    def verdict(*, kind="chat_completions", model="org/model", endpoint="https://gw.example/v1"):
+    def verdict(*, kind="chat_completions", model="org/model", endpoint=GATEWAY_ENDPOINT):
+        provenance = _gateway_provenance(model=model, endpoint=endpoint)
+        provenance["client_kind"] = kind
         return verify_turn_provenance(
             provider=CloudProvider.OPENAI_COMPATIBLE,
             requested_model="model",
-            provenance={
-                "client_kind": kind,
-                "reported_model": model,
-                "response_id": "chatcmpl-1",
-                "endpoint": endpoint,
-            },
-            expected_endpoint="https://gw.example/v1",
+            provenance=provenance,
+            expected_endpoint=GATEWAY_ENDPOINT,
         )
 
     # Gateways rename models, so a different reported name passes.
     assert verdict().ok
+    assert verdict(endpoint=GATEWAY_ENDPOINT + "/").ok  # trailing slash is the same endpoint
     assert not verdict(model="").ok
     assert not verdict(kind="openai").ok
     mismatch = verdict(endpoint="https://other.example/v1")
     assert not mismatch.ok
     assert "configured endpoint" in mismatch.reason
+    unreported = verdict(endpoint=None)
+    assert not unreported.ok
 
 
 def test_scripted_passes_but_is_flagged() -> None:
@@ -295,22 +274,11 @@ class _Router:
     def stream_events(self, **kwargs):
         yield from self._events
 
-
-class _Runtime:
-    def __init__(self, *, ready: bool = True):
-        self._ready = ready
-
-    def ensure_server(self, selector):
-        return True, "ok"
-
-    def base_url(self):
-        return LUMEN_ENDPOINT
-
-    def status(self):
-        return {"running": True, "ready": self._ready, "selector": "qwen3-5-9b:q4_0"}
+    def openai_compatible_base_url(self):
+        return GATEWAY_ENDPOINT
 
 
-def _cli(router, runtime) -> SimpleNamespace:
+def _cli(router) -> SimpleNamespace:
     return SimpleNamespace(
         config=SimpleNamespace(
             inference=SimpleNamespace(max_tokens=64, temperature=0.0, top_p=1.0),
@@ -319,7 +287,6 @@ def _cli(router, runtime) -> SimpleNamespace:
             ),
         ),
         cloud_router=router,
-        lumen_runtime=runtime,
     )
 
 
@@ -330,23 +297,44 @@ def _conversation():
     )
 
 
-def _run(router_events, *, runtime=None, target=None, collect=None):
-    orchestrator = ToolingOrchestrator(cli=_cli(_Router(router_events), runtime or _Runtime()))
+def _target(provider: CloudProvider, model_id: str) -> ActiveModelTarget:
+    return ActiveModelTarget.cloud(CloudModelRef(provider=provider, model_id=model_id))
+
+
+def _run(router_events, *, target=None, collect=None):
+    orchestrator = ToolingOrchestrator(cli=_cli(_Router(router_events)))
     return orchestrator.run_turn(
         user_input="hi",
-        active_target=target or ActiveModelTarget.local("qwen3-5-9b:q4_0"),
+        active_target=target or _target(CloudProvider.OPENAI, "gpt-5.1"),
         conversation=_conversation(),
         on_event=collect,
     )
 
 
-def test_turn_with_matching_local_provenance_is_verified() -> None:
+def test_turn_with_matching_gateway_provenance_is_verified() -> None:
     result = _run(
-        [TextDeltaEvent(delta="hello"), FinishEvent(reason="stop", provenance=_lumen_provenance())]
+        [
+            TextDeltaEvent(delta="hello"),
+            FinishEvent(reason="stop", provenance=_gateway_provenance()),
+        ],
+        target=_target(CloudProvider.OPENAI_COMPATIBLE, "org/model"),
     )
     assert result.provenance_verified is True
-    assert result.served_backend == "local"
-    assert result.served_model_label == "qwen3-5-9b:q4_0"
+    assert result.served_model_label == "openai-compatible:org/model"
+
+
+def test_turn_from_unconfigured_gateway_endpoint_is_rejected() -> None:
+    with pytest.raises(RuntimeError, match="configured endpoint"):
+        _run(
+            [
+                TextDeltaEvent(delta="hello"),
+                FinishEvent(
+                    reason="stop",
+                    provenance=_gateway_provenance(endpoint="https://other.example/v1"),
+                ),
+            ],
+            target=_target(CloudProvider.OPENAI_COMPATIBLE, "org/model"),
+        )
 
 
 def test_turn_reporting_wrong_model_is_rejected_loudly() -> None:
@@ -355,12 +343,14 @@ def test_turn_reporting_wrong_model_is_rejected_loudly() -> None:
         _run(
             [
                 TextDeltaEvent(delta="hello"),
-                FinishEvent(reason="stop", provenance=_lumen_provenance(model="evil-model")),
+                FinishEvent(reason="stop", provenance=_openai_provenance("evil-model")),
             ],
             collect=seen.append,
         )
     errors = [event for event in seen if isinstance(event, ErrorEvent)]
-    assert errors and "evil-model" in errors[0].error
+    assert errors
+    assert errors[0].error.startswith("Model provenance mismatch: asked openai:gpt-5.1, but ")
+    assert "evil-model" in errors[0].error
 
 
 def test_turn_without_provenance_is_rejected() -> None:
@@ -368,34 +358,23 @@ def test_turn_without_provenance_is_rejected() -> None:
         _run([TextDeltaEvent(delta="hello"), FinishEvent(reason="stop")])
 
 
+def test_turn_without_model_is_rejected() -> None:
+    with pytest.raises(RuntimeError, match="No model loaded"):
+        _run([TextDeltaEvent(delta="hello")], target=ActiveModelTarget())
+
+
 def test_cloud_turn_verifies_served_label() -> None:
-    target = ActiveModelTarget.cloud(
-        CloudModelRef(provider=CloudProvider.OPENAI, model_id="gpt-5.1")
-    )
     result = _run(
         [
             TextDeltaEvent(delta="hello"),
-            FinishEvent(
-                reason="stop",
-                provenance={
-                    "client_kind": "openai",
-                    "reported_model": "gpt-5.1-2026-01-15",
-                    "response_id": "resp_9",
-                    "endpoint": "https://api.openai.com/v1",
-                },
-            ),
+            FinishEvent(reason="stop", provenance=_openai_provenance("gpt-5.1-2026-01-15")),
         ],
-        target=target,
     )
     assert result.provenance_verified is True
-    assert result.served_backend == "cloud"
     assert result.served_model_label == "openai:gpt-5.1"
 
 
 def test_scripted_turn_is_labeled_scripted() -> None:
-    target = ActiveModelTarget.cloud(
-        CloudModelRef(provider=CloudProvider.AZURE, model_id="scripted")
-    )
     result = _run(
         [
             TextDeltaEvent(delta="canned"),
@@ -404,7 +383,7 @@ def test_scripted_turn_is_labeled_scripted() -> None:
                 provenance={"client_kind": "scripted", "reported_model": "scripted"},
             ),
         ],
-        target=target,
+        target=_target(CloudProvider.AZURE, "scripted"),
     )
     assert result.provenance_verified is True
     assert result.served_model_label == "azure:scripted (scripted)"

@@ -1,10 +1,8 @@
 # Cortex
 
-![Cortex demo](demo.gif)
+Cortex is an agentic coding tool that lives in your terminal. It reads, searches, and edits your code, runs commands, and shows every change as a reviewable diff — powered by models from OpenAI, Anthropic, Azure OpenAI, or any OpenAI-compatible endpoint.
 
-Cortex is an agentic coding tool that lives in your terminal. It reads, searches, and edits your code, runs commands, and shows every change as a reviewable diff — powered by local models running GPU-resident on your Mac through the [Lumen](https://github.com/faisalmumtaz89/Lumen) inference engine, with optional cloud models from OpenAI, Anthropic, Azure OpenAI, and any OpenAI-compatible endpoint.
-
-Requires an Apple Silicon Mac (M1–M4), macOS 13.3+, Python 3.11+, and Xcode Command Line Tools.
+Requires an Apple Silicon Mac, macOS 13.3+, Python 3.11+, and Xcode Command Line Tools.
 
 ## Get started
 
@@ -21,29 +19,26 @@ Requires an Apple Silicon Mac (M1–M4), macOS 13.3+, Python 3.11+, and Xcode Co
    cortex
    ```
 
-3. Pick a model with `/model`:
-
-   - **Local** — Qwen3.5 / 3.6 / 3.8 models served by Lumen. Selecting one downloads and loads it automatically; Cortex manages the server for you.
-   - **Cloud** — `/login openai <api_key>` (or `anthropic` / `azure` / `openai-compatible`), or set the provider's environment key.
+3. Add a provider key with `/login openai <api_key>` (or `anthropic` / `azure` / `openai-compatible`), or set the provider's environment variable, then pick a model with `/model`.
 
 4. Describe what you want done. Cortex reads `AGENTS.md` (or `CLAUDE.md`) from your project, so your conventions travel with the agent.
 
-5. Stay current with `/update` — Cortex checks daily for new Cortex and Lumen releases and tells you when one is available (`/update lumen` upgrades the local engine in place; opt out with `auto_update_check: false`).
+5. Stay current with `/update` — Cortex checks daily for a new release and tells you when one is available (`/update cortex` installs it; opt out with `auto_update_check: false`).
 
 ## How it works
 
 - Reading, searching, and listing files is free; every edit, write, and shell command asks first.
 - Edits render as green/red diffs before they land.
-- Every reply is provenance-verified: local turns must come from Cortex's own Lumen server, cloud turns from the provider you picked — the model shown is the model that answered.
+- Every reply is provenance-verified: it must come from the provider you picked — the model shown is the model that answered.
 - Headless mode for scripts and CI: `cortex -p "fix the failing test" --full-auto`.
 
 ## Commands
 
-`/model` · `/download` · `/login` · `/status` · `/gpu` · `/benchmark` · `/update` · `/clear` · `/save` · `/setup` · `/help` · `/quit`
+`/model` · `/login` · `/status` · `/update` · `/clear` · `/save` · `/help` · `/quit`
 
 ## Documentation
 
-[Installation](docs/installation.md) · [CLI & tools](docs/cli.md) · [Model management](docs/model-management.md) · [Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md) · [Architecture](docs/architecture-runtime.md) · [Development](docs/development.md)
+[Installation](docs/installation.md) · [CLI & tools](docs/cli.md) · [Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md) · [Architecture](docs/architecture-runtime.md) · [Development](docs/development.md)
 
 ## Development
 

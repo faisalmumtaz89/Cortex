@@ -23,9 +23,6 @@ class CloudRouter:
     def __init__(self, config, credential_store: Optional[CloudCredentialStore] = None):
         self.config = config
         self.credential_store = credential_store or CloudCredentialStore()
-        # Set by the worker: returns the managed Lumen server's base URL
-        # (None when the server is not running).
-        self.lumen_base_url: Optional[Callable[[], Optional[str]]] = None
 
     def _timeout_seconds(self) -> int:
         cloud_cfg = getattr(self.config, "cloud", None)
@@ -90,17 +87,6 @@ class CloudRouter:
                 )
             return ChatCompletionsClient(
                 base_url=base_url, api_key=api_key, timeout_seconds=timeout_seconds
-            )
-        if provider == CloudProvider.LUMEN:
-            lumen_url = self.lumen_base_url() if self.lumen_base_url else None
-            if not lumen_url:
-                raise RuntimeError(
-                    "Lumen server is not running. Select a local model with /model first."
-                )
-            # Generation timeout is generous: local decode of a long answer
-            # legitimately takes minutes on big prompts.
-            return ChatCompletionsClient(
-                base_url=lumen_url, api_key="lumen", timeout_seconds=max(600, timeout_seconds)
             )
         if provider == CloudProvider.ANTHROPIC:
             return AnthropicClient(api_key=api_key, timeout_seconds=timeout_seconds)
@@ -183,8 +169,6 @@ class CloudRouter:
 
     def get_auth_status(self, provider: CloudProvider) -> Tuple[bool, Optional[str]]:
         """Get auth status and active credential source for provider."""
-        if provider == CloudProvider.LUMEN:
-            return True, "local"
         key, source = self.credential_store.get_api_key_with_source(provider)
         return bool(key), source
 
@@ -232,13 +216,7 @@ class CloudRouter:
             )
             return
 
-        api_key: Optional[str]
-        source: Optional[str]
-        if model_ref.provider == CloudProvider.LUMEN:
-            # Managed local server — no credentials involved.
-            api_key, source = "lumen", "local"
-        else:
-            api_key, source = self.credential_store.get_api_key_with_source(model_ref.provider)
+        api_key, source = self.credential_store.get_api_key_with_source(model_ref.provider)
         if not api_key:
             env_name = ENV_KEY_MAP[model_ref.provider]
             raise RuntimeError(

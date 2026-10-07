@@ -1,12 +1,9 @@
 """Update orchestration for the /update command family.
 
-Three responsibilities, all built on cortex.update_check's probe/cache:
+Two responsibilities, both built on cortex.update_check's probe/cache:
 
-  - status: installed vs latest for both components (fresh probe with a short
-    timeout, falling back to the last cached answer),
-  - Lumen engine upgrade: stop the managed server, re-run the official
-    installer pinned to the target tag (and to an already-cached model so its
-    unconditional `lumen pull` is a no-op), verify `lumen --version`,
+  - status: installed vs latest (fresh probe with a short timeout, falling
+    back to the last cached answer),
   - Cortex self-upgrade: only ever acts on a GitHub release whose tag parses
     GREATER than the running version, and installs that release's wheel asset
     (download → sha256 verification against the .sha256 sibling asset →
@@ -16,11 +13,10 @@ Three responsibilities, all built on cortex.update_check's probe/cache:
     construction. The new code applies on the next start ("restart Cortex to
     apply").
 
-The execution paths stream installer output through a progress callback using
-the same payload shape as /download (kind "engine-update"), so the worker can
-narrate them with the established background-operation pattern.
+The upgrade streams its progress through a callback (payload kind
+"engine-update"), so the worker can narrate it as a background operation.
 
-Self-update safety rules (asymmetric with the Lumen path on purpose):
+Self-update safety rules:
   - Source checkouts refuse the wheel install: pip replacing an editable
     `pip install -e` dist (which install.sh wires through a site-packages
     symlink into the working tree) can overwrite a developer's checkout.
@@ -28,12 +24,10 @@ Self-update safety rules (asymmetric with the Lumen path on purpose):
     rewrites cortex's own site-packages and a signal death skips its
     Python-level rollback, stranding a half-removed install the next launch
     cannot recover from. shutdown() WAITS (bounded) for that one child
-    instead; every other child (curl, the Lumen installer) is still reaped
-    immediately, where a kill only leaves a loud, recoverable state.
+    instead; the curl downloads are still reaped immediately, where a kill
+    only leaves a loud, recoverable state.
 
 Test seams (production uses the HTTPS defaults):
-  - CORTEX_LUMEN_INSTALLER_URL: the Lumen installer script (URL, file:// URL,
-    or plain local file path).
   - CORTEX_UPDATE_PROBE_BASE (update_check's seam): base origin for BOTH the
     releases/latest discovery probe and the release asset downloads, so one
     local stub server serves the whole flow.
@@ -60,7 +54,6 @@ import urllib.parse
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
-from cortex.lumen_runtime import LumenModel, LumenRuntime
 from cortex.update_check import (
     CORTEX_REPO,
     UpdateCheckCache,
@@ -74,9 +67,6 @@ from cortex.update_check import (
 )
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_LUMEN_INSTALLER_URL = "https://servelumen.com/install.sh"
-LUMEN_INSTALLER_URL_ENV = "CORTEX_LUMEN_INSTALLER_URL"
 
 # The release wheel's asset name is deterministic: the PEP 427-normalized
 # project name (cortex-llm → cortex_llm) plus the platform tag declared in
@@ -96,9 +86,9 @@ CORTEX_INSTALL_KIND_ENV = "CORTEX_SELF_INSTALL_KIND"
 
 # /update status wants live answers but must stay snappy on a bad network.
 STATUS_PROBE_TIMEOUT_SECONDS = 2.5
-INSTALLER_DOWNLOAD_TIMEOUT_SECONDS = 120
+CHECKSUM_DOWNLOAD_TIMEOUT_SECONDS = 120
 # The wheel bundles the 65MB TUI sidecar (~23MB compressed) — give slow links
-# more room than a small installer script gets.
+# more room than the small checksum file gets.
 WHEEL_DOWNLOAD_TIMEOUT_SECONDS = 600
 # How long shutdown() waits for an in-flight SELF-INSTALL pip to finish
 # before the last-resort SIGKILL. A local-wheel install takes seconds; the
@@ -156,8 +146,8 @@ def _sha256_verification_error(artifact: Path, sha_path: Path) -> Optional[str]:
     """None when ``artifact`` matches its .sha256 sibling, else the reason.
 
     The sibling is shasum's standard ``<64-hex>  <filename>`` line; only the
-    FIRST whitespace token is consumed (filename-independent, like Lumen's
-    installer). Anything unparseable refuses — never installs.
+    FIRST whitespace token is consumed (filename-independent). Anything
+    unparseable refuses — never installs.
     """
     try:
         tokens = sha_path.read_text(encoding="utf-8").split()
@@ -185,24 +175,22 @@ class UpdateService:
     def __init__(
         self,
         *,
-        lumen_runtime: LumenRuntime,
         cache: UpdateCheckCache | None = None,
         opener: UrlOpener | None = None,
     ) -> None:
-        self.lumen_runtime = lumen_runtime
         self.cache = cache or UpdateCheckCache()
         self.opener = opener
-        # Live child (curl / installer bash) and downloaded temp installer.
-        # Children run in their OWN process group (start_new_session), and the
-        # worker's shutdown paths call shutdown() — the update thread is a
-        # daemon and both worker exits go through os._exit, so finally-based
-        # cleanup inside update_lumen/update_cortex never runs there.
+        # Live child (curl / pip) and the staged wheel directory. Children run
+        # in their OWN process group (start_new_session), and the worker's
+        # shutdown paths call shutdown() — the update thread is a daemon and
+        # both worker exits go through os._exit, so finally-based cleanup
+        # inside update_cortex never runs there.
         self._child_lock = threading.Lock()
         self._active_child: subprocess.Popen | None = None
         # True while the active child is the SELF-INSTALL pip: killing that
         # one can corrupt the running venv, so shutdown() waits it out.
         self._active_child_critical = False
-        self._active_temp_installer: Path | None = None
+        self._active_temp_dir: Path | None = None
         self._closing = False
 
     # ---- shutdown safety ---------------------------------------------------
@@ -227,14 +215,14 @@ class UpdateService:
                 self._active_child = None
                 self._active_child_critical = False
 
-    def _register_temp_installer(self, path: Path) -> None:
+    def _register_temp_dir(self, path: Path) -> None:
         with self._child_lock:
-            self._active_temp_installer = path
+            self._active_temp_dir = path
 
-    def _clear_temp_installer(self, path: Path) -> None:
+    def _clear_temp_dir(self, path: Path) -> None:
         with self._child_lock:
-            if self._active_temp_installer == path:
-                self._active_temp_installer = None
+            if self._active_temp_dir == path:
+                self._active_temp_dir = None
 
     @staticmethod
     def _signal_group(process: subprocess.Popen, signum: int) -> None:
@@ -254,18 +242,16 @@ class UpdateService:
         timeout: float = 2.0,
         self_install_grace: float = SELF_INSTALL_REAP_GRACE_SECONDS,
     ) -> None:
-        """Resolve any in-flight installer/downloader child and remove the
-        staged temp artifacts. Called from the worker's shutdown paths
+        """Resolve any in-flight download or install child and remove the
+        staged wheel directory. Called from the worker's shutdown paths
         (signal handler and stdin-EOF finally) right before os._exit: without
         it a mid-update child would be orphaned. Idempotent, never raises.
 
         Two-tier policy, because the children differ in what a kill costs:
 
-          - Ordinary children (curl downloads, the Lumen installer bash):
-            SIGTERM the group, wait `timeout`, then SIGKILL. A kill here
-            leaves a LOUD but recoverable state — Cortex itself stays
-            runnable (Lumen is an external binary, verified by the next
-            /update lumen; an interrupted download installs nothing).
+          - Ordinary children (curl downloads): SIGTERM the group, wait
+            `timeout`, then SIGKILL. An interrupted download installs nothing,
+            so Cortex itself stays runnable.
           - The SELF-INSTALL pip (critical child): NEVER signaled first. It
             is rewriting cortex-llm inside the very venv Cortex launches
             from, and a signal death skips pip's Python-level uninstall
@@ -280,7 +266,7 @@ class UpdateService:
                 self._closing = True  # children registered from now on self-reap
                 process = self._active_child
                 critical = self._active_child_critical
-                temp_path = self._active_temp_installer
+                temp_path = self._active_temp_dir
             if process is not None and process.poll() is None:
                 if critical:
                     # Self-install pip: wait for completion — a completed
@@ -304,15 +290,7 @@ class UpdateService:
                         except subprocess.TimeoutExpired:
                             pass
             if temp_path is not None:
-                try:
-                    if temp_path.is_dir():
-                        # The cortex self-update stages wheel + .sha256 in a
-                        # temp DIRECTORY; unlink() cannot remove those.
-                        shutil.rmtree(temp_path, ignore_errors=True)
-                    else:
-                        temp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                shutil.rmtree(temp_path, ignore_errors=True)
         except Exception:  # pragma: no cover - shutdown must never raise
             logger.debug("update-service shutdown cleanup failed", exc_info=True)
 
@@ -323,34 +301,25 @@ class UpdateService:
         is current, unknown, or unreleased. Cache-honoring: at most one real
         probe per TTL window."""
         result = check_for_updates(cache=self.cache, opener=self.opener)
-        parts: list[str] = []
-        lumen_installed = self.lumen_runtime.installed_version()
-        if is_newer(result.lumen_latest, lumen_installed):
-            parts.append(
-                f"Lumen {normalize_version(result.lumen_latest)} available — "
-                "update with /update lumen"
+        if not is_newer(result.cortex_latest, installed_cortex_version()):
+            return None
+        if _source_checkout_root() is not None:
+            # Never steer a source-checkout developer into /update cortex:
+            # the wheel install would replace their editable install.
+            return (
+                f"Cortex {normalize_version(result.cortex_latest)} released — "
+                "source checkout: update with git pull"
             )
-        cortex_installed = installed_cortex_version()
-        if is_newer(result.cortex_latest, cortex_installed):
-            if _source_checkout_root() is not None:
-                # Never steer a source-checkout developer into /update cortex:
-                # the wheel install would replace their editable install.
-                parts.append(
-                    f"Cortex {normalize_version(result.cortex_latest)} released — "
-                    "source checkout: update with git pull"
-                )
-            else:
-                parts.append(
-                    f"Cortex {normalize_version(result.cortex_latest)} available — "
-                    "update with /update cortex"
-                )
-        return " · ".join(parts) if parts else None
+        return (
+            f"Cortex {normalize_version(result.cortex_latest)} available — "
+            "update with /update cortex"
+        )
 
     def _fresh_or_cached_result(self) -> UpdateCheckResult:
-        """A live probe (short timeout). check_for_updates' per-component
-        merge keeps the previously cached tag for any component whose probe
-        fails transiently; the result's ``*_resolved`` flags say whether each
-        None tag is authoritative ("no releases") or just unknown."""
+        """A live probe (short timeout). check_for_updates keeps the last
+        cached tag when the probe fails transiently; the result's
+        ``cortex_resolved`` flag says whether a None tag is authoritative
+        ("no releases") or just unknown."""
         return check_for_updates(
             cache=self.cache,
             opener=self.opener,
@@ -383,57 +352,20 @@ class UpdateService:
 
     def status_report(self) -> Dict[str, object]:
         result = self._fresh_or_cached_result()
-        lumen_latest, cortex_latest = result.lumen_latest, result.cortex_latest
-        lumen_installed = self.lumen_runtime.installed_version()
+        cortex_latest = result.cortex_latest
         cortex_installed = installed_cortex_version()
-        lines = [
-            self._status_line(
-                "lumen", lumen_installed, lumen_latest, resolved=result.lumen_resolved
-            ),
-            self._status_line(
-                "cortex", cortex_installed, cortex_latest, resolved=result.cortex_resolved
-            ),
-        ]
         return {
             "ok": True,
-            "message": "\n".join(lines),
+            "message": self._status_line(
+                "cortex", cortex_installed, cortex_latest, resolved=result.cortex_resolved
+            ),
             "update_status": {
-                "lumen_installed": lumen_installed,
-                "lumen_latest": normalize_version(lumen_latest) if lumen_latest else None,
                 "cortex_installed": cortex_installed,
                 "cortex_latest": normalize_version(cortex_latest) if cortex_latest else None,
             },
         }
 
     # ---- planning ---------------------------------------------------------
-
-    def plan_lumen_update(self) -> Dict[str, object]:
-        """Decide whether a Lumen update is actionable (no side effects)."""
-        lumen_latest = self._fresh_or_cached_result().lumen_latest
-        target_version = normalize_version(lumen_latest) if lumen_latest else None
-        if lumen_latest is None or target_version is None:
-            return {
-                "ok": False,
-                "update_available": False,
-                "message": (
-                    "Could not determine the latest Lumen release — "
-                    "check your network and try again."
-                ),
-            }
-        installed = self.lumen_runtime.installed_version()
-        if installed is not None and not is_newer(lumen_latest, installed):
-            return {
-                "ok": True,
-                "update_available": False,
-                "message": f"Lumen {installed} is up to date.",
-            }
-        return {
-            "ok": True,
-            "update_available": True,
-            "target_tag": lumen_latest,
-            "target_version": target_version,
-            "message": f"Updating Lumen to {target_version}…",
-        }
 
     def plan_cortex_update(self) -> Dict[str, object]:
         """Decide whether a Cortex self-update is actionable (no side effects).
@@ -461,9 +393,9 @@ class UpdateService:
                         f"you're on {installed or 'an unknown version'} ({install_kind})."
                     ),
                 }
-            # Transient probe failure (or an unparseable tag): mirror the
-            # Lumen plan's honest wording — a network failure must never be
-            # presented as the factual claim "no releases exist".
+            # Transient probe failure (or an unparseable tag): a network
+            # failure must never be presented as the factual claim "no
+            # releases exist".
             return {
                 "ok": False,
                 "update_available": False,
@@ -503,82 +435,6 @@ class UpdateService:
 
     # ---- execution ---------------------------------------------------------
 
-    def update_lumen(
-        self, *, progress_callback: ProgressCallback | None = None
-    ) -> Dict[str, object]:
-        """Run the full Lumen upgrade; blocks until done (the worker wraps
-        this in its background-operation narration)."""
-
-        def emit(phase: str) -> None:
-            if progress_callback is not None:
-                progress_callback(
-                    {"kind": "engine-update", "repo_id": "lumen", "phase": phase}
-                )
-
-        plan = self.plan_lumen_update()
-        if not bool(plan.get("ok")) or not bool(plan.get("update_available")):
-            return {"ok": bool(plan.get("ok")), "message": str(plan.get("message", ""))}
-        target_tag = str(plan["target_tag"])
-        target_version = str(plan["target_version"])
-
-        # The installer replaces binaries via install(1) — a new inode — so a
-        # running server would keep serving the OLD version forever. Stop it
-        # first; it lazily reboots on next use.
-        active_selector = self.lumen_runtime.active_selector()
-        self.lumen_runtime.stop()
-        if active_selector:
-            emit(f"stopped lumen-server ({active_selector}) — it restarts on next use")
-
-        env = dict(os.environ)
-        env["LUMEN_TAG"] = target_tag
-        pinned = self._first_cached_model()
-        if pinned is not None:
-            # The installer ALWAYS ends with `lumen pull $LUMEN_MODEL:$LUMEN_QUANT`
-            # (multi-GB default). Pinning to an already-cached model makes that
-            # pull a no-op.
-            env["LUMEN_MODEL"] = pinned.name
-            env["LUMEN_QUANT"] = pinned.quant.lower()
-            emit(f"pinning installer model to cached {pinned.selector} (no new download)")
-        else:
-            emit("no cached model found — the installer will download Lumen's default model")
-
-        installer_url = os.environ.get(LUMEN_INSTALLER_URL_ENV, "").strip() or (
-            DEFAULT_LUMEN_INSTALLER_URL
-        )
-        emit(f"fetching installer ({installer_url})")
-        installer_path, cleanup, fetch_error = self._fetch_installer(installer_url)
-        if installer_path is None:
-            return {"ok": False, "message": f"Lumen update failed: {fetch_error}"}
-        try:
-            ok, detail = self._run_installer(
-                ["bash", str(installer_path), "--yes"], env=env, on_line=emit
-            )
-        finally:
-            cleanup()
-        if not ok:
-            return {"ok": False, "message": f"Lumen update failed: {detail}"}
-
-        emit("verifying installed version")
-        reported = self.lumen_runtime.installed_version()
-        if reported != target_version:
-            return {
-                "ok": False,
-                "message": (
-                    "Lumen update failed: the installer finished but `lumen --version` "
-                    f"reports {reported or 'nothing parseable'} (expected {target_version})."
-                ),
-            }
-        # Refresh the catalog so pickers reflect whatever the new engine offers.
-        try:
-            self.lumen_runtime.list_models()
-        except Exception:
-            logger.debug("post-update model list refresh failed", exc_info=True)
-        return {
-            "ok": True,
-            "message": f"local · Lumen {target_version} installed — server restarts on next use.",
-            "update": {"component": "lumen", "version": target_version},
-        }
-
     def update_cortex(
         self, *, progress_callback: ProgressCallback | None = None
     ) -> Dict[str, object]:
@@ -614,7 +470,7 @@ class UpdateService:
         # if the worker exits mid-update (the update thread is a daemon, so
         # this finally never runs through os._exit).
         temp_dir = Path(tempfile.mkdtemp(prefix="cortex-wheel-"))
-        self._register_temp_installer(temp_dir)
+        self._register_temp_dir(temp_dir)
         try:
             wheel_path = temp_dir / asset_name
             sha_path = temp_dir / f"{asset_name}.sha256"
@@ -634,7 +490,7 @@ class UpdateService:
             error = self._download_file(
                 f"{wheel_url}.sha256",
                 sha_path,
-                timeout=INSTALLER_DOWNLOAD_TIMEOUT_SECONDS,
+                timeout=CHECKSUM_DOWNLOAD_TIMEOUT_SECONDS,
             )
             if error:
                 return {
@@ -651,18 +507,15 @@ class UpdateService:
                 return {"ok": False, "message": f"Cortex update failed: {verification_error}."}
 
             emit(f"installing {asset_name} into the running environment")
-            # critical=True: this pip rewrites cortex-llm inside the running
-            # venv — shutdown() must wait it out, never kill it mid-mutation.
             ok, detail = self._run_installer(
                 self._pip_install_command(wheel_path),
                 env=dict(os.environ),
                 on_line=emit,
-                critical=True,
             )
             if not ok:
                 return {"ok": False, "message": f"Cortex update failed: {detail}"}
         finally:
-            self._clear_temp_installer(temp_dir)
+            self._clear_temp_dir(temp_dir)
             shutil.rmtree(temp_dir, ignore_errors=True)
         return {
             "ok": True,
@@ -671,62 +524,6 @@ class UpdateService:
         }
 
     # ---- helpers -------------------------------------------------------------
-
-    def _first_cached_model(self) -> Optional[LumenModel]:
-        try:
-            for model in self.lumen_runtime.list_models():
-                if model.cached:
-                    return model
-        except Exception:
-            logger.debug("cached-model lookup for installer pin failed", exc_info=True)
-        return None
-
-    def _fetch_installer(
-        self,
-        source: str,
-    ) -> tuple[Optional[Path], Callable[[], None], str]:
-        """Materialize the installer script as a local file.
-
-        Returns (path, cleanup, error). A plain local path or file:// URL is
-        used in place (test seam — never registered for deletion); anything
-        else is downloaded to a temp file with `curl -fsSL` — stdin detached
-        so a misbehaving child can never touch the worker's JSON-RPC pipe.
-        The temp path and the curl child are tracked so shutdown() can reap
-        them if the worker exits mid-download.
-        """
-        def no_cleanup() -> None:
-            return None
-
-        if source.startswith("file://"):
-            local = Path(urllib.parse.urlsplit(source).path)
-            if local.is_file():
-                return local, no_cleanup, ""
-            return None, no_cleanup, f"installer not found at {local}"
-        candidate = Path(source).expanduser()
-        if candidate.is_file():
-            return candidate, no_cleanup, ""
-
-        handle = tempfile.NamedTemporaryFile(
-            mode="wb", prefix="cortex-installer-", suffix=".sh", delete=False
-        )
-        temp_path = Path(handle.name)
-        handle.close()
-        self._register_temp_installer(temp_path)
-
-        def cleanup() -> None:
-            self._clear_temp_installer(temp_path)
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-        error = self._download_file(
-            source, temp_path, timeout=INSTALLER_DOWNLOAD_TIMEOUT_SECONDS
-        )
-        if error:
-            cleanup()
-            return None, no_cleanup, f"installer {error}"
-        return temp_path, cleanup, ""
 
     def _download_file(self, url: str, destination: Path, *, timeout: float) -> str:
         """Download ``url`` to ``destination`` with curl; '' on success, else
@@ -785,18 +582,17 @@ class UpdateService:
         *,
         env: Dict[str, str],
         on_line: Callable[[str], None],
-        critical: bool = False,
     ) -> tuple[bool, str]:
-        """Run an installer, streaming stdout lines to `on_line`.
+        """Run the self-install pip, streaming stdout lines to `on_line`.
 
         CHILD STDIN IS /dev/null BY CONTRACT: the worker's stdin is the
         JSON-RPC transport — an installer that prompts would otherwise eat
         protocol bytes. The child runs in its OWN process group
         (start_new_session, mirroring the bash tool's setsid pattern) and is
         tracked on the service, so the worker's shutdown paths can resolve it
-        instead of orphaning it mid-install. ``critical=True`` marks a child
-        whose kill can corrupt the running venv (the self-update's pip):
-        shutdown() waits for it instead of signaling it.
+        instead of orphaning it mid-install. It is registered as critical: a
+        kill can corrupt the running venv, so shutdown() waits for it instead
+        of signaling it.
         """
         with self._child_lock:
             if self._closing:
@@ -816,7 +612,7 @@ class UpdateService:
             )
         except (OSError, subprocess.SubprocessError) as exc:
             return False, f"failed to launch installer: {exc}"
-        self._register_child(process, critical=critical)
+        self._register_child(process, critical=True)
         try:
             last_line = ""
             assert process.stdout is not None

@@ -1,8 +1,7 @@
 """Coding-agent system prompt assembly.
 
-One place defines what Cortex is and how it should behave. The same prompt is
-used for cloud models and local models served by Lumen — both receive it as a
-system message alongside native tool schemas.
+One place defines what Cortex is and how it should behave. Every model
+receives it as a system message alongside native tool schemas.
 """
 
 from __future__ import annotations

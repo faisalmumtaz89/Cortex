@@ -1,9 +1,8 @@
 # Cortex — Agent & Contributor Guide
 
-Cortex is a terminal AI coding agent for Apple Silicon: local models via MLX
-(primary) and GGUF (llama.cpp), plus OpenAI/Anthropic cloud models, driving a
-small permissioned tool set (read_file, list_dir, search, edit_file,
-write_file, bash) inside the user's repository.
+Cortex is a terminal AI coding agent: OpenAI, Anthropic, Azure OpenAI, and
+OpenAI-compatible models drive a small permissioned tool set (read_file,
+list_dir, search, edit_file, write_file, bash) inside the user's repository.
 
 ## Architecture (two processes)
 
@@ -16,8 +15,7 @@ write_file, bash) inside the user's repository.
 
 Key packages: `cortex/app/` (services), `cortex/tooling/` (agent loop, tools,
 permissions, system prompt), `cortex/cloud/` (providers + router),
-`cortex/protocol/` (RPC schema/events), `cortex/metal/` + `inference_engine.py`
-+ `model_manager.py` (local inference).
+`cortex/protocol/` (RPC schema/events), `cortex/ui_runtime/` (sidecar launcher).
 
 ## The prime rule: runtime evidence over reasoning
 

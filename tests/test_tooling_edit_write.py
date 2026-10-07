@@ -132,9 +132,9 @@ def test_project_context_prefers_agents_md(tmp_path: Path) -> None:
     assert "make test" in context
 
 
-def test_system_prompt_has_no_local_tool_protocol(tmp_path: Path) -> None:
-    # Local models call tools natively through Lumen's OpenAI-compatible
-    # server; the prompt must not carry the old <tool_calls> text protocol.
+def test_system_prompt_has_no_text_tool_protocol(tmp_path: Path) -> None:
+    # Models call tools natively through the provider APIs; the prompt must
+    # not carry a <tool_calls> text protocol.
     prompt = build_system_prompt(cwd=tmp_path)
 
     assert "AI coding agent" in prompt

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Optional, Union
+from typing import Optional, Union
 
 
 class CloudProvider(str, Enum):
@@ -14,9 +14,6 @@ class CloudProvider(str, Enum):
     ANTHROPIC = "anthropic"
     AZURE = "azure"
     OPENAI_COMPATIBLE = "openai-compatible"
-    # Internal provider for the managed local Lumen server (OpenAI-compatible).
-    # Not a login target and never listed in the cloud catalog.
-    LUMEN = "lumen"
 
     @classmethod
     def from_value(cls, value: Union[str, "CloudProvider"]) -> "CloudProvider":
@@ -46,25 +43,16 @@ class CloudModelRef:
 
 @dataclass
 class ActiveModelTarget:
-    """Current active model target for generation."""
+    """The model the next turn runs on, if one is selected."""
 
-    backend: Literal["local", "cloud"] = "local"
-    local_model: Optional[str] = None
     cloud_model: Optional[CloudModelRef] = None
 
     @classmethod
-    def local(cls, model_name: Optional[str] = None) -> "ActiveModelTarget":
-        """Build a local target."""
-        return cls(backend="local", local_model=model_name, cloud_model=None)
-
-    @classmethod
     def cloud(cls, model_ref: CloudModelRef) -> "ActiveModelTarget":
-        """Build a cloud target."""
-        return cls(backend="cloud", local_model=None, cloud_model=model_ref)
+        """Build a target for a cloud model."""
+        return cls(cloud_model=model_ref)
 
     @property
     def label(self) -> str:
         """Human-readable label for status displays."""
-        if self.backend == "cloud" and self.cloud_model:
-            return self.cloud_model.selector
-        return self.local_model or "No model loaded"
+        return self.cloud_model.selector if self.cloud_model else "No model loaded"

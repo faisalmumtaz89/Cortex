@@ -11,17 +11,15 @@ from typing import Any
 from cortex.ui_runtime.launcher import launch_tui
 
 
-def _build_components() -> tuple[Any, Any, Any]:
+def _build_components() -> tuple[Any, Any]:
     from cortex.config import Config
     from cortex.conversation_manager import ConversationManager
-    from cortex.gpu_validator import GPUValidator
     from cortex.logging_config import configure_logging
 
     config = Config()
     configure_logging(config)
-    gpu_validator = GPUValidator()
     conversation_manager = ConversationManager(config)
-    return config, gpu_validator, conversation_manager
+    return config, conversation_manager
 
 
 def _run_worker_stdio() -> None:
@@ -40,10 +38,9 @@ def _run_worker_stdio() -> None:
     # Route any accidental stdout writes away from JSON-RPC channel.
     sys.stdout = sys.stderr
 
-    config, gpu_validator, conversation_manager = _build_components()
+    config, conversation_manager = _build_components()
     runtime = WorkerRuntime(
         config=config,
-        gpu_validator=gpu_validator,
         conversation_manager=conversation_manager,
         rpc_stdin=rpc_stdin,
         rpc_stdout=rpc_stdout,

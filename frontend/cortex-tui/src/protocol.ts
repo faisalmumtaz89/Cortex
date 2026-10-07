@@ -232,8 +232,8 @@ export class RpcClient {
     }
   }
 
-  /** SIGTERM the worker — used by the exit path so lumen-server teardown
-   * starts immediately instead of waiting for stdin EOF. */
+  /** SIGTERM the worker — used by the exit path so worker teardown starts
+   * immediately instead of waiting for stdin EOF. */
   killWorker(): void {
     try {
       this.process.kill("SIGTERM")

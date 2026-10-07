@@ -6,12 +6,7 @@ response payload. After each turn the orchestrator verifies that record
 against the *requested* target and FAILS the turn on any mismatch, so the UI
 can never display one model while another answered.
 
-Guarantees, per backend:
-- local (Lumen): the answering client must be the Lumen client, the endpoint
-  must be exactly the managed lumen-server's base URL for THIS process, that
-  server must still be alive and ready, and the model name reported inside the
-  response stream must equal the selector's model (dot/dash separators
-  normalized — lumen accepts both spellings of e.g. qwen3.5-9b).
+Guarantees, per provider:
 - openai/anthropic: the answering client kind must match the provider and the
   reported model must equal the requested id, allowing only the PROVIDER's
   trailing date-release suffix (-YYYY-MM-DD or -YYYYMMDD) on the reported
@@ -47,7 +42,6 @@ _SEPARATORS = re.compile(r"[.\-_\s]+")
 _DATE_SUFFIX = re.compile(r"-(\d{4}-\d{2}-\d{2}|\d{8})$")
 
 _EXPECTED_CLIENT_KIND: Dict[CloudProvider, str] = {
-    CloudProvider.LUMEN: "chat_completions",
     CloudProvider.OPENAI_COMPATIBLE: "chat_completions",
     CloudProvider.OPENAI: "openai",
     CloudProvider.AZURE: "openai",  # Azure is served through the OpenAI client
@@ -56,7 +50,7 @@ _EXPECTED_CLIENT_KIND: Dict[CloudProvider, str] = {
 
 
 def normalize_model_name(name: str) -> str:
-    """Case/separator-insensitive model-name form: qwen3.5-9b == qwen3-5-9b."""
+    """Case/separator-insensitive model-name form: GPT-5.5 == gpt_5_5."""
     return _SEPARATORS.sub("-", str(name or "").strip().lower()).strip("-")
 
 
@@ -72,8 +66,6 @@ def _models_match(provider: CloudProvider, requested: str, reported: str) -> boo
     rep = normalize_model_name(reported)
     if not rep:
         return False
-    if provider == CloudProvider.LUMEN:
-        return rep == req
     if provider in (CloudProvider.AZURE, CloudProvider.OPENAI_COMPATIBLE):
         # Served names are aliases chosen by the deployment or gateway; transport
         # identity (client kind + endpoint) is the guarantee. Reported just has to exist.
@@ -103,7 +95,6 @@ def verify_turn_provenance(
     requested_model: str,
     provenance: Optional[Dict[str, Any]],
     expected_endpoint: Optional[str] = None,
-    lumen_ready: Optional[bool] = None,
 ) -> ProvenanceVerdict:
     """Verify a finished turn's response-side identity against the request."""
     if not provenance:
@@ -137,13 +128,6 @@ def verify_turn_provenance(
                 f"configured endpoint {expected_endpoint!r}"
             ),
         )
-
-    if provider == CloudProvider.LUMEN:
-        if lumen_ready is not True:
-            return ProvenanceVerdict(
-                ok=False,
-                reason="the managed lumen-server is no longer alive/ready",
-            )
 
     if not _models_match(provider, requested_model, reported_model):
         return ProvenanceVerdict(

@@ -5,107 +5,25 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
-
-class GPUConfig(BaseModel):
-    """GPU-specific configuration for Apple Silicon."""
-    compute_backend: Literal["metal"] = "metal"
-    force_gpu: Literal[True] = True
-    metal_performance_shaders: bool = True
-    mlx_backend: bool = True
-    gpu_memory_fraction: float = Field(default=0.85, ge=0.1, le=1.0)
-    gpu_cores: int = Field(default=16, ge=1, le=128)
-    metal_api_version: int = Field(default=3, ge=3)
-    shader_cache: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "metal_shaders")
-    compile_shaders_on_start: bool = True  # Fixed and enabled!
-    gpu_optimization_level: str = Field(default="maximum")
-
-    @field_validator("compute_backend")
-    def validate_backend(cls, v):
-        if v != "metal":
-            raise ValueError("Only 'metal' backend is supported for Apple Silicon GPU")
-        return v
-
-    @field_validator("gpu_cores")
-    def validate_gpu_cores(cls, v):
-        if v < 1 or v > 128:
-            raise ValueError("GPU cores must be between 1 and 128")
-        return v
-
-class MemoryConfig(BaseModel):
-    """Memory management configuration."""
-    unified_memory: Literal[True] = True
-    max_gpu_memory: str = Field(default="20GB")
-    cpu_offload: Literal[False] = False
-    memory_pool_size: str = Field(default="20GB")
-    kv_cache_size: str = Field(default="2GB")
-    activation_memory: str = Field(default="2GB")
-
-    @field_validator("cpu_offload")
-    def validate_no_cpu_offload(cls, v):
-        if v:
-            raise ValueError("CPU offloading is not allowed - GPU only execution")
-        return v
-
-    def parse_memory_size(self, size_str: str) -> int:
-        """Convert memory size string to bytes."""
-        size_str = size_str.upper().strip()
-        if size_str.endswith("GB"):
-            return int(size_str[:-2]) * 1024 * 1024 * 1024
-        elif size_str.endswith("MB"):
-            return int(size_str[:-2]) * 1024 * 1024
-        else:
-            return int(size_str)
-
-class PerformanceConfig(BaseModel):
-    """Performance settings."""
-    batch_size: int = Field(default=8, ge=1, le=32)
-    max_batch_size: int = Field(default=16, ge=1, le=64)
-    use_flash_attention: bool = True
-    use_fused_ops: bool = True
-    num_threads: int = Field(default=1, ge=1, le=4)
-    context_length: int = Field(default=32768, ge=512)
-    sliding_window_size: int = Field(default=4096, ge=512)
 
 class InferenceConfig(BaseModel):
     """Inference settings."""
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.95, ge=0.0, le=1.0)
-    top_k: int = Field(default=40, ge=0)
-    repetition_penalty: float = Field(default=1.1, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4096, ge=1)
-    stream_output: bool = True
-    seed: int = Field(default=-1)
-
-class ModelConfig(BaseModel):
-    """Model selection state (local models are served by Lumen)."""
-
-    default_model: str = Field(default="")
-    last_used_model: str = Field(default="")  # Track the last used model
 
 
 class CloudConfig(BaseModel):
     """Cloud inference configuration."""
 
-    cloud_enabled: bool = True
     cloud_timeout_seconds: int = Field(default=60, ge=1, le=600)
     cloud_max_retries: int = Field(default=2, ge=0, le=10)
     cloud_default_openai_model: str = Field(default="gpt-5.5")
     cloud_default_anthropic_model: str = Field(default="claude-fable-5")
     cloud_azure_endpoint: str = Field(default="")
     cloud_openai_compatible_base_url: str = Field(default="")
-
-
-class LumenConfig(BaseModel):
-    """Managed local Lumen inference server configuration."""
-
-    lumen_binary: str = Field(default="lumen")
-    lumen_server_binary: str = Field(default="lumen-server")
-    lumen_port: int = Field(default=0, ge=0, le=65535)  # 0 = pick a free port
-    lumen_context_len: int = Field(default=0, ge=0)  # 0 = lumen's default
-    lumen_startup_timeout_seconds: int = Field(default=180, ge=10, le=900)
-    lumen_log_level: str = Field(default="warn")
 
 
 class ToolsConfig(BaseModel):
@@ -124,7 +42,6 @@ class UIConfig(BaseModel):
     syntax_highlighting: bool = True
     markdown_rendering: bool = True
     show_performance_metrics: bool = True
-    show_gpu_utilization: bool = True
     auto_scroll: bool = True
     copy_on_select: bool = True
     mouse_support: bool = True
@@ -136,7 +53,6 @@ class LoggingConfig(BaseModel):
     log_rotation: str = Field(default="daily")
     max_log_size: str = Field(default="100MB")
     performance_logging: bool = True
-    gpu_metrics_interval: int = Field(default=1000, ge=100)
 
 class ConversationConfig(BaseModel):
     """Conversation settings."""
@@ -148,26 +64,15 @@ class ConversationConfig(BaseModel):
 
 class SystemConfig(BaseModel):
     """System settings."""
-    startup_checks: List[str] = Field(
-        default_factory=lambda: [
-            "verify_metal_support",
-            "check_gpu_memory",
-            "validate_models",
-            "compile_shaders"
-        ]
-    )
     shutdown_timeout: int = Field(default=5, ge=1)
     crash_recovery: bool = True
-    # Daily release check for Cortex and Lumen (opt-out). Consumed by the
+    # Daily release check for Cortex (opt-out). Consumed by the
     # worker runtime; failures are silent and startup never waits on it.
     auto_update_check: bool = True
 
 class DeveloperConfig(BaseModel):
     """Developer settings."""
     debug_mode: bool = False
-    profile_inference: bool = False
-    metal_capture: bool = False
-    verbose_gpu_logs: bool = False
 
 class PathsConfig(BaseModel):
     """Path configuration."""
@@ -186,13 +91,8 @@ class Config:
         self._raw_config: Dict[str, Any] = {}
         self._state: Dict[str, Any] = {}
 
-        self.gpu: GPUConfig
-        self.memory: MemoryConfig
-        self.performance: PerformanceConfig
         self.inference: InferenceConfig
-        self.model: ModelConfig
         self.cloud: CloudConfig
-        self.lumen: LumenConfig
         self.tools: ToolsConfig
         self.ui: UIConfig
         self.logging: LoggingConfig
@@ -227,8 +127,7 @@ class Config:
     def _known_keys() -> set:
         """All flat config keys across section models."""
         sections: List[type[BaseModel]] = [
-            GPUConfig, MemoryConfig, PerformanceConfig, InferenceConfig,
-            ModelConfig, CloudConfig, LumenConfig, ToolsConfig, UIConfig, LoggingConfig,
+            InferenceConfig, CloudConfig, ToolsConfig, UIConfig, LoggingConfig,
             ConversationConfig, SystemConfig, DeveloperConfig, PathsConfig,
         ]
         keys: set = set()
@@ -258,13 +157,8 @@ class Config:
 
     def _use_defaults(self) -> None:
         """Use default configuration values."""
-        self.gpu = GPUConfig()
-        self.memory = MemoryConfig()
-        self.performance = PerformanceConfig()
         self.inference = InferenceConfig()
-        self.model = ModelConfig()
         self.cloud = CloudConfig()
-        self.lumen = LumenConfig()
         self.tools = ToolsConfig()
         self.ui = UIConfig()
         self.logging = LoggingConfig()
@@ -276,60 +170,20 @@ class Config:
     def _parse_config(self) -> None:
         """Parse configuration from raw dictionary."""
         try:
-            self.gpu = GPUConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["compute_backend", "force_gpu", "metal_performance_shaders",
-                        "mlx_backend", "gpu_memory_fraction", "gpu_cores",
-                        "metal_api_version", "shader_cache", "compile_shaders_on_start",
-                        "gpu_optimization_level"]
-            }))
-
-            self.memory = MemoryConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["unified_memory", "max_gpu_memory", "cpu_offload",
-                        "memory_pool_size", "kv_cache_size", "activation_memory"]
-            }))
-
-            self.performance = PerformanceConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["batch_size", "max_batch_size", "use_flash_attention",
-                        "use_fused_ops", "num_threads", "context_length",
-                        "sliding_window_size"]
-            }))
-
             self.inference = InferenceConfig(**self._get_section({
                 k: v for k, v in self._raw_config.items()
-                if k in ["temperature", "top_p", "top_k", "repetition_penalty",
-                        "max_tokens", "stream_output", "seed"]
-            }))
-
-            self.model = ModelConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["default_model", "last_used_model"]
+                if k in ["temperature", "top_p", "max_tokens"]
             }))
 
             self.cloud = CloudConfig(**self._get_section({
                 k: v for k, v in self._raw_config.items()
                 if k in [
-                    "cloud_enabled",
                     "cloud_timeout_seconds",
                     "cloud_max_retries",
                     "cloud_default_openai_model",
                     "cloud_default_anthropic_model",
                     "cloud_azure_endpoint",
                     "cloud_openai_compatible_base_url",
-                ]
-            }))
-
-            self.lumen = LumenConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in [
-                    "lumen_binary",
-                    "lumen_server_binary",
-                    "lumen_port",
-                    "lumen_context_len",
-                    "lumen_startup_timeout_seconds",
-                    "lumen_log_level",
                 ]
             }))
 
@@ -348,14 +202,13 @@ class Config:
             self.ui = UIConfig(**self._get_section({
                 k: v for k, v in self._raw_config.items()
                 if k in ["ui_theme", "syntax_highlighting", "markdown_rendering",
-                        "show_performance_metrics", "show_gpu_utilization",
-                        "auto_scroll", "copy_on_select", "mouse_support"]
+                        "show_performance_metrics", "auto_scroll", "copy_on_select", "mouse_support"]
             }))
 
             self.logging = LoggingConfig(**self._get_section({
                 k: v for k, v in self._raw_config.items()
                 if k in ["log_level", "log_file", "log_rotation", "max_log_size",
-                        "performance_logging", "gpu_metrics_interval"]
+                        "performance_logging"]
             }))
 
             self.conversation = ConversationConfig(**self._get_section({
@@ -366,14 +219,12 @@ class Config:
 
             self.system = SystemConfig(**self._get_section({
                 k: v for k, v in self._raw_config.items()
-                if k in ["startup_checks", "shutdown_timeout", "crash_recovery",
-                        "auto_update_check"]
+                if k in ["shutdown_timeout", "crash_recovery", "auto_update_check"]
             }))
 
             self.developer = DeveloperConfig(**self._get_section({
                 k: v for k, v in self._raw_config.items()
-                if k in ["debug_mode", "profile_inference", "metal_capture",
-                        "verbose_gpu_logs"]
+                if k in ["debug_mode"]
             }))
 
             self.paths = PathsConfig(**self._get_section({
@@ -415,61 +266,21 @@ class Config:
 
         return data
 
-    def validate_gpu_requirements(self) -> bool:
-        """Validate that GPU requirements are met."""
-        if self.gpu.compute_backend != "metal":
-            print("❌ Only Metal backend is supported")
-            return False
-
-        if not self.gpu.force_gpu:
-            print("❌ GPU execution is mandatory")
-            return False
-
-        if self.memory.cpu_offload:
-            print("❌ CPU offloading is not allowed")
-            return False
-
-        return True
-
-    def save(self, path: Optional[Path] = None) -> None:
-        """Save configuration to YAML file."""
-        save_path = path or self.config_path
-
-        # Keys that belong in state file, not config file
-        state_keys = {"last_used_model"}
-
-        # Convert Path objects to strings for YAML serialization
-        config_dict = {}
-        for section in [self.gpu, self.memory, self.performance, self.inference,
-                       self.model, self.cloud, self.tools, self.ui, self.logging, self.conversation,
-                       self.system, self.developer, self.paths]:
-            section_dict = section.model_dump()
-            # Convert Path objects to strings and exclude state keys
-            for key, value in section_dict.items():
-                if key in state_keys:
-                    continue  # Skip state keys - they go in state file
-                if isinstance(value, Path):
-                    section_dict[key] = str(value)
-            # Remove state keys from section_dict
-            for key in state_keys:
-                section_dict.pop(key, None)
-            config_dict.update(section_dict)
-
-        with open(save_path, 'w') as f:
-            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
-
     def _load_state(self) -> None:
         """Load runtime state from state file."""
         if self.STATE_FILE.exists():
             try:
                 with open(self.STATE_FILE, 'r') as f:
                     self._state = yaml.safe_load(f) or {}
-                # Apply state to model config
-                if "last_used_model" in self._state:
-                    self.model.last_used_model = self._state["last_used_model"]
             except Exception as e:
                 print(f"Warning: Failed to load state from {self.STATE_FILE}: {e}")
                 self._state = {}
+        # Selection keys for local models, which Cortex does not run.
+        obsolete = [key for key in ("last_used_backend", "last_used_model") if key in self._state]
+        if obsolete:
+            for key in obsolete:
+                del self._state[key]
+            self._save_state()
 
     def _save_state(self) -> None:
         """Save runtime state to state file."""
@@ -494,12 +305,6 @@ class Config:
         """Return True if a config key was explicitly set in config.yaml."""
         return key in self._raw_config
 
-    def update_last_used_model(self, model_name: str) -> None:
-        """Update the last used model and save to state file."""
-        self.model.last_used_model = model_name
-        self._state["last_used_model"] = model_name
-        self._save_state()
-
     def __repr__(self) -> str:
         """String representation."""
-        return f"Config(gpu={self.gpu.compute_backend}, memory={self.memory.max_gpu_memory})"
+        return f"Config(path={self.config_path})"

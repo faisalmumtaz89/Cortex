@@ -165,8 +165,8 @@ def tui_project(tmp_path: Path):
         session.close()
 
 
-def _cloud_picker_rows() -> list[str]:
-    """The Cloud tab's rows exactly as the worker builds them: every catalog
+def _picker_rows() -> list[str]:
+    """The /model picker's rows exactly as the worker builds them: every catalog
     entry in catalog order (the harness's isolated HOME has no override file).
     Deriving rows from the real catalog keeps the picker test decoupled from
     catalog cardinality — a routine model-list edit cannot silently break it."""
@@ -187,116 +187,11 @@ def _selection_window_size() -> int:
     return int(match.group(1))
 
 
-def _fake_lumen_env(tmp_path: Path) -> dict:
-    """Deterministic local catalog for picker tests: one cached model (with a
-    size), two available-to-download — no host lumen cache or network."""
-    listing = (
-        "Cached models:\n\n"
-        "  qwen3-5-9b-Q4_0                          5.4 GB\n\n"
-        "Available to download:\n"
-        "  qwen3-5-9b           Qwen3.5 9B Q8_0\n"
-        "  qwen3-6-27b          Qwen3.6 27B Q4_0\n\n"
-        "Download with: lumen pull <model-name> [--quant Q8_0]\n"
-    )
-    fixture = tmp_path / "tui-lumen-models.txt"
-    fixture.write_text(listing, encoding="utf-8")
-    stub = tmp_path / "tui-fake-lumen"
-    stub.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "if sys.argv[1:2] == ['models']:\n"
-        f"    print(open({str(fixture)!r}).read(), end='')\n"
-        "elif sys.argv[1:2] == ['--version']:\n"
-        "    print('lumen v0.3.0')\n",
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
-    return {"CORTEX_LUMEN_BINARY": str(stub)}
-
-
-def _full_fake_lumen_env(tmp_path: Path, *, boot_delay: float = 4.0) -> dict:
-    """A pull-capable fake `lumen` CLI + a fake `lumen-server` that becomes
-    ready after `boot_delay` seconds — enough to observe the load indicator.
-    `pull` streams output lines while growing a real `.part` file inside a
-    scratch LUMEN_CACHE_DIR (exercising Cortex's byte polling), then rewrites
-    the listing so the selector resolves as cached for the chained auto-load."""
-    cache_dir = tmp_path / "lumen-cache"
-    cache_dir.mkdir(exist_ok=True)
-    listing_start = (
-        "Cached models:\n\n"
-        "  qwen3-5-9b-Q4_0                          5.4 GB\n\n"
-        "Available to download:\n"
-        "  qwen3-5-9b           Qwen3.5 9B Q8_0\n\n"
-        "Download with: lumen pull <model-name> [--quant Q8_0]\n"
-    )
-    listing_after = (
-        "Cached models:\n\n"
-        "  qwen3-5-9b-Q4_0                          5.4 GB\n"
-        "  qwen3-5-9b-Q8_0                          8.9 GB\n\n"
-        "Available to download:\n\n"
-        "Download with: lumen pull <model-name> [--quant Q8_0]\n"
-    )
-    fixture = tmp_path / "flow-lumen-models.txt"
-    fixture.write_text(listing_start, encoding="utf-8")
-    after_fixture = tmp_path / "flow-lumen-models-after.txt"
-    after_fixture.write_text(listing_after, encoding="utf-8")
-
-    cli = tmp_path / "flow-fake-lumen"
-    cli.write_text(
-        "#!/usr/bin/env python3\n"
-        "import shutil, sys, time\n"
-        "if sys.argv[1:2] == ['models']:\n"
-        f"    print(open({str(fixture)!r}).read(), end='')\n"
-        "elif sys.argv[1:2] == ['pull']:\n"
-        "    print('Downloading: https://huggingface.co/example.gguf', flush=True)\n"
-        f"    part = {str(cache_dir)!r} + '/example.gguf.part'\n"
-        "    with open(part, 'wb') as fh:\n"
-        "        for _ in range(3):\n"
-        "            fh.write(b'x' * 1024 * 1024)\n"
-        "            fh.flush()\n"
-        "            time.sleep(1.1)\n"
-        "    import os\n"
-        "    os.remove(part)\n"
-        "    print('Saved: example.gguf (SHA-256: abc)', flush=True)\n"
-        f"    shutil.copyfile({str(after_fixture)!r}, {str(fixture)!r})\n",
-        encoding="utf-8",
-    )
-    cli.chmod(0o755)
-
-    server = tmp_path / "flow-fake-lumen-server"
-    server.write_text(
-        "#!/usr/bin/env python3\n"
-        "import http.server, json, sys, time\n"
-        "args = sys.argv[1:]\n"
-        "port = int(args[args.index('--port') + 1])\n"
-        "model = args[args.index('--model') + 1]\n"
-        f"time.sleep({boot_delay})\n"
-        "class H(http.server.BaseHTTPRequestHandler):\n"
-        "    def do_GET(self):\n"
-        "        body = json.dumps({'object': 'list', 'data': [{'id': model}]}).encode()\n"
-        "        self.send_response(200 if self.path == '/v1/models' else 404)\n"
-        "        self.send_header('Content-Length', str(len(body)))\n"
-        "        self.end_headers()\n"
-        "        self.wfile.write(body)\n"
-        "    def log_message(self, *a):\n"
-        "        pass\n"
-        "http.server.HTTPServer(('127.0.0.1', port), H).serve_forever()\n",
-        encoding="utf-8",
-    )
-    server.chmod(0o755)
-
-    return {
-        "CORTEX_LUMEN_BINARY": str(cli),
-        "CORTEX_LUMEN_SERVER_BINARY": str(server),
-        "LUMEN_CACHE_DIR": str(cache_dir),
-    }
-
-
 def _select_scripted_model(session: TuiSession) -> None:
     # "Session ready" is the bootstrap-complete signal (worker handshake done).
     session.wait_for("Session ready")
     session.send_line("/model azure:scripted")
-    session.wait_for("cloud · azure:scripted — now active.")
+    session.wait_for("azure:scripted — now active.")
 
 
 def test_tools_fold_and_answer_renders_after_them(tui_project) -> None:
@@ -420,14 +315,14 @@ def test_slash_palette_opens_filters_executes_without_polluting_transcript(tui_p
     assert "/help" in palette and "/status" in palette
     assert "↑↓ select" in palette
 
-    # Filtering narrows the list (check a palette-only description string, since
-    # command names like "/download" also appear in the welcome banner).
+    # Filtering narrows the list (check palette-only description strings, since
+    # command names like "/model" also appear in the welcome banner).
     session.send_key("he")  # "/he" → filters to /help; no retype/clear races
     filtered = session.wait_until(
-        lambda f: "List available commands" in f and "Download a model from HuggingFace" not in f,
+        lambda f: "List available commands" in f and "Show model & session status" not in f,
         description="palette filtered to /help only",
     )
-    assert "Download a model from HuggingFace" not in filtered  # /download filtered out
+    assert "Show model & session status" not in filtered  # /status filtered out
 
     # Enter executes the highlighted no-arg /help, rendered from the registry
     # into the ephemeral panel (one "name — description" row per command).
@@ -448,198 +343,65 @@ def test_slash_palette_opens_filters_executes_without_polluting_transcript(tui_p
     assert "Exit Cortex" not in cleared
 
 
-def test_cached_model_load_shows_load_indicator_not_download_bar(tui_project, tmp_path) -> None:
-    """Scenario A + C + G: selecting a CACHED model shows the GPU-load
-    indicator (spinner + 'Loading … into GPU memory'), never download
-    artifacts and never the generic turn spinner; re-selecting the serving
-    model answers instantly with a non-empty 'already active' panel."""
+def test_model_picker_lists_models_and_selects_with_wraparound(tui_project) -> None:
+    """Bare /model opens one list of provider:model rows with auth tags,
+    windowed to the selection; Up from the top wraps to the last row; Enter
+    selects it; reopening lands on the active row; no numbered selection."""
     project, start = tui_project
-    session = start([[{"text": "IGNORED"}]], extra_env=_full_fake_lumen_env(tmp_path))
+    session = start([[{"text": "IGNORED"}]])
     session.wait_for("Session ready")
 
-    session.send_line("/model qwen3-5-9b:q4_0")
-    loading = session.wait_until(
-        lambda frame: "Loading qwen3-5-9b:q4_0…" in frame,
-        description="minimal load indicator visible during the boot",
-        timeout=15,
-    )
-    # Minimal-line spec: spinner + "Loading <selector>…" and NOTHING else.
-    assert "into GPU memory" not in loading
-    assert "large models" not in loading
-    assert not re.search(r"Loading qwen3-5-9b:q4_0…[^\n]*\d+s", loading), "no elapsed timer"
-    # Wrong-artifact guards: no download language, no bytes, no turn spinner.
-    assert "Downloading" not in loading
-    assert "downloaded" not in loading
-    assert "0 B" not in loading
-    assert "Working…" not in loading
-    assert "Esc to interrupt" not in loading
-
-    # Exactly ONE live indicator row (spinner-prefixed) — and exactly ONE
-    # "Loading …" line in the WHOLE frame: the /model result panel must stay a
-    # terse selection confirmation, never a second live-state mirror (the
-    # cold-boot double-"Loading" regression).
-    spinner_rows = [
-        line
-        for line in loading.splitlines()
-        if "Loading qwen3-5-9b:q4_0…" in line and any(ch in line for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-    ]
-    assert len(spinner_rows) == 1, spinner_rows
-    loading_rows = [line for line in loading.splitlines() if "Loading qwen3-5-9b:q4_0…" in line]
-    assert loading_rows == spinner_rows, (
-        f"transcript row must solely own live load state, saw: {loading_rows}"
-    )
-    # The result panel confirms the selection tersely (no "Loading" mirror).
-    panel = session.wait_until(
-        lambda frame: "local · qwen3-5-9b:q4_0 selected." in frame,
-        description="terse selection confirmation in the result panel",
-        timeout=10,
-    )
-    assert len([line for line in panel.splitlines() if "Loading qwen3-5-9b:q4_0…" in line]) <= 1
-
-    session.wait_for("local · qwen3-5-9b:q4_0 ready — now active.", timeout=30)
-    session.send_key("Escape")  # dismiss the /model result panel
-    # RESOLVE IN PLACE: the live indicator row must be GONE — one operation,
-    # one transcript message (this is the stale-"Loading… 58s"-row regression).
-    resolved = session.wait_until(
-        lambda frame: "Loading qwen3-5-9b:q4_0…" not in frame
-        and "local · qwen3-5-9b:q4_0 ready — now active." in frame,
-        description="loading indicator resolved into the ready line",
-        timeout=10,
-    )
-    assert resolved.count("ready — now active.") == 1, "exactly one resolved row (no duplicate notice)"
-
-    # Scenario C: re-selecting the serving model is instant and explicit.
-    session.send_line("/model qwen3-5-9b:q4_0")
-    result = session.wait_for("local · qwen3-5-9b:q4_0 is already active.", timeout=15)
-    assert "✓ /model qwen3-5-9b:q4_0" in result
-    session.send_key("Escape")
-
-
-def test_uncached_select_shows_download_then_load_transition(tui_project, tmp_path) -> None:
-    """Scenario B/D: an uncached select streams REAL transferred bytes during
-    the pull, then flips the SAME message to the GPU-load indicator — never
-    '0 B downloaded', never a byte bar during the load phase."""
-    project, start = tui_project
-    session = start([[{"text": "IGNORED"}]], extra_env=_full_fake_lumen_env(tmp_path, boot_delay=2.5))
-    session.wait_for("Session ready")
-
-    session.send_line("/model qwen3-5-9b:q8_0")
-    session.wait_for("Downloading qwen3-5-9b:q8_0 — loads automatically when done", timeout=15)
-
-    # Download stage: the indicator carries real cache-side bytes.
-    downloading = session.wait_until(
-        lambda frame: "Downloading qwen3-5-9b:q8_0" in frame and "MB" in frame,
-        description="download indicator with live byte count",
-        timeout=20,
-    )
-    assert "0 B downloaded" not in downloading
-    assert "Working…" not in downloading
-
-    # Phase transition: same operation, now the minimal load indicator.
-    load_stage = session.wait_until(
-        lambda frame: "Loading qwen3-5-9b:q8_0…" in frame,
-        description="transition to the load indicator after the pull",
-        timeout=25,
-    )
-    assert "0 B" not in load_stage
-    assert "into GPU memory" not in load_stage
-    assert "large models" not in load_stage
-
-    session.wait_for("local · qwen3-5-9b:q8_0 ready — now active.", timeout=30)
-    # Resolve in place: no lingering live indicator after completion.
-    session.wait_until(
-        lambda frame: "Loading qwen3-5-9b:q8_0…" not in frame
-        and "Downloading qwen3-5-9b:q8_0…" not in frame,
-        description="indicators resolved after download+load completes",
-        timeout=10,
-    )
-
-
-def test_model_picker_tabs_split_local_and_cloud(tui_project, tmp_path) -> None:
-    """The picker shows ONE origin at a time: a Local tab (downloaded models
-    with sizes first, then download candidates) and a Cloud tab; Tab/←→
-    switch; it opens on the active backend's tab; no numbered selection."""
-    project, start = tui_project
-    session = start([[{"text": "IGNORED"}]], extra_env=_fake_lumen_env(tmp_path))
-    session.wait_for("Session ready")
-
-    # Palette Tab still completes commands (picker tab-switching must not
-    # steal it): "/mod" + Tab → arg-hint for /model.
+    # Palette Tab completes commands: "/mod" + Tab → arg-hint for /model.
     session.send_key("/mod")
     time.sleep(0.8)
     session.send_key("Tab")
-    session.wait_for("<name | provider:model>", timeout=10)
+    session.wait_for("<provider:model>", timeout=10)
     session.send_key("Escape")
     time.sleep(0.8)
 
     # Rows and windowing are DERIVED (real catalog + the picker's own window
     # default) so a routine catalog edit cannot silently break this test.
-    cloud_rows = _cloud_picker_rows()
+    rows = _picker_rows()
     window = _selection_window_size()
-    hidden = max(0, len(cloud_rows) - window)
-    first_row, last_row = cloud_rows[0], cloud_rows[-1]
+    hidden = max(0, len(rows) - window)
+    first_row, last_row = rows[0], rows[-1]
     # The wrap-select leg needs the env-authenticated azure deployment as the
     # catalog's final row; if the order ever changes, update that leg too.
-    assert last_row.startswith("azure:"), f"catalog order changed: {cloud_rows}"
+    assert last_row.startswith("azure:"), f"catalog order changed: {rows}"
 
-    # Bare /model opens the picker. No model is active → Local tab first.
     session.send_key("/model")
     time.sleep(1)
     session.send_key("Enter")
     picker = session.wait_for("Select a model", timeout=10)
-    assert "Local" in picker and "Cloud" in picker  # tab bar
-    assert "qwen3-5-9b:q4_0" in picker  # downloaded row…
-    assert "5.4 GB" in picker  # …with its on-disk size
-    assert "select to download" in picker  # download candidates below
-    assert first_row not in picker  # cloud rows live on the OTHER tab
-    assert "Tab cloud" in picker  # footer names the other tab
-    # No numbered rows anywhere.
+    for visible_row in rows[:window]:
+        assert visible_row in picker, f"windowed row missing: {visible_row}"
+    for windowed_out in rows[window:]:
+        assert windowed_out not in picker, f"row should be windowed out: {windowed_out}"
+    if hidden:
+        assert f"+{hidden} more" in picker
+    assert first_row in picker
+    assert "ready" in picker or "login required" in picker
+    assert "Local" not in picker and "Tab" not in picker
     assert "[1]" not in picker and "- [1]" not in picker
 
-    # Tab → Cloud tab: cloud rows appear, local rows disappear; rows past the
-    # window hide behind the "+N more" hint until selection reaches them.
-    session.send_key("Tab")
-    cloud_tab = session.wait_for(first_row, timeout=10)
-    assert "qwen3-5-9b:q4_0" not in cloud_tab
-    for visible_row in cloud_rows[:window]:
-        assert visible_row in cloud_tab, f"windowed row missing: {visible_row}"
-    for windowed_out in cloud_rows[window:]:
-        assert windowed_out not in cloud_tab, f"row should be windowed out: {windowed_out}"
-    if hidden:
-        assert f"+{hidden} more" in cloud_tab
-    assert "Tab local" in cloud_tab
-    assert "ready" in cloud_tab or "login required" in cloud_tab
-
-    # Left arrow flips back to Local; Right returns to Cloud.
-    session.send_key("Left")
-    session.wait_until(
-        lambda frame: "qwen3-5-9b:q4_0" in frame and first_row not in frame,
-        description="left arrow returns to the Local tab",
-        timeout=10,
-    )
-    session.send_key("Right")
-    session.wait_for(first_row, timeout=10)
-
-    # Up from the top wraps to the LAST cloud entry — the windowing follows
-    # the selection, revealing it; select it via Enter (azure is the one
+    # Up from the top wraps to the LAST entry — the windowing follows the
+    # selection, revealing it; select it via Enter (azure is the one
     # env-authenticated provider in this harness).
     session.send_key("Up")
     session.wait_for(last_row, timeout=10)
     session.send_key("Enter")
-    result = session.wait_for(f"cloud · {last_row} — now active.", timeout=10)
+    result = session.wait_for(f"{last_row} — now active.", timeout=10)
     assert "✓" in result
     session.send_key("Escape")
     time.sleep(1)
     assert "Select a model" not in session.capture()
 
-    # Reopen: the active backend is cloud, so the picker opens on Cloud with
-    # the window scrolled to the active (last) row.
+    # Reopen: the window is scrolled to the active (last) row.
     session.send_key("/model")
     time.sleep(1)
     session.send_key("Enter")
     reopened = session.wait_for("Select a model", timeout=10)
     assert last_row in reopened
-    assert "qwen3-5-9b:q4_0" not in reopened
     session.send_key("Escape")
     time.sleep(1)
     assert "Select a model" not in session.capture()
@@ -1040,75 +802,83 @@ def test_markdown_and_syntax_highlighting_render_with_color(tui_project) -> None
 def test_update_notice_status_panel_and_live_update_narration(tui_project, tmp_path) -> None:
     """With the release probe stubbed to a local server: the daily update
     check posts its notice exactly once at session start, /update renders the
-    installed-vs-latest status panel, and /update lumen narrates LIVE — the
+    installed-vs-latest status panel, and /update cortex narrates LIVE — the
     indicator must carry the latest installer output line, not sit static —
     then resolves in place with the exact final message."""
-    from tests.test_worker_update_flow import _probe_server, _update_stub_env
+    from cortex.update_check import installed_cortex_version
+    from tests.test_worker_update_flow import _cortex_release_assets, _probe_server
+
+    installed = installed_cortex_version()
+    stub_pip = tmp_path / "slow-stub-pip"
+    stub_pip.write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "Installing cortex-llm 9.9.9..."\n'
+        "sleep 2.5\n"
+        'echo "Successfully installed cortex-llm"\n',
+        encoding="utf-8",
+    )
+    stub_pip.chmod(0o755)
 
     project, start = tui_project
-    with _probe_server(lumen_tag="v0.4.0", cortex_tag=None) as probe_base:
-        # Reuse the worker-test env builder (version-file lumen + sleeping
-        # stub installer), lifting only the CORTEX_* seams into the TUI env.
-        stub_env = _update_stub_env(tmp_path, probe_base=probe_base, installer_sleep=2.5)
+    _wheel_name, assets = _cortex_release_assets("v9.9.9", b"stub cortex release wheel")
+    with _probe_server(cortex_tag="v9.9.9", assets=assets) as probe_base:
         session = start(
             [[{"text": "IGNORED"}]],
             extra_env={
-                "CORTEX_LUMEN_BINARY": stub_env["CORTEX_LUMEN_BINARY"],
-                "CORTEX_LUMEN_SERVER_BINARY": stub_env["CORTEX_LUMEN_SERVER_BINARY"],
-                "CORTEX_LUMEN_INSTALLER_URL": stub_env["CORTEX_LUMEN_INSTALLER_URL"],
                 "CORTEX_UPDATE_PROBE_BASE": probe_base,
+                "CORTEX_SELF_PIP": str(stub_pip),
+                "CORTEX_SELF_INSTALL_KIND": "installed",
                 "CORTEX_AUTO_UPDATE_CHECK": "true",  # opt back in (stubbed probe)
             },
         )
         session.wait_for("Session ready")
 
         # The startup notice renders in the transcript — exactly once.
-        frame = session.wait_for("Lumen 0.4.0 available — update with /update lumen", timeout=30)
-        assert frame.count("Lumen 0.4.0 available") == 1
+        frame = session.wait_for("Cortex 9.9.9 available — update with /update cortex", timeout=30)
+        assert frame.count("Cortex 9.9.9 available") == 1
 
         # /update from the palette: Enter completes into arg-hint mode
-        # ("[lumen|cortex]"), a second Enter runs the bare status report.
+        # ("[cortex]"), a second Enter runs the bare status report.
         session.send_key("/update")
         time.sleep(1)
         session.send_key("Enter")
-        session.wait_for("[lumen|cortex]", timeout=10)
+        session.wait_for("[cortex]", timeout=10)
         session.send_key("Enter")
         panel = session.wait_for(
-            "Lumen: 0.3.0 installed · 0.4.0 available — /update lumen", timeout=20
+            f"Cortex: {installed} installed · 9.9.9 available — /update cortex", timeout=20
         )
         assert "✓ /update" in panel
-        assert "no published releases yet" in panel  # Cortex line (zero releases today)
-        assert panel.count("Lumen 0.4.0 available") == 1  # still exactly one notice
+        assert panel.count("Cortex 9.9.9 available") == 1  # still exactly one notice
 
         # Esc dismisses the panel cleanly.
         session.send_key("Escape")
         time.sleep(1)
         assert "✓ /update" not in session.capture()
 
-        # /update lumen: the live indicator must show the LATEST installer
+        # /update cortex: the live indicator must show the LATEST installer
         # output line as its phase detail (the 2.5s stub sleep keeps
-        # "Installing Lumen v0.4.0..." on screen), with a spinner.
-        session.send_key("/update lumen")
+        # "Installing cortex-llm 9.9.9..." on screen), with a spinner.
+        session.send_key("/update cortex")
         time.sleep(1)
         session.send_key("Enter")
         live = session.wait_until(
             lambda f: any(
-                "Updating Lumen…" in line
-                and "Installing Lumen v0.4.0" in line
+                "Updating Cortex…" in line
+                and "Installing cortex-llm 9.9.9" in line
                 and any(ch in line for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
                 for line in f.splitlines()
             ),
-            description="live engine-update indicator with installer phase detail",
+            description="live update indicator with installer phase detail",
             timeout=20,
         )
         assert "Working…" not in live  # background op: never the turn spinner
 
         # Resolves in place: final message, no lingering live indicator.
-        session.wait_for("local · Lumen 0.4.0 installed — server restarts on next use.", timeout=30)
+        final = "Cortex 9.9.9 installed — restart Cortex to apply."
+        session.wait_for(final, timeout=30)
         session.wait_until(
-            lambda f: "Updating Lumen…" not in f
-            and "local · Lumen 0.4.0 installed — server restarts on next use." in f,
-            description="engine-update indicator resolved into the final message",
+            lambda f: "Updating Cortex…" not in f and final in f,
+            description="update indicator resolved into the final message",
             timeout=10,
         )
 

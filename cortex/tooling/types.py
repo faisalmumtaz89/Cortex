@@ -136,5 +136,4 @@ class AssistantTurnResult:
     # was checked against the requested target (see tooling/provenance.py).
     provenance: Optional[Dict[str, Any]] = None
     provenance_verified: bool = False
-    served_backend: Optional[str] = None  # "local" | "cloud"
-    served_model_label: Optional[str] = None  # e.g. "qwen3-5-9b:q4_0" / "openai:gpt-5.1"
+    served_model_label: Optional[str] = None  # e.g. "openai:gpt-5.1"

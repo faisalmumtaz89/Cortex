@@ -30,13 +30,11 @@ class _WorkerToolingBridge:
         config,
         conversation_manager,
         cloud_router,
-        lumen_runtime,
         permission_service,
     ) -> None:
         self.config = config
         self.conversation_manager = conversation_manager
         self.cloud_router = cloud_router
-        self.lumen_runtime = lumen_runtime
         self.permission_service = permission_service
 
         self._active_session_id: Optional[str] = None
@@ -96,12 +94,6 @@ class SessionService:
         event.set()
         return True
 
-    def has_active_turn(self) -> bool:
-        """True while ANY session's generation turn is running (each live turn
-        registers its interrupt event for exactly the turn's lifetime)."""
-        with self._lock:
-            return bool(self._interrupts)
-
     @staticmethod
     def _now_ms() -> int:
         return int(datetime.now().timestamp() * 1000)
@@ -116,13 +108,6 @@ class SessionService:
     def _resolve_active_target(self, payload) -> ActiveModelTarget:
         if payload is None:
             return cast(ActiveModelTarget, self.model_service.active_target)
-
-        backend = payload.backend
-        if backend == "local":
-            local_model = payload.local_model or self.model_service.active_target.local_model
-            target = ActiveModelTarget.local(local_model)
-            self.model_service.active_target = target
-            return target
 
         provider = CloudProvider.from_value(payload.provider or "openai")
         model_id = (payload.model_id or "").strip()
@@ -184,11 +169,10 @@ class SessionService:
         conversation, _ = self._get_or_create_conversation(session_id)
         active_target = self._resolve_active_target(active_target_input)
         active_model_label = self.model_service.get_active_model_label()
-        active_backend = active_target.backend
         turn_started_ms = self._now_ms()
 
         # Captured by the turn closures below; REGISTERED (visible to
-        # request_interrupt / has_active_turn) only at the try boundary right
+        # request_interrupt) only at the try boundary right
         # before the turn runs, so no raise in the setup span can ever leak
         # the registry entry — see the registration site below.
         interrupt_event = threading.Event()
@@ -231,7 +215,6 @@ class SessionService:
                 "parent_id": user_message.message_id,
                 "mode": "chat",
                 "model_label": active_model_label,
-                "backend": active_backend,
             },
         )
 
@@ -365,8 +348,8 @@ class SessionService:
         # EXCEPTION-SAFE registration: the registry entry is created
         # immediately before a try whose finally removes it — a raise
         # anywhere in the turn (bind_turn included) can never leak the entry.
-        # A leaked entry pins has_active_turn() True forever, permanently
-        # refusing /update lumen. The setup emissions above run unregistered
+        # A leaked entry would make a later interrupt report success for a
+        # turn that already ended. The setup emissions above run unregistered
         # on purpose: they take microseconds and nothing interruptible
         # happens before run_turn.
         with self._lock:
@@ -409,7 +392,6 @@ class SessionService:
                         "parent_id": user_message.message_id,
                         "mode": "chat",
                         "model_label": active_model_label,
-                        "backend": active_backend,
                     },
                 )
                 emit_event(
@@ -456,7 +438,6 @@ class SessionService:
                         "parent_id": user_message.message_id,
                         "mode": "chat",
                         "model_label": active_model_label,
-                        "backend": active_backend,
                     },
                 )
                 return {
@@ -479,10 +460,8 @@ class SessionService:
         # The final frame carries VERIFIED provenance labels (what actually
         # answered), not just intent — a mismatch never reaches this point
         # because the orchestrator rejects the turn.
-        served_backend = turn_result.served_backend or active_backend
         served_model_label = turn_result.served_model_label or active_model_label
         self.model_service.record_turn_provenance(
-            backend=served_backend,
             label=served_model_label,
             verified=turn_result.provenance_verified,
             record=turn_result.provenance,
@@ -513,7 +492,6 @@ class SessionService:
                 "parent_id": user_message.message_id,
                 "mode": "chat",
                 "model_label": served_model_label,
-                "backend": served_backend,
                 "provenance_verified": turn_result.provenance_verified,
             },
         )

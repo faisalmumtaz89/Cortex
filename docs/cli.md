@@ -34,7 +34,7 @@ cortex -p "PROMPT" [--model <selector>] [--full-auto]
 Runs one agent turn through the same worker wiring the TUI uses:
 
 - The assistant reply streams to **stdout**; tool activity and errors go to **stderr**, so stdout stays pipeable.
-- `--model` accepts the same selectors as `/model` (local name/path or `provider:model`).
+- `--model` accepts the same `provider:model` selectors as `/model`.
 - Permission policy: reads (`read_file`, `list_dir`, `search`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt). Persisted rules from `~/.cortex/tool_permissions.yaml` still apply.
 - Exit codes: `0` success, `1` turn error, `2` setup error (e.g. model selection failed).
 
@@ -51,14 +51,10 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 | Command | Description |
 |---|---|
 | `/help` | List available commands |
-| `/status` | Current setup (GPU, model, settings) |
-| `/gpu` | GPU and memory details |
-| `/model [selector]` | Pick a model interactively, or switch by name / `provider:model` |
-| `/download <model[:quant]>` | Download a local model via Lumen |
-| `/setup` | Load the first available local model if none is active |
-| `/benchmark [tokens] [--prompt <text>]` | Performance test (local models only) |
+| `/status` | Active model and the model that answered the last turn |
+| `/model [provider:model]` | Pick a model interactively, or switch by `provider:model` |
 | `/login <provider> [api_key]` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials |
-| `/update [lumen\|cortex]` | Show installed vs latest versions, or update the Lumen engine / Cortex itself |
+| `/update [cortex]` | Show installed vs latest version, or update Cortex |
 | `/clear` | Clear conversation history |
 | `/save` | Save the conversation as JSON |
 | `/quit` or `/exit` | Exit Cortex |
@@ -67,24 +63,11 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 
 ```bash
 /model                                  # open the interactive picker (↑↓ + Enter, Esc cancels)
-/model nanbeige                         # local model by (unambiguous) name or prefix
-/model ~/models/My-Model-4bit           # local model by path
-/model openai:gpt-5.1                   # cloud model
+/model openai:gpt-5.1
 /model anthropic:claude-sonnet-4-5
+/model openai-compatible:deepseek/deepseek-v4.1-flash
 /model list                             # plain text list (headless/worker fallback)
 ```
-
-### `/download` — fetch local models via Lumen
-
-```bash
-/download qwen3-5-9b:q4_0
-/download qwen3-6-27b            # default quant Q8_0
-/download cancel                 # cancel an in-flight download
-```
-
-- Local models are downloaded and converted by the Lumen engine (`lumen pull`); only Lumen-supported models are available — the `/model` picker marks them `download required`.
-- Progress streams into the TUI; after it finishes, load with `/model <model:quant>`.
-
 
 ### `/login` — credentials
 
@@ -110,15 +93,6 @@ provider. Set its base URL via `OPENAI_COMPATIBLE_BASE_URL` (or
 the model as `/model openai-compatible:<model>`.
 
 
-### `/benchmark` — local performance test
-
-```bash
-/benchmark
-/benchmark 200 --prompt "Once upon a time"
-```
-
-Reports tokens/second, first-token latency, and memory usage. Cloud models are not benchmarked.
-
 ## Agent Tools and Permissions
 
 With tools enabled (the default: `tools_enabled: true`, `tools_profile: full`), the model can call:
@@ -137,4 +111,4 @@ Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds 
 
 ## Configuration
 
-Cortex reads an optional `~/.cortex/config.yaml`. Common keys: `model_path`, `default_model`, `temperature`, `max_tokens`, `tools_profile`. See the [Configuration Guide](configuration.md).
+Cortex reads an optional `~/.cortex/config.yaml`. Common keys: `temperature`, `max_tokens`, `tools_profile`, `cloud_default_openai_model`. See the [Configuration Guide](configuration.md).

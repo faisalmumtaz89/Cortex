@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cortex-llm"
 version = "1.0.19"
-description = "Terminal AI coding agent for Apple Silicon — local MLX/GGUF models and cloud APIs"
+description = "Terminal AI coding agent for OpenAI, Anthropic, Azure OpenAI, and OpenAI-compatible models"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -22,15 +22,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Operating System :: MacOS",
     "Environment :: Console",
-    "Environment :: GPU",
 ]
-keywords = ["llm", "coding-agent", "gpu", "metal", "apple-silicon", "ai", "terminal", "mlx", "gguf"]
+keywords = ["llm", "coding-agent", "ai", "terminal", "openai", "anthropic"]
 
-# Cloud-only core: runs anywhere (Linux containers included).
 dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.5.0",
-    "psutil>=5.9.0",
     "openai>=1.54.0",
     "anthropic>=0.42.0",
     "keyring>=24.3.0",
@@ -43,7 +40,6 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.8.0",
     "types-PyYAML>=6.0.12.20250915",
-    "types-psutil>=7.0.0.20251001",
 ]
 
 [project.scripts]
@@ -79,8 +75,3 @@ check_untyped_defs = true
 [[tool.mypy.overrides]]
 module = ["keyring", "keyring.errors"]
 ignore_missing_imports = true
-
-[tool.pytest.ini_options]
-markers = [
-    "integration: tests that require GPU/Metal and may be slow",
-]

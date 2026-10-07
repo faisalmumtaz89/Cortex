@@ -1,9 +1,7 @@
 """UpdateService tests: status report, planning, and REAL installer execution
-via stub bash scripts (a subprocess boundary, but zero network — probes use
-injected openers, the Lumen installer is a local file injected through the
-env-overridable installer-URL seam, and the cortex self-update downloads its
-wheel asset from a local stub HTTP server exactly how the worker e2e does
-it)."""
+via stub scripts (a subprocess boundary, but zero network — probes use
+injected openers, and the cortex self-update downloads its wheel asset from a
+local stub HTTP server exactly how the worker e2e does it)."""
 
 from __future__ import annotations
 
@@ -21,9 +19,9 @@ from pathlib import Path
 
 import pytest
 
+import cortex.app.update_service as update_service_module
 from cortex.app.update_service import UpdateService
 from cortex.update_check import UpdateCheckCache, installed_cortex_version
-from tests.lumen_fakes import FakeLumenRuntime, catalog
 
 # ---- probe fakes -----------------------------------------------------------
 
@@ -35,20 +33,18 @@ def _headers(location: str | None) -> email.message.Message:
     return headers
 
 
-class PerRepoOpener:
-    """Redirects each repo to its configured tag (None → 404 / no releases)."""
+class ReleaseOpener:
+    """Redirects to the configured release tag (None → 404 / no releases)."""
 
-    def __init__(self, *, lumen_tag: str | None = None, cortex_tag: str | None = None) -> None:
-        self.lumen_tag = lumen_tag
+    def __init__(self, *, cortex_tag: str | None = None) -> None:
         self.cortex_tag = cortex_tag
         self.calls: list[str] = []
 
     def open(self, url: str, *, timeout: float | None = None):
         self.calls.append(url)
-        tag = self.lumen_tag if "/Lumen/" in url else self.cortex_tag
-        if tag is None:
+        if self.cortex_tag is None:
             raise urllib.error.HTTPError(url, 404, "Not Found", _headers(None), io.BytesIO(b""))
-        location = f"https://github.com/repo/x/releases/tag/{tag}"
+        location = f"https://github.com/repo/x/releases/tag/{self.cortex_tag}"
         raise urllib.error.HTTPError(url, 302, "Found", _headers(location), io.BytesIO(b""))
 
 
@@ -57,142 +53,109 @@ class FailingOpener:
         raise urllib.error.URLError("offline")
 
 
-def _service(
-    tmp_path: Path,
-    *,
-    runtime: FakeLumenRuntime,
-    lumen_tag: str | None = None,
-    cortex_tag: str | None = None,
-) -> UpdateService:
+def _service(tmp_path: Path, *, cortex_tag: str | None = None) -> UpdateService:
     return UpdateService(
-        lumen_runtime=runtime,  # type: ignore[arg-type]
         cache=UpdateCheckCache(tmp_path / "update-check.json"),
-        opener=PerRepoOpener(lumen_tag=lumen_tag, cortex_tag=cortex_tag),
+        opener=ReleaseOpener(cortex_tag=cortex_tag),
     )
-
-
-# ---- stub installers --------------------------------------------------------
-
-
-def _lumen_installer_stub(
-    tmp_path: Path, *, version_file: Path, new_version: str = "0.4.0", exit_code: int = 0
-) -> Path:
-    """A stand-in for servelumen.com/install.sh: records its env + stdin type,
-    'replaces the binary' by rewriting the version file, prints output lines."""
-    record = tmp_path / "installer-env.txt"
-    script = tmp_path / "stub-lumen-install.sh"
-    script.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -u\n"
-        f'echo "LUMEN_TAG=${{LUMEN_TAG:-}}" > {record}\n'
-        f'echo "LUMEN_MODEL=${{LUMEN_MODEL:-}}" >> {record}\n'
-        f'echo "LUMEN_QUANT=${{LUMEN_QUANT:-}}" >> {record}\n'
-        # The worker's stdin is the JSON-RPC pipe; the child's MUST be
-        # /dev/null (a character device, never a fifo).
-        f'echo "STDIN=$(stat -f %HT /dev/fd/0 2>/dev/null || echo unknown)" >> {record}\n'
-        'echo "Installing Lumen ${LUMEN_TAG:-unknown}..."\n'
-        'echo "Binaries installed."\n'
-        f"if [ {exit_code} -eq 0 ]; then\n"
-        f'  printf "%s" "{new_version}" > {version_file}\n'
-        "fi\n"
-        'echo "Done."\n'
-        f"exit {exit_code}\n",
-        encoding="utf-8",
-    )
-    script.chmod(0o755)
-    return script
-
-
-def _installer_record(tmp_path: Path) -> dict[str, str]:
-    text = (tmp_path / "installer-env.txt").read_text(encoding="utf-8")
-    return dict(line.split("=", 1) for line in text.strip().splitlines())
 
 
 # ---- status / notices ----------------------------------------------------------
 
 
-def test_status_report_lines_available_and_no_releases(tmp_path: Path) -> None:
-    runtime = FakeLumenRuntime(version="0.3.0")
-    service = _service(tmp_path, runtime=runtime, lumen_tag="v0.4.0", cortex_tag=None)
-    report = service.status_report()
+def test_status_report_no_releases(tmp_path: Path) -> None:
+    report = _service(tmp_path, cortex_tag=None).status_report()
     assert report["ok"] is True
-    lines = str(report["message"]).splitlines()
-    assert lines[0] == "Lumen: 0.3.0 installed · 0.4.0 available — /update lumen"
-    assert lines[1] == (
+    assert report["message"] == (
         f"Cortex: {installed_cortex_version()} installed · no published releases yet"
     )
+    assert report["update_status"] == {
+        "cortex_installed": installed_cortex_version(),
+        "cortex_latest": None,
+    }
 
 
-def test_status_report_up_to_date_and_not_installed(tmp_path: Path) -> None:
-    runtime = FakeLumenRuntime(version="0.4.0")
-    service = _service(tmp_path, runtime=runtime, lumen_tag="v0.4.0", cortex_tag=None)
-    assert "Lumen: 0.4.0 installed · up to date" in str(service.status_report()["message"])
+def test_status_report_newer_release_available(tmp_path: Path) -> None:
+    report = _service(tmp_path, cortex_tag="v9999.0.0").status_report()
+    assert report["message"] == (
+        f"Cortex: {installed_cortex_version()} installed · 9999.0.0 available — /update cortex"
+    )
+    assert report["update_status"] == {
+        "cortex_installed": installed_cortex_version(),
+        "cortex_latest": "9999.0.0",
+    }
 
-    missing = FakeLumenRuntime(version=None)
-    service = _service(tmp_path, runtime=missing, lumen_tag="v0.4.0", cortex_tag=None)
-    assert "Lumen: not installed" in str(service.status_report()["message"])
+
+def test_status_report_up_to_date_and_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = f"v{installed_cortex_version()}"
+    service = _service(tmp_path, cortex_tag=current)
+    assert service.status_report()["message"] == (
+        f"Cortex: {installed_cortex_version()} installed · up to date"
+    )
+
+    monkeypatch.setattr(update_service_module, "installed_cortex_version", lambda: None)
+    service = _service(tmp_path / "b", cortex_tag=current)
+    assert service.status_report()["message"] == "Cortex: not installed"
 
 
 def test_status_report_falls_back_to_cache_when_probe_fails(tmp_path: Path) -> None:
     cache = UpdateCheckCache(tmp_path / "update-check.json")
-    cache.store(lumen_latest="v0.4.0", cortex_latest=None)
-    service = UpdateService(
-        lumen_runtime=FakeLumenRuntime(version="0.3.0"),  # type: ignore[arg-type]
-        cache=cache,
-        opener=FailingOpener(),
+    cache.store(cortex_latest="v9999.0.0")
+    service = UpdateService(cache=cache, opener=FailingOpener())
+    assert service.status_report()["message"] == (
+        f"Cortex: {installed_cortex_version()} installed · 9999.0.0 available — /update cortex"
     )
-    message = str(service.status_report()["message"])
-    assert "Lumen: 0.3.0 installed · 0.4.0 available — /update lumen" in message
 
 
 def test_status_report_transient_failure_is_not_no_releases(tmp_path: Path) -> None:
-    """Finding-3 regression: a network failure with a COLD cache must never be
-    reported as the definitive 'no published releases yet' — that claim is
-    reserved for GitHub's authoritative 404."""
+    """A network failure with a COLD cache must never be reported as the
+    definitive 'no published releases yet' — that claim is reserved for
+    GitHub's authoritative 404."""
     service = UpdateService(
-        lumen_runtime=FakeLumenRuntime(version="0.3.0"),  # type: ignore[arg-type]
         cache=UpdateCheckCache(tmp_path / "update-check.json"),
         opener=FailingOpener(),
     )
     message = str(service.status_report()["message"])
     assert "no published releases yet" not in message
-    assert "Lumen: 0.3.0 installed · could not determine the latest release" in message
-    assert (
+    assert message == (
         f"Cortex: {installed_cortex_version()} installed · "
         "could not determine the latest release"
-    ) in message
-
-
-def test_startup_notice_only_when_strictly_newer(tmp_path: Path) -> None:
-    newer = _service(
-        tmp_path, runtime=FakeLumenRuntime(version="0.3.0"), lumen_tag="v0.4.0"
     )
-    assert newer.startup_notice() == "Lumen 0.4.0 available — update with /update lumen"
 
-    current = _service(
-        tmp_path / "b", runtime=FakeLumenRuntime(version="0.4.0"), lumen_tag="v0.4.0"
-    )
-    (tmp_path / "b").mkdir(exist_ok=True)
+
+def test_startup_notice_only_when_strictly_newer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CORTEX_SELF_INSTALL_KIND", "installed")
+    newer = _service(tmp_path / "a", cortex_tag="v9999.0.0")
+    assert newer.startup_notice() == "Cortex 9999.0.0 available — update with /update cortex"
+
+    current = _service(tmp_path / "b", cortex_tag=f"v{installed_cortex_version()}")
     assert current.startup_notice() is None
 
-    unknown_installed = _service(
-        tmp_path / "c", runtime=FakeLumenRuntime(version=None), lumen_tag="v0.4.0"
-    )
-    assert unknown_installed.startup_notice() is None
+    older = _service(tmp_path / "c", cortex_tag="v0.0.1")
+    assert older.startup_notice() is None
 
-    no_releases = _service(tmp_path / "d", runtime=FakeLumenRuntime(version="0.3.0"))
+    no_releases = _service(tmp_path / "d", cortex_tag=None)
     assert no_releases.startup_notice() is None
+
+    prerelease = _service(tmp_path / "e", cortex_tag="v9999.0.0-rc1")
+    assert prerelease.startup_notice() is None
+
+    monkeypatch.setattr(update_service_module, "installed_cortex_version", lambda: None)
+    unknown_installed = _service(tmp_path / "f", cortex_tag="v9999.0.0")
+    assert unknown_installed.startup_notice() is None
 
 
 def test_startup_notice_cortex_source_checkout_points_to_git(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Finding-2 regression: the startup nudge must never steer a
-    source-checkout developer into /update cortex — the wheel install would
-    replace their editable install."""
-    service = _service(
-        tmp_path, runtime=FakeLumenRuntime(version="0.4.0"), cortex_tag="v9999.0.0"
-    )
+    """The startup nudge must never steer a source-checkout developer into
+    /update cortex — the wheel install would replace their editable install."""
+    monkeypatch.delenv("CORTEX_SELF_INSTALL_KIND", raising=False)
+    service = _service(tmp_path, cortex_tag="v9999.0.0")
     # This suite runs from the repo — a source checkout.
     notice = str(service.startup_notice())
     assert "Cortex 9999.0.0 released — source checkout: update with git pull" == notice
@@ -200,145 +163,10 @@ def test_startup_notice_cortex_source_checkout_points_to_git(
 
     # Normal installs keep the /update cortex nudge.
     monkeypatch.setenv("CORTEX_SELF_INSTALL_KIND", "installed")
-    installed = _service(
-        tmp_path / "b", runtime=FakeLumenRuntime(version="0.4.0"), cortex_tag="v9999.0.0"
-    )
+    installed = _service(tmp_path / "b", cortex_tag="v9999.0.0")
     assert installed.startup_notice() == (
         "Cortex 9999.0.0 available — update with /update cortex"
     )
-
-
-# ---- lumen update execution ---------------------------------------------------
-
-
-def test_update_lumen_end_to_end_with_stub_installer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    version_file = tmp_path / "version.txt"
-    version_file.write_text("0.3.0", encoding="utf-8")
-    installer = _lumen_installer_stub(tmp_path, version_file=version_file)
-    monkeypatch.setenv("CORTEX_LUMEN_INSTALLER_URL", str(installer))
-
-    runtime = FakeLumenRuntime(version_file=version_file)
-    runtime.ensure_server("qwen3-5-9b:q4_0")  # a managed server is running
-    service = _service(tmp_path, runtime=runtime, lumen_tag="v0.4.0")
-
-    phases: list[str] = []
-    result = service.update_lumen(
-        progress_callback=lambda payload: phases.append(str(payload["phase"]))
-    )
-
-    assert result["ok"] is True, result
-    assert result["message"] == "local · Lumen 0.4.0 installed — server restarts on next use."
-    # The running server was stopped BEFORE the installer replaced binaries.
-    assert runtime.stopped == 1
-    assert any("stopped lumen-server (qwen3-5-9b:q4_0)" in phase for phase in phases)
-    # Installer output streamed as phases.
-    assert any("Installing Lumen v0.4.0" in phase for phase in phases)
-    assert "verifying installed version" in phases
-    # Model pull pinned to the already-cached model; stdin was /dev/null.
-    record = _installer_record(tmp_path)
-    assert record["LUMEN_TAG"] == "v0.4.0"
-    assert record["LUMEN_MODEL"] == "qwen3-5-9b"
-    assert record["LUMEN_QUANT"] == "q4_0"
-    assert record["STDIN"] == "Character Device"
-    # The catalog was refreshed after the install.
-    assert runtime.list_models_calls >= 2
-
-
-def test_update_lumen_supports_file_url_installer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    version_file = tmp_path / "version.txt"
-    version_file.write_text("0.3.0", encoding="utf-8")
-    installer = _lumen_installer_stub(tmp_path, version_file=version_file)
-    monkeypatch.setenv("CORTEX_LUMEN_INSTALLER_URL", f"file://{installer}")
-    service = _service(
-        tmp_path, runtime=FakeLumenRuntime(version_file=version_file), lumen_tag="v0.4.0"
-    )
-    assert service.update_lumen()["ok"] is True
-
-
-def test_update_lumen_without_cached_model_warns_about_default_pull(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    version_file = tmp_path / "version.txt"
-    version_file.write_text("0.3.0", encoding="utf-8")
-    installer = _lumen_installer_stub(tmp_path, version_file=version_file)
-    monkeypatch.setenv("CORTEX_LUMEN_INSTALLER_URL", str(installer))
-
-    runtime = FakeLumenRuntime(
-        models=catalog(("qwen3-6-27b", "Q4_0", False)), version_file=version_file
-    )
-    service = _service(tmp_path, runtime=runtime, lumen_tag="v0.4.0")
-    phases: list[str] = []
-    result = service.update_lumen(
-        progress_callback=lambda payload: phases.append(str(payload["phase"]))
-    )
-    assert result["ok"] is True
-    assert any("installer will download Lumen's default model" in phase for phase in phases)
-    record = _installer_record(tmp_path)
-    assert record["LUMEN_MODEL"] == ""  # nothing pinned — installer defaults apply
-    assert record["LUMEN_QUANT"] == ""
-
-
-def test_update_lumen_up_to_date_and_probe_failure_short_circuit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # No installer URL override needed: neither path may reach the installer.
-    monkeypatch.setenv("CORTEX_LUMEN_INSTALLER_URL", str(tmp_path / "must-not-run.sh"))
-
-    up_to_date = _service(
-        tmp_path, runtime=FakeLumenRuntime(version="0.4.0"), lumen_tag="v0.4.0"
-    )
-    result = up_to_date.update_lumen()
-    assert result == {"ok": True, "message": "Lumen 0.4.0 is up to date."}
-
-    offline = UpdateService(
-        lumen_runtime=FakeLumenRuntime(version="0.3.0"),  # type: ignore[arg-type]
-        cache=UpdateCheckCache(tmp_path / "empty-cache.json"),
-        opener=FailingOpener(),
-    )
-    result = offline.update_lumen()
-    assert result["ok"] is False
-    assert "Could not determine the latest Lumen release" in str(result["message"])
-
-
-def test_update_lumen_fails_on_installer_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    version_file = tmp_path / "version.txt"
-    version_file.write_text("0.3.0", encoding="utf-8")
-    installer = _lumen_installer_stub(tmp_path, version_file=version_file, exit_code=3)
-    monkeypatch.setenv("CORTEX_LUMEN_INSTALLER_URL", str(installer))
-    service = _service(
-        tmp_path, runtime=FakeLumenRuntime(version_file=version_file), lumen_tag="v0.4.0"
-    )
-    result = service.update_lumen()
-    assert result["ok"] is False
-    assert "Lumen update failed" in str(result["message"])
-    assert version_file.read_text(encoding="utf-8") == "0.3.0"  # nothing replaced
-
-
-def test_update_lumen_fails_on_version_mismatch_after_install(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The installer 'succeeds' but the binary still reports the old version —
-    the update must be reported as FAILED, never silently trusted."""
-    version_file = tmp_path / "version.txt"
-    version_file.write_text("0.3.0", encoding="utf-8")
-    installer = _lumen_installer_stub(
-        tmp_path, version_file=version_file, new_version="0.3.0"
-    )
-    monkeypatch.setenv("CORTEX_LUMEN_INSTALLER_URL", str(installer))
-    service = _service(
-        tmp_path, runtime=FakeLumenRuntime(version_file=version_file), lumen_tag="v0.4.0"
-    )
-    result = service.update_lumen()
-    assert result["ok"] is False
-    message = str(result["message"])
-    assert "reports 0.3.0" in message
-    assert "expected 0.4.0" in message
 
 
 # ---- cortex update execution ---------------------------------------------------
@@ -426,7 +254,7 @@ def _pip_record(tmp_path: Path) -> dict[str, str]:
 
 
 def test_update_cortex_no_releases_message(tmp_path: Path) -> None:
-    service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag=None)
+    service = _service(tmp_path, cortex_tag=None)
     result = service.update_cortex()
     assert result["ok"] is True
     assert str(result["message"]) == (
@@ -436,11 +264,10 @@ def test_update_cortex_no_releases_message(tmp_path: Path) -> None:
 
 
 def test_update_cortex_transient_probe_failure_is_not_no_releases(tmp_path: Path) -> None:
-    """Finding-3 regression: a transient probe failure with a cold cache must
-    mirror the Lumen plan's honest 'check your network' answer, never the
-    false factual claim 'no published releases yet'."""
+    """A transient probe failure with a cold cache must give the honest
+    'check your network' answer, never the false factual claim 'no published
+    releases yet'."""
     service = UpdateService(
-        lumen_runtime=FakeLumenRuntime(),  # type: ignore[arg-type]
         cache=UpdateCheckCache(tmp_path / "update-check.json"),
         opener=FailingOpener(),
     )
@@ -456,14 +283,14 @@ def test_update_cortex_transient_probe_failure_is_not_no_releases(tmp_path: Path
 def test_update_cortex_refuses_from_source_checkout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Finding-2 regression: this suite runs FROM the repo — a source
+    """This suite runs FROM the repo — a source
     checkout — so an actionable release must be refused: pip would replace
     the editable install (and can write through install.sh's site-packages
     symlink into the working tree). Nothing is downloaded or installed."""
     monkeypatch.delenv("CORTEX_SELF_INSTALL_KIND", raising=False)
     monkeypatch.setenv("CORTEX_SELF_PIP", str(_stub_pip(tmp_path)))
     monkeypatch.setenv("CORTEX_UPDATE_PROBE_BASE", "http://198.51.100.7")  # never contacted
-    service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag="v9.9.9")
+    service = _service(tmp_path, cortex_tag="v9.9.9")
     result = service.update_cortex()
     assert result["ok"] is False
     message = str(result["message"])
@@ -481,7 +308,7 @@ def test_update_cortex_downloads_verifies_and_installs_release_wheel(
     monkeypatch.setenv("CORTEX_SELF_PIP", str(_stub_pip(tmp_path)))
     with _asset_server(_release_assets(wheel_bytes)) as base:
         monkeypatch.setenv("CORTEX_UPDATE_PROBE_BASE", base)
-        service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag="v9.9.9")
+        service = _service(tmp_path, cortex_tag="v9.9.9")
         phases: list[str] = []
         result = service.update_cortex(
             progress_callback=lambda payload: phases.append(str(payload["phase"]))
@@ -515,7 +342,7 @@ def test_update_cortex_rejects_checksum_mismatch(
     assets = _release_assets(b"tampered wheel bytes", checksum_of=b"published wheel bytes")
     with _asset_server(assets) as base:
         monkeypatch.setenv("CORTEX_UPDATE_PROBE_BASE", base)
-        service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag="v9.9.9")
+        service = _service(tmp_path, cortex_tag="v9.9.9")
         result = service.update_cortex()
     assert result["ok"] is False
     message = str(result["message"])
@@ -535,7 +362,7 @@ def test_update_cortex_refuses_missing_sha256_asset(
     del assets[f"{CORTEX_ASSET_DIR}/{CORTEX_WHEEL_ASSET}.sha256"]
     with _asset_server(assets) as base:
         monkeypatch.setenv("CORTEX_UPDATE_PROBE_BASE", base)
-        service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag="v9.9.9")
+        service = _service(tmp_path, cortex_tag="v9.9.9")
         result = service.update_cortex()
     assert result["ok"] is False
     assert "refusing to install an unverified wheel" in str(result["message"])
@@ -549,7 +376,7 @@ def test_update_cortex_missing_wheel_asset_fails(
     monkeypatch.setenv("CORTEX_SELF_PIP", str(_stub_pip(tmp_path)))
     with _asset_server({}) as base:
         monkeypatch.setenv("CORTEX_UPDATE_PROBE_BASE", base)
-        service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag="v9.9.9")
+        service = _service(tmp_path, cortex_tag="v9.9.9")
         result = service.update_cortex()
     assert result["ok"] is False
     message = str(result["message"])
@@ -568,7 +395,7 @@ def test_update_cortex_refuses_untrusted_asset_base(
     monkeypatch.setenv("CORTEX_SELF_INSTALL_KIND", "installed")
     monkeypatch.setenv("CORTEX_SELF_PIP", str(_stub_pip(tmp_path)))
     monkeypatch.setenv("CORTEX_UPDATE_PROBE_BASE", "http://198.51.100.7")  # never contacted
-    service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag="v9.9.9")
+    service = _service(tmp_path, cortex_tag="v9.9.9")
     result = service.update_cortex()
     assert result["ok"] is False
     assert "refusing to download update artifacts" in str(result["message"])
@@ -579,7 +406,7 @@ def test_update_cortex_older_release_is_not_installed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CORTEX_SELF_PIP", str(_stub_pip(tmp_path)))
-    service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag="v0.0.1")
+    service = _service(tmp_path, cortex_tag="v0.0.1")
     result = service.update_cortex()
     assert result["ok"] is True
     assert "up to date" in str(result["message"])
@@ -593,29 +420,48 @@ def test_update_cortex_pip_failure_surfaces(
     monkeypatch.setenv("CORTEX_SELF_PIP", str(_stub_pip(tmp_path, exit_code=7)))
     with _asset_server(_release_assets()) as base:
         monkeypatch.setenv("CORTEX_UPDATE_PROBE_BASE", base)
-        service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag="v9.9.9")
+        service = _service(tmp_path, cortex_tag="v9.9.9")
         result = service.update_cortex()
     assert result["ok"] is False
     assert "Cortex update failed" in str(result["message"])
 
 
-# ---- shutdown safety: no orphaned installer process group -----------------------
+# ---- shutdown safety: no orphaned child process group ------------------------
 
 
-def _sleeping_installer(tmp_path: Path, *, pid_file: Path) -> Path:
-    """An installer that records its pid (== its process group, since it is
-    spawned as a session leader) and then hangs with a background child —
-    two group members, so only a GROUP kill reaps everything."""
-    script = tmp_path / "sleeping-install.sh"
-    script.write_text(
-        "#!/usr/bin/env bash\n"
-        f'echo "$$" > {pid_file}\n'
-        "sleep 30 &\n"
-        "sleep 30\n",
-        encoding="utf-8",
-    )
-    script.chmod(0o755)
-    return script
+@contextmanager
+def _stalling_asset_server():
+    """Serves the release wheel's first bytes, then stalls until released —
+    an in-flight download that only a shutdown can end."""
+    started = threading.Event()
+    release = threading.Event()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path != f"{CORTEX_ASSET_DIR}/{CORTEX_WHEEL_ASSET}":
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(1024 * 1024))
+            self.end_headers()
+            self.wfile.write(b"x" * 1024)
+            self.wfile.flush()
+            started.set()
+            release.wait(30)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}", started
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
 
 
 def _wait_for_file(path: Path, *, timeout: float = 10.0) -> None:
@@ -638,93 +484,47 @@ def _assert_group_gone(pgid: int, *, timeout: float = 5.0) -> None:
     raise AssertionError(f"process group {pgid} still alive after shutdown")
 
 
-def test_shutdown_terminates_in_flight_installer_process_group(
+def test_shutdown_terminates_in_flight_download_and_removes_staged_wheel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Worker-exit contract: shutdown() must reap the WHOLE installer process
-    group (leader + children), and the interrupted update must come back as a
-    loud failure — never a silent orphan continuing to replace binaries."""
-    version_file = tmp_path / "version.txt"
-    version_file.write_text("0.3.0", encoding="utf-8")
-    pid_file = tmp_path / "installer.pid"
-    installer = _sleeping_installer(tmp_path, pid_file=pid_file)
-    monkeypatch.setenv("CORTEX_LUMEN_INSTALLER_URL", str(installer))
+    """Worker-exit contract for an ordinary child: shutdown() must reap the
+    in-flight wheel download's WHOLE process group and remove the staged temp
+    directory (the update thread's finally never runs when the worker exits
+    through os._exit). The interrupted update fails LOUD and installs nothing."""
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(staging))
+    monkeypatch.setenv("CORTEX_SELF_INSTALL_KIND", "installed")
+    monkeypatch.setenv("CORTEX_SELF_PIP", str(_stub_pip(tmp_path)))
 
-    service = _service(
-        tmp_path, runtime=FakeLumenRuntime(version_file=version_file), lumen_tag="v0.4.0"
-    )
-    outcome: dict[str, dict] = {}
-    thread = threading.Thread(
-        target=lambda: outcome.update(result=service.update_lumen()), daemon=True
-    )
-    thread.start()
-    _wait_for_file(pid_file)
-    pgid = int(pid_file.read_text(encoding="utf-8").strip())
-
-    service.shutdown()
-
-    thread.join(timeout=10)
-    assert not thread.is_alive(), "update thread wedged after shutdown"
-    _assert_group_gone(pgid)
-    result = outcome["result"]
-    assert result["ok"] is False  # killed-mid-install fails LOUD
-    assert "Lumen update failed" in str(result["message"])
-    assert version_file.read_text(encoding="utf-8") == "0.3.0"  # nothing half-applied
-
-    service.shutdown()  # idempotent: nothing left to reap, never raises
-
-
-def test_shutdown_removes_downloaded_temp_installer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """When the installer was DOWNLOADED (curl → temp file), shutdown() must
-    remove the temp file too — the update thread's finally never runs when
-    the worker exits through os._exit."""
-    temp_dir = tmp_path / "tmpdir"
-    temp_dir.mkdir()
-    monkeypatch.setattr(tempfile, "tempdir", str(temp_dir))
-
-    version_file = tmp_path / "version.txt"
-    version_file.write_text("0.3.0", encoding="utf-8")
-    pid_file = tmp_path / "installer.pid"
-    installer_body = _sleeping_installer(tmp_path, pid_file=pid_file).read_bytes()
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(installer_body)))
-            self.end_headers()
-            self.wfile.write(installer_body)
-
-        def log_message(self, *args):
-            pass
-
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        monkeypatch.setenv(
-            "CORTEX_LUMEN_INSTALLER_URL",
-            f"http://127.0.0.1:{server.server_address[1]}/install.sh",
+    with _stalling_asset_server() as (base, download_started):
+        monkeypatch.setenv("CORTEX_UPDATE_PROBE_BASE", base)
+        service = _service(tmp_path, cortex_tag="v9.9.9")
+        outcome: dict[str, dict] = {}
+        thread = threading.Thread(
+            target=lambda: outcome.update(result=service.update_cortex()), daemon=True
         )
-        service = _service(
-            tmp_path, runtime=FakeLumenRuntime(version_file=version_file), lumen_tag="v0.4.0"
-        )
-        thread = threading.Thread(target=service.update_lumen, daemon=True)
         thread.start()
-        _wait_for_file(pid_file)
-        pgid = int(pid_file.read_text(encoding="utf-8").strip())
-        temp_installers = list(temp_dir.glob("cortex-installer-*.sh"))
-        assert temp_installers, "downloaded installer temp file should exist mid-install"
+        assert download_started.wait(10), "wheel download never started"
+        child = service._active_child
+        assert child is not None, "download child should be tracked mid-flight"
+        pgid = child.pid  # session leader: pid == pgid
+        assert list(staging.glob("cortex-wheel-*")), "staged wheel dir should exist mid-download"
 
         service.shutdown()
 
         thread.join(timeout=10)
-        assert not thread.is_alive()
+        assert not thread.is_alive(), "update thread wedged after shutdown"
         _assert_group_gone(pgid)
-        assert list(temp_dir.glob("cortex-installer-*.sh")) == []
-    finally:
-        server.shutdown()
-        server.server_close()
+        assert list(staging.glob("cortex-wheel-*")) == []
+        result = outcome["result"]
+        assert result["ok"] is False  # killed-mid-download fails LOUD
+        message = str(result["message"])
+        assert "Cortex update failed" in message
+        assert "download failed" in message
+        assert not (tmp_path / "pip-args.txt").exists()  # nothing installed
+
+        service.shutdown()  # idempotent: nothing left to reap, never raises
 
 
 def test_shutdown_waits_for_in_flight_self_install_pip(
@@ -754,7 +554,7 @@ def test_shutdown_waits_for_in_flight_self_install_pip(
 
     with _asset_server(_release_assets()) as base:
         monkeypatch.setenv("CORTEX_UPDATE_PROBE_BASE", base)
-        service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag="v9.9.9")
+        service = _service(tmp_path, cortex_tag="v9.9.9")
         outcome: dict[str, dict] = {}
         thread = threading.Thread(
             target=lambda: outcome.update(result=service.update_cortex()), daemon=True
@@ -801,7 +601,7 @@ def test_shutdown_kills_wedged_self_install_pip_as_last_resort(
 
     with _asset_server(_release_assets()) as base:
         monkeypatch.setenv("CORTEX_UPDATE_PROBE_BASE", base)
-        service = _service(tmp_path, runtime=FakeLumenRuntime(), cortex_tag="v9.9.9")
+        service = _service(tmp_path, cortex_tag="v9.9.9")
         outcome: dict[str, dict] = {}
         thread = threading.Thread(
             target=lambda: outcome.update(result=service.update_cortex()), daemon=True

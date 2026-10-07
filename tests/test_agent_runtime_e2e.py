@@ -443,6 +443,41 @@ def test_model_list_reports_provider_auth_and_active_uncatalogued_model(
     assert [row["selector"] for row in active] == ["openai-compatible:org/model:free"]
 
 
+def test_worker_is_cloud_only_and_clears_saved_local_state(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    for key in ("CORTEX_SCRIPTED_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        env.pop(key, None)
+    state = Path(env["HOME"]) / ".cortex" / "state.yaml"
+    state.parent.mkdir(parents=True)
+    state.write_text(
+        "last_used_backend: local\nlast_used_model: qwen3-5-9b:q4_0\n", encoding="utf-8"
+    )
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        listing = harness.wait_response(harness.send("model.list", {}))["result"]
+        commands = {
+            command: harness.wait_response(
+                harness.send("command.execute", {"session_id": session_id, "command": command})
+            )["result"]
+            for command in ("/gpu", "/download qwen3-5-9b", "/benchmark", "/setup", "/model qwen")
+        }
+    finally:
+        harness.close()
+
+    assert "local" not in listing
+    assert listing["active_target"]["label"] == "No model loaded"
+    for command in ("/gpu", "/download qwen3-5-9b", "/benchmark", "/setup"):
+        assert commands[command]["ok"] is False
+        assert "Unknown command" in commands[command]["message"], command
+    assert commands["/model qwen"]["ok"] is False
+    assert "/model <provider>:<model>" in commands["/model qwen"]["message"]
+    saved = state.read_text(encoding="utf-8")
+    assert "local" not in saved and "qwen" not in saved
+
+
 def test_headless_default_denies_writes(tmp_path: Path, scratch_repo: Path) -> None:
     script = _write_script(
         tmp_path / "script.json",

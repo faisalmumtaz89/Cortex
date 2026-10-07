@@ -99,21 +99,10 @@ export function parseDiff(metadata: unknown): DiffData | undefined {
   }
 }
 
-export interface DownloadProgressRecord {
-  kind: "download" | "model-load" | "engine-update"
+export interface ProgressRecord {
+  kind: "engine-update"
   repoID: string
   phase: string
-  bytesDownloaded: number
-  bytesTotal?: number
-  percent?: number
-  filesCompleted?: number
-  filesTotal?: number
-  speedBps?: number
-  etaSeconds?: number
-  elapsedSeconds?: number
-  stalled: boolean
-  /** Client-side: when this operation's first frame arrived (drives the live
-   * elapsed display; preserved across update frames). */
 }
 
 export interface MessageRecord {
@@ -126,10 +115,9 @@ export interface MessageRecord {
   completedTsMs?: number
   elapsedMs?: number
   mode?: string
-  backend?: string
   modelLabel?: string
   parentID?: string
-  downloadProgress?: DownloadProgressRecord
+  progress?: ProgressRecord
   interrupted?: boolean
 }
 
@@ -137,9 +125,6 @@ type State = {
   sessionID: string
   status: SessionStatus
   activeModelLabel: string
-  activeBackend?: string
-  localModelCount: number
-  firstLocalModelName?: string
   error?: string
   pendingPermission?: {
     request_id: string
@@ -161,14 +146,9 @@ type State = {
   commandResult?: { command: string; ok: boolean; text: string; background?: boolean }
   // Full model lists (for the interactive /model picker) + permission-menu highlight.
   models: {
-    local: Record<string, unknown>[]
     cloud: Record<string, unknown>[]
     providers: Record<string, unknown>[]
   }
-  // Selector of the local model currently downloading in the background (drives
-  // the picker's "downloading…" tag); cleared on the final progress frame.
-  activeDownloadRepoId?: string
-  activeLoadSelector?: string
   permissionChoiceIndex: number
 }
 
@@ -181,8 +161,6 @@ function freshState(): State {
     sessionID: "",
     status: "idle",
     activeModelLabel: "No model loaded",
-    activeBackend: undefined,
-    localModelCount: 0,
     messages: {},
     orderedMessageIDs: [],
     seqBySession: {},
@@ -192,9 +170,7 @@ function freshState(): State {
     lastInterrupted: false,
     paletteOpen: false,
     commandInFlight: false,
-    models: { local: [], cloud: [], providers: [] },
-    activeDownloadRepoId: undefined,
-    activeLoadSelector: undefined,
+    models: { cloud: [], providers: [] },
     permissionChoiceIndex: 0,
   }
 }
@@ -318,13 +294,6 @@ export function createSessionStore() {
     return Math.round(value)
   }
 
-  const parseNonNegativeNumber = (value: unknown): number | undefined => {
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-      return undefined
-    }
-    return value
-  }
-
   const parseString = (value: unknown): string | undefined => {
     if (typeof value !== "string") {
       return undefined
@@ -333,63 +302,19 @@ export function createSessionStore() {
     return normalized.length > 0 ? normalized : undefined
   }
 
-  const parseDownloadProgress = (raw: unknown): DownloadProgressRecord | undefined => {
+  const parseProgress = (raw: unknown): ProgressRecord | undefined => {
     if (!raw || typeof raw !== "object") {
       return undefined
     }
     const payload = raw as Record<string, unknown>
-    const kind = String(payload.kind ?? "")
-    if (kind !== "download" && kind !== "model-load" && kind !== "engine-update") {
+    if (payload.kind !== "engine-update") {
       return undefined
     }
-
     const repoID = parseString(payload.repo_id)
     if (!repoID) {
       return undefined
     }
-
-    // Bytes are download-only; model-load/engine-update frames carry none.
-    const bytesDownloaded = parseNonNegativeNumber(payload.bytes_downloaded) ?? 0
-
-    const phase = parseString(payload.phase) ?? "preparing"
-    const parsed: DownloadProgressRecord = {
-      kind: kind as "download" | "model-load" | "engine-update",
-      repoID,
-      phase,
-      bytesDownloaded,
-      stalled: Boolean(payload.stalled),
-    }
-
-    const bytesTotal = parsePositiveInt(payload.bytes_total)
-    if (bytesTotal !== undefined) {
-      parsed.bytesTotal = bytesTotal
-    }
-    const percent = parseNonNegativeNumber(payload.percent)
-    if (percent !== undefined) {
-      parsed.percent = Math.min(100, percent)
-    }
-    const filesCompleted = parseNonNegativeNumber(payload.files_completed)
-    if (filesCompleted !== undefined) {
-      parsed.filesCompleted = filesCompleted
-    }
-    const filesTotal = parseNonNegativeNumber(payload.files_total)
-    if (filesTotal !== undefined && filesTotal > 0) {
-      parsed.filesTotal = filesTotal
-    }
-    const speedBps = parseNonNegativeNumber(payload.speed_bps)
-    if (speedBps !== undefined && speedBps > 0) {
-      parsed.speedBps = speedBps
-    }
-    const etaSeconds = parseNonNegativeNumber(payload.eta_seconds)
-    if (etaSeconds !== undefined && etaSeconds > 0) {
-      parsed.etaSeconds = etaSeconds
-    }
-    const elapsedSeconds = parseNonNegativeNumber(payload.elapsed_seconds)
-    if (elapsedSeconds !== undefined) {
-      parsed.elapsedSeconds = elapsedSeconds
-    }
-
-    return parsed
+    return { kind: "engine-update", repoID, phase: parseString(payload.phase) ?? "preparing" }
   }
 
   const ensureMessage = (id: string, role: MessageRole = "assistant") => {
@@ -427,10 +352,6 @@ export function createSessionStore() {
     const modelLabel = parseString(payload.model_label)
     if (modelLabel !== undefined) {
       setState("messages", messageID, "modelLabel", modelLabel)
-    }
-    const backend = parseString(payload.backend)
-    if (backend !== undefined) {
-      setState("messages", messageID, "backend", backend)
     }
 
     const parentID = parseString(payload.parent_id)
@@ -626,17 +547,12 @@ export function createSessionStore() {
         if (event.payload.interrupted === true) {
           setState("messages", id, "interrupted", true)
         }
-        const parsedProgress = parseDownloadProgress(event.payload.progress)
+        const parsedProgress = parseProgress(event.payload.progress)
         if (parsedProgress) {
-          setState("messages", id, "downloadProgress", parsedProgress)
-          if (parsedProgress.kind === "download") {
-            setState("activeDownloadRepoId", incomingFinal ? undefined : parsedProgress.repoID)
-          } else if (parsedProgress.kind === "model-load") {
-            setState("activeLoadSelector", incomingFinal ? undefined : parsedProgress.repoID)
-          }
+          setState("messages", id, "progress", parsedProgress)
           if (incomingFinal && state.commandResult?.background) {
-            // The op's acknowledgment panel ("Loading X…" / "Downloading X…")
-            // is only meaningful while the op runs; once the operation's own
+            // The op's acknowledgment panel ("Updating Cortex to X…") is only
+            // meaningful while the op runs; once the operation's own
             // transcript row resolves (ready OR failed), a lingering panel
             // would contradict it — dismiss automatically.
             setState("commandResult", undefined)
@@ -805,15 +721,8 @@ export function createSessionStore() {
         ? (activeTargetRaw as Record<string, unknown>)
         : {}
 
-    const localRaw = Array.isArray(payload.local) ? payload.local : []
     const cloudRaw = Array.isArray(payload.cloud) ? payload.cloud : []
     const providersRaw = Array.isArray(payload.providers) ? payload.providers : []
-    const firstLocalEntry = localRaw.find(
-      (item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).name === "string",
-    ) as Record<string, unknown> | undefined
-
-    const firstLocalName =
-      firstLocalEntry && typeof firstLocalEntry.name === "string" ? firstLocalEntry.name.trim() : undefined
 
     const activeLabel =
       typeof activeTarget.label === "string" && activeTarget.label.trim().length > 0
@@ -823,21 +732,9 @@ export function createSessionStore() {
     const asRecords = (list: unknown[]): Record<string, unknown>[] =>
       list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
 
-    const activeBackend =
-      typeof activeTarget.backend === "string" && activeTarget.backend.trim().length > 0
-        ? activeTarget.backend.trim()
-        : undefined
-
     batch(() => {
       setState("activeModelLabel", activeLabel)
-      setState("activeBackend", activeLabel === "No model loaded" ? undefined : activeBackend)
-      setState("localModelCount", localRaw.length)
-      setState("firstLocalModelName", firstLocalName && firstLocalName.length > 0 ? firstLocalName : undefined)
-      setState("models", {
-        local: asRecords(localRaw),
-        cloud: asRecords(cloudRaw),
-        providers: asRecords(providersRaw),
-      })
+      setState("models", { cloud: asRecords(cloudRaw), providers: asRecords(providersRaw) })
     })
   }
 

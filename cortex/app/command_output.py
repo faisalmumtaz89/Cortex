@@ -4,44 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-# Exact labels for keys whose acronyms/units a blanket title-case would mangle
-# (e.g. "gpu_cores" -> "Gpu cores", "total_memory_gb" -> "Total memory gb").
-_KEY_LABELS: dict[str, str] = {
-    "gpu": "GPU",
-    "gpu_cores": "GPU cores",
-    "gpu_acceleration": "GPU acceleration",
-    "gpu_utilization": "GPU utilization",
-    "mlx": "MLX",
-    "mlx_available": "MLX available",
-    "mlx_acceleration": "MLX acceleration",
-    "mps": "MPS",
-    "mps_available": "MPS available",
-    "metal": "Metal",
-    "metal_available": "Metal available",
-    "cpu": "CPU",
-    "os": "OS",
-    "id": "ID",
-    "url": "URL",
-    "api": "API",
-    "total_memory_gb": "Total memory (GB)",
-    "available_memory_gb": "Available (GB)",
-    "used_memory_gb": "Used (GB)",
-    "memory_gb": "Memory (GB)",
-    "kv_cache_gb": "KV cache (GB)",
-    "pool_size_gb": "Pool size (GB)",
-}
-
 # Tokens that should stay uppercase when they appear as a standalone word in an
 # otherwise title-cased label.
-_ACRONYMS = {"gpu", "mlx", "mps", "cpu", "os", "id", "url", "api", "gb", "mb", "kb", "kv", "ram"}
+_ACRONYMS = {"cpu", "os", "id", "url", "api", "gb", "mb", "kb", "ram"}
 
 
 def _labelize(key: str) -> str:
-    exact = _KEY_LABELS.get(key.strip().lower())
-    if exact is not None:
-        return exact
-    # Sentence case with acronym words kept uppercase: "gpu_cores" -> "GPU cores",
-    # "active_model" -> "Active model", "chip_name" -> "Chip name".
+    # Sentence case with acronym words kept uppercase: "api_key" -> "API key",
+    # "active_model" -> "Active model".
     words = [
         word.upper() if word.lower() in _ACRONYMS else word.lower()
         for word in key.replace("_", " ").strip().split()
@@ -66,18 +36,7 @@ def format_key_value_block(*, title: str, values: Mapping[str, Any], include_emp
 
 
 def format_status_summary(status: Mapping[str, Any]) -> str:
-    # Render the model with its origin ("local · X" / "cloud · Y") — the same
-    # wording every surface uses — instead of a separate Backend line.
-    values = dict(status)
-    backend = str(values.pop("backend", "") or "").strip()
-    label = str(values.get("active_model", "") or "").strip()
-    if backend and label and label != "No model loaded":
-        values["active_model"] = f"{backend} · {label}"
-    return format_key_value_block(title="System status", values=values)
-
-
-def format_gpu_status(status: Mapping[str, Any]) -> str:
-    return format_key_value_block(title="GPU status", values=status)
+    return format_key_value_block(title="System status", values=status)
 
 
 def format_auth_status(*, provider: str, auth: Mapping[str, Any]) -> str:

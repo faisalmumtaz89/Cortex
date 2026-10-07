@@ -166,8 +166,7 @@ class StdioJsonRpcServer:
         finally:
             # Give in-flight handlers a bounded grace to finish writing their
             # responses, but never block shutdown indefinitely — a streaming
-            # turn can outlive stdin EOF, and the process teardown (lumen stop,
-            # exit) must not wait on it.
+            # turn can outlive stdin EOF, and process exit must not wait on it.
             pending = [f for f in inflight if not f.done()]
             if pending:
                 futures_wait(pending, timeout=2.0)

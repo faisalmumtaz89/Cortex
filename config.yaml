@@ -7,17 +7,10 @@
 temperature: 0.7
 top_p: 0.95
 max_tokens: 4096
-context_length: 8192
 
-# Local models (served by the managed Lumen engine)
-# lumen_binary: lumen
-# lumen_server_binary: lumen-server
-# lumen_port: 0            # 0 = pick a free port
-# lumen_context_len: 0     # 0 = Lumen's default
-
-# Cloud models
-cloud_default_openai_model: gpt-5.1
-cloud_default_anthropic_model: claude-sonnet-4-5
+# Models
+cloud_default_openai_model: gpt-5.5
+cloud_default_anthropic_model: claude-fable-5
 # cloud_azure_endpoint: https://<resource>.cognitiveservices.azure.com
 # cloud_openai_compatible_base_url: https://<host>/v1
 

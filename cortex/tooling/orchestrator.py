@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, cast
 
 from cortex.cloud.types import CloudModelRef, CloudProvider
-from cortex.lumen_runtime import SWITCH_IN_FLIGHT_PREFIX, parse_selector
 from cortex.tooling.agent_prompt import build_system_prompt
 from cortex.tooling.permissions import (
     PermissionDecision,
@@ -54,12 +53,10 @@ class ToolingOrchestrator:
         tools_cfg = getattr(self.cli.config, "tools", None)
         tools_enabled = bool(getattr(tools_cfg, "tools_enabled", False))
         tools_profile = str(getattr(tools_cfg, "tools_profile", "off") or "off")
-        tools_local_mode = str(getattr(tools_cfg, "tools_local_mode", "disabled") or "disabled")
         max_iterations = int(getattr(tools_cfg, "tools_max_iterations", 25) or 25)
         return {
             "enabled": tools_enabled and tools_profile != "off",
             "profile": tools_profile,
-            "local_mode": tools_local_mode,
             "max_iterations": max(1, max_iterations),
         }
 
@@ -215,27 +212,9 @@ class ToolingOrchestrator:
         started_at = time.time()
         first_text_seen: Dict[str, float] = {}
 
-        local_selector: Optional[str] = None
-        if active_target.backend == "cloud":
-            model_ref = active_target.cloud_model
-        else:
-            # Local models are served by the managed Lumen engine and speak the
-            # same OpenAI-compatible protocol, so both backends share one loop.
-            selector = active_target.local_model
-            if not selector:
-                raise RuntimeError("No model loaded. Pick one with /model.")
-            ok, message = self.cli.lumen_runtime.ensure_server(selector)
-            if not ok:
-                if message.startswith(SWITCH_IN_FLIGHT_PREFIX):
-                    # A different model is mid-boot (e.g. this turn raced a
-                    # /model switch). The refusal is already user-actionable —
-                    # surface it verbatim, not as a startup failure.
-                    raise RuntimeError(message)
-                raise RuntimeError(f"local · {selector} failed to start: {message}")
-            local_selector = selector
-            model_ref = CloudModelRef(
-                provider=CloudProvider.LUMEN, model_id=parse_selector(selector)[0]
-            )
+        model_ref = active_target.cloud_model
+        if model_ref is None:
+            raise RuntimeError("No model loaded. Pick one with /model.")
 
         messages = self._build_message_window(conversation=conversation)
         if not messages:
@@ -287,7 +266,6 @@ class ToolingOrchestrator:
         self._verify_turn_provenance(
             result=result,
             model_ref=model_ref,
-            local_selector=local_selector,
             on_event=on_event,
         )
 
@@ -300,19 +278,12 @@ class ToolingOrchestrator:
         *,
         result: AssistantTurnResult,
         model_ref: CloudModelRef,
-        local_selector: Optional[str],
         on_event: Optional[Callable[[ModelEvent], None]],
     ) -> None:
         """Fail the turn unless the response proved it came from the
         requested model (see cortex/tooling/provenance.py)."""
-        is_local = model_ref.provider == CloudProvider.LUMEN
         expected_endpoint: Optional[str] = None
-        lumen_ready: Optional[bool] = None
-        if is_local:
-            runtime = self.cli.lumen_runtime
-            expected_endpoint = runtime.base_url()
-            lumen_ready = bool(runtime.status().get("ready"))
-        elif model_ref.provider == CloudProvider.OPENAI_COMPATIBLE:
+        if model_ref.provider == CloudProvider.OPENAI_COMPATIBLE:
             expected_endpoint = self.cli.cloud_router.openai_compatible_base_url()
 
         verdict = verify_turn_provenance(
@@ -320,15 +291,11 @@ class ToolingOrchestrator:
             requested_model=model_ref.model_id,
             provenance=result.provenance,
             expected_endpoint=expected_endpoint,
-            lumen_ready=lumen_ready,
         )
 
-        intent_label = (
-            f"local · {local_selector}" if is_local else f"cloud · {model_ref.selector}"
-        )
         if not verdict.ok:
             error = (
-                f"Model provenance mismatch: asked {intent_label}, but {verdict.reason} "
+                f"Model provenance mismatch: asked {model_ref.selector}, but {verdict.reason} "
                 f"— turn rejected."
             )
             if on_event is not None:
@@ -336,6 +303,5 @@ class ToolingOrchestrator:
             raise RuntimeError(error)
 
         result.provenance_verified = True
-        result.served_backend = "local" if is_local else "cloud"
-        served = local_selector if is_local else model_ref.selector
-        result.served_model_label = f"{served} (scripted)" if verdict.scripted else str(served)
+        served = model_ref.selector
+        result.served_model_label = f"{served} (scripted)" if verdict.scripted else served

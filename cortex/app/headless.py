@@ -44,11 +44,10 @@ def run_headless(
 ) -> int:
     from cortex.app.worker_runtime import WorkerRuntime
 
-    config, gpu_validator, conversation_manager = components
+    config, conversation_manager = components
 
     runtime = WorkerRuntime(
         config=config,
-        gpu_validator=gpu_validator,
         conversation_manager=conversation_manager,
         rpc_stdin=io.StringIO(),
         rpc_stdout=io.StringIO(),

@@ -62,17 +62,16 @@ class _FakeConversationManager:
 
 class _FakeModelService:
     def __init__(self) -> None:
-        self.active_target = ActiveModelTarget.local("test-model")
-        self.model_manager = SimpleNamespace(current_model="test-model")
+        self.active_target = ActiveModelTarget.cloud(
+            CloudModelRef(provider=CloudProvider.OPENAI, model_id="test-model")
+        )
         self.recorded_provenance: list[dict] = []
 
     def get_active_model_label(self) -> str:
-        return "test-model"
+        return self.active_target.label
 
-    def record_turn_provenance(self, *, backend, label, verified, record) -> None:
-        self.recorded_provenance.append(
-            {"backend": backend, "label": label, "verified": verified, "record": record}
-        )
+    def record_turn_provenance(self, *, label, verified, record) -> None:
+        self.recorded_provenance.append({"label": label, "verified": verified, "record": record})
 
 
 class _FakeBridge:
@@ -138,7 +137,7 @@ def test_session_service_emits_single_idle_transition_after_finish_event(tmp_pat
     assert any(payload.get("final") is False for payload in assistant_updates)
     final_assistant = next(payload for payload in assistant_updates if payload.get("final") is True)
     assert final_assistant.get("mode") == "chat"
-    assert final_assistant.get("model_label") == "test-model"
+    assert final_assistant.get("model_label") == "openai:test-model"
     assert isinstance(final_assistant.get("elapsed_ms"), int)
     assert isinstance(final_assistant.get("completed_ts_ms"), int)
 
@@ -395,17 +394,16 @@ def test_mid_turn_model_switch_does_not_relabel_in_flight_turn(tmp_path: Path) -
 
     class _SwitchingOrchestrator:
         def run_turn(self, *_args, **kwargs):
-            # Simulate a background boot/download completing mid-turn and
-            # flipping the ACTIVE target under the running turn.
+            # Simulate a /model switch landing mid-turn and flipping the
+            # ACTIVE target under the running turn.
             model_service.active_target = ActiveModelTarget.cloud(
-                CloudModelRef(provider=CloudProvider.OPENAI, model_id="gpt-5.1")
+                CloudModelRef(provider=CloudProvider.ANTHROPIC, model_id="claude-haiku-4-5")
             )
             result = AssistantTurnResult(text="done")
             # Orchestrator verified the turn against the ORIGINAL target.
             result.provenance_verified = True
-            result.served_backend = "local"
-            result.served_model_label = "test-model"
-            result.provenance = {"client_kind": "lumen", "reported_model": "test-model"}
+            result.served_model_label = "openai:test-model"
+            result.provenance = {"client_kind": "openai", "reported_model": "test-model"}
             return result
 
     service = SessionService(
@@ -439,15 +437,15 @@ def test_mid_turn_model_switch_does_not_relabel_in_flight_turn(tmp_path: Path) -
     assert finals, "no final assistant frame emitted"
     final = finals[-1]
     # The in-flight turn keeps its own (verified) identity — not the new target.
-    assert final["backend"] == "local"
-    assert final["model_label"] == "test-model"
+    assert final["model_label"] == "openai:test-model"
     assert final["provenance_verified"] is True
+    assert "backend" not in final
     # And the verified record was stored for /status.
-    assert model_service.recorded_provenance[-1]["label"] == "test-model"
+    assert model_service.recorded_provenance[-1]["label"] == "openai:test-model"
     assert model_service.recorded_provenance[-1]["verified"] is True
 
 
-# ---- turn-registration lifecycle (has_active_turn feeds the /update guard) ----
+# ---- turn-registration lifecycle ---------------------------------------------
 
 
 def _build_service(tmp_path: Path, *, orchestrator=None, bridge=None) -> SessionService:
@@ -466,9 +464,7 @@ def _silent_emit(*, session_id: str, event_type: str, payload: dict[str, object]
 
 def test_setup_failure_never_leaks_turn_registration(tmp_path: Path) -> None:
     """A raise in the pre-turn setup span (here: the very first emit_event —
-    the user-message frame) must never leak the interrupt registration. A
-    leaked entry would pin has_active_turn() True forever and permanently
-    refuse /update lumen."""
+    the user-message frame) must never leak the interrupt registration."""
     service = _build_service(tmp_path)
     service.create_or_resume(session_id="s1", conversation_id=None)
 
@@ -483,14 +479,12 @@ def test_setup_failure_never_leaks_turn_registration(tmp_path: Path) -> None:
             stop_sequences=None,
             emit_event=exploding_emit,
         )
-    assert service.has_active_turn() is False
     assert service._interrupts == {}
 
 
 def test_bind_turn_failure_never_leaks_turn_registration(tmp_path: Path) -> None:
     """bind_turn sits between registration and the turn: if IT raises, the
-    finally must still unregister (this was the exact leak shape — the old
-    registration lived outside any try)."""
+    finally must still unregister."""
 
     class _ExplodingBridge(_FakeBridge):
         def bind_turn(self, *, session_id: str, emit_event) -> None:
@@ -507,15 +501,14 @@ def test_bind_turn_failure_never_leaks_turn_registration(tmp_path: Path) -> None
             stop_sequences=None,
             emit_event=_silent_emit,
         )
-    assert service.has_active_turn() is False
     assert service._interrupts == {}
 
 
-def test_has_active_turn_true_during_turn_and_false_after_success_and_failure(
+def test_turn_registration_spans_the_turn_and_clears_after_success_and_failure(
     tmp_path: Path,
 ) -> None:
-    """The registration window covers the generation itself (the /update
-    guard's data source) and is empty again after BOTH turn outcomes."""
+    """The registration window covers the generation itself and is empty again
+    after BOTH turn outcomes."""
     observed: dict[str, bool] = {}
 
     class _ObservingOrchestrator:
@@ -523,7 +516,7 @@ def test_has_active_turn_true_during_turn_and_false_after_success_and_failure(
 
         def run_turn(self, *_args, **kwargs):
             assert self.service is not None
-            observed["active_during_turn"] = self.service.has_active_turn()
+            observed["active_during_turn"] = bool(self.service._interrupts)
             on_event = kwargs.get("on_event")
             if on_event is not None:
                 on_event(FinishEvent(reason="stop"))
@@ -542,7 +535,7 @@ def test_has_active_turn_true_during_turn_and_false_after_success_and_failure(
     )
     assert result.get("ok", True) is not False
     assert observed["active_during_turn"] is True
-    assert service.has_active_turn() is False
+    assert service._interrupts == {}
 
     # Orchestrator failure (caught → structured error result): still empty.
     failing = _build_service(tmp_path, orchestrator=_RaisingOrchestrator())
@@ -555,5 +548,4 @@ def test_has_active_turn_true_during_turn_and_false_after_success_and_failure(
         emit_event=_silent_emit,
     )
     assert failure["ok"] is False
-    assert failing.has_active_turn() is False
     assert failing._interrupts == {}
