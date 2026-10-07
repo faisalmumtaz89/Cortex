@@ -5,20 +5,31 @@ def _client_without_init() -> OpenAIClient:
     return OpenAIClient.__new__(OpenAIClient)
 
 
-def test_normalize_messages_splits_system_and_keeps_dialogue():
+def test_normalize_messages_splits_system_and_converts_tool_history():
     client = _client_without_init()
+    call = {"id": "call_1", "type": "function",
+            "function": {"name": "read_file", "arguments": '{"path": "a.py"}'}}
     system_text, messages = client._normalize_messages(
         [
             {"role": "system", "content": "s1"},
             {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": None, "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "x = 1"},
             {"role": "assistant", "content": "a1"},
             {"role": "system", "content": "s2"},
-            {"role": "tool", "content": "ignored"},
         ]
     )
 
     assert system_text == "s1\n\ns2"
     assert messages == [
+        {"role": "user", "content": "u1"},
+        {"type": "function_call", "call_id": "call_1", "name": "read_file",
+         "arguments": '{"path": "a.py"}'},
+        {"type": "function_call_output", "call_id": "call_1", "output": "x = 1"},
+        {"role": "assistant", "content": "a1"},
+    ]
+    assert client._chat_messages(system_text, messages) == [
+        {"role": "system", "content": "s1\n\ns2"},
         {"role": "user", "content": "u1"},
         {"role": "assistant", "content": "a1"},
     ]

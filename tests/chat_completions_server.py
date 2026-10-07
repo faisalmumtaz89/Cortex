@@ -15,8 +15,9 @@ from typing import Dict, List
 
 class ChatCompletionsServer:
     """Script entries: {"text": str} and/or {"tool_calls": [{"name": str, "arguments": dict}]},
-    optionally with {"finish": str} to override the finish reason and
-    {"delay": seconds} to wait before the reply (a model still reasoning)."""
+    optionally with {"finish": str} to override the finish reason,
+    {"delay": seconds} to wait before the reply (a model still reasoning) and
+    {"omit_ids": True} to send tool calls without ids, as some servers do."""
 
     def __init__(self, script: List[Dict[str, object]], *, model: str = "test-model"):
         self.script = list(script)
@@ -71,23 +72,15 @@ class ChatCompletionsServer:
             chunks.append(chunk({"content": step["text"]}))
         calls = list(step.get("tool_calls") or [])
         for index, call in enumerate(calls):
-            chunks.append(
-                chunk(
-                    {
-                        "tool_calls": [
-                            {
-                                "index": index,
-                                "id": f"call_{len(self.requests)}_{index}",
-                                "type": "function",
-                                "function": {
-                                    "name": call["name"],
-                                    "arguments": json.dumps(call["arguments"]),
-                                },
-                            }
-                        ]
-                    }
-                )
-            )
+            tool_call = {
+                "index": index,
+                "id": f"call_{len(self.requests)}_{index}",
+                "type": "function",
+                "function": {"name": call["name"], "arguments": json.dumps(call["arguments"])},
+            }
+            if step.get("omit_ids"):
+                del tool_call["id"]
+            chunks.append(chunk({"tool_calls": [tool_call]}))
         chunks.append(chunk({}, finish=step.get("finish") or ("tool_calls" if calls else "stop")))
         return chunks
 

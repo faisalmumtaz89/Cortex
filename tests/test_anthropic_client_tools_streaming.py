@@ -392,3 +392,47 @@ def test_reply_cut_off_at_a_limit_finishes_with_its_reason_and_runs_no_tools(
         )
     )
     assert [event.reason for event in plain if isinstance(event, FinishEvent)] == [finish_reason]
+
+
+def test_tool_history_becomes_tool_use_and_tool_result_blocks():
+    client = AnthropicClient.__new__(AnthropicClient)
+    calls = [
+        {"id": "call_1", "type": "function",
+         "function": {"name": "read_file", "arguments": '{"path": "a.py"}'}},
+        {"id": "call_2", "type": "function", "function": {"name": "list_dir", "arguments": ""}},
+    ]
+
+    system_text, messages = client._normalize_messages(
+        [
+            {"role": "system", "content": "s1"},
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "Reading.", "tool_calls": calls},
+            {"role": "tool", "tool_call_id": "call_1", "content": "x = 1"},
+            {"role": "tool", "tool_call_id": "call_2", "content": ""},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u2"},
+        ]
+    )
+
+    assert system_text == "s1"
+    assert messages == [
+        {"role": "user", "content": [{"type": "text", "text": "u1"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Reading."},
+                {"type": "tool_use", "id": "call_1", "name": "read_file",
+                 "input": {"path": "a.py"}},
+                {"type": "tool_use", "id": "call_2", "name": "list_dir", "input": {}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "x = 1"},
+                {"type": "tool_result", "tool_use_id": "call_2", "content": ""},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "a1"}]},
+        {"role": "user", "content": [{"type": "text", "text": "u2"}]},
+    ]

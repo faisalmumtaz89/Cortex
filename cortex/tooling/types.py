@@ -152,7 +152,12 @@ class ReplyCutOffError(RuntimeError):
 
 
 class TurnInterruptedError(RuntimeError):
-    """The user interrupted the running turn."""
+    """The user interrupted the running turn. parts holds what the turn
+    produced before the interrupt."""
+
+    def __init__(self) -> None:
+        super().__init__("The turn was interrupted.")
+        self.parts: List[Dict[str, Any]] = []
 
 
 class TurnInterrupt:

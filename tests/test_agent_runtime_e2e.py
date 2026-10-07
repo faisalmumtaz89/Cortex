@@ -607,6 +607,179 @@ def test_interrupt_stops_a_model_request_in_flight(tmp_path: Path, scratch_repo:
     assert follow_up["assistant_text"] == "next answer"
 
 
+def _converse_with_gateway(tmp_path: Path, repo: Path, script, prompts):
+    """Run one worker session through `prompts` against a scripted gateway and
+    return the request bodies the gateway received."""
+    server = ChatCompletionsServer(script)
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    target = {"backend": "cloud", "provider": "openai-compatible", "model_id": "test-model"}
+    harness = WorkerHarness(cwd=repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        for prompt in prompts:
+            response = harness.wait_response(
+                harness.send(
+                    "session.submit_user_input",
+                    {"session_id": session_id, "user_input": prompt, "active_target": target},
+                )
+            )
+            assert response["result"].get("ok") is not False, response
+    finally:
+        harness.close()
+        server.close()
+    return server.requests
+
+
+def test_later_turns_see_earlier_tool_calls_and_results(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    lines = [f"setting_{index} = {index}" for index in range(300)]
+    (scratch_repo / "src" / "settings.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"tool_calls": [{"name": "read_file", "arguments": {"path": "src/settings.py"}}]},
+            {"text": "It defines 300 settings."},
+            {"text": "Second answer."},
+            {"text": "Third answer."},
+            {"text": "Fourth answer."},
+        ],
+        ["read the settings", "second", "third", "fourth"],
+    )
+
+    def replayed(request):
+        calls = [
+            call
+            for message in request["messages"]
+            if message["role"] == "assistant"
+            for call in message.get("tool_calls") or []
+        ]
+        results = [message for message in request["messages"] if message["role"] == "tool"]
+        return calls, results
+
+    for request in requests[2:4]:
+        calls, results = replayed(request)
+        assert [call["function"]["name"] for call in calls] == ["read_file"]
+        assert json.loads(calls[0]["function"]["arguments"]) == {"path": "src/settings.py"}
+        assert [result["tool_call_id"] for result in results] == [calls[0]["id"]]
+        assert "setting_0 = 0" in results[0]["content"]
+        assert "setting_299 = 299" in results[0]["content"]
+
+    # Four turns on, the old result keeps only its beginning and end.
+    calls, results = replayed(requests[4])
+    assert [call["function"]["name"] for call in calls] == ["read_file"]
+    assert "setting_0 = 0" in results[0]["content"]
+    assert "setting_150 = 150" not in results[0]["content"]
+    assert "setting_299 = 299" in results[0]["content"]
+    assert "characters omitted" in results[0]["content"]
+    roles = [message["role"] for message in requests[4]["messages"]]
+    assert roles == [
+        "system", "user", "assistant", "tool", "assistant",
+        "user", "assistant", "user", "assistant", "user",
+    ]
+
+
+def _replayed_tool_history(request) -> list:
+    """(tool name, arguments, result) for each call replayed in a request."""
+    results = {
+        message["tool_call_id"]: message["content"]
+        for message in request["messages"]
+        if message["role"] == "tool"
+    }
+    return [
+        (call["function"]["name"], json.loads(call["function"]["arguments"]), results[call["id"]])
+        for message in request["messages"]
+        if message["role"] == "assistant"
+        for call in message.get("tool_calls") or []
+    ]
+
+
+def test_tool_calls_without_ids_keep_their_own_results(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"tool_calls": [{"name": "read_file", "arguments": {"path": "README.md"}}],
+             "omit_ids": True},
+            {"tool_calls": [{"name": "read_file", "arguments": {"path": "src/app.py"}}],
+             "omit_ids": True},
+            {"text": "Read both."},
+            {"text": "Done."},
+        ],
+        ["read both files", "next"],
+    )
+
+    replayed = _replayed_tool_history(requests[3])
+    assert [(name, args) for name, args, _ in replayed] == [
+        ("read_file", {"path": "README.md"}),
+        ("read_file", {"path": "src/app.py"}),
+    ]
+    assert "# Scratch" in replayed[0][2]
+    assert "def main" in replayed[1][2]
+
+
+def test_interrupted_turn_keeps_the_tool_calls_that_ran(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    server = ChatCompletionsServer(
+        [
+            {"tool_calls": [{"name": "read_file", "arguments": {"path": "src/app.py"}}]},
+            {"text": "late", "delay": 30},
+            {"text": "next answer"},
+        ]
+    )
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    target = {"backend": "cloud", "provider": "openai-compatible", "model_id": "test-model"}
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        turn = harness.send(
+            "session.submit_user_input",
+            {"session_id": session_id, "user_input": "read app.py", "active_target": target},
+        )
+        deadline = time.time() + 20
+        while len(server.requests) < 2 and time.time() < deadline:
+            time.sleep(0.1)
+        harness.wait_response(harness.send("session.interrupt", {"session_id": session_id}))
+        assert harness.wait_response(turn, timeout=20)["result"]["interrupted"] is True
+        harness.wait_response(
+            harness.send(
+                "session.submit_user_input",
+                {"session_id": session_id, "user_input": "next", "active_target": target},
+            )
+        )
+    finally:
+        harness.close()
+        server.close()
+
+    replayed = _replayed_tool_history(server.requests[2])
+    assert [(name, args) for name, args, _ in replayed] == [("read_file", {"path": "src/app.py"})]
+    assert "def main" in replayed[0][2]
+
+
+def test_long_conversation_keeps_its_first_turn(tmp_path: Path, scratch_repo: Path) -> None:
+    turns = 20
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [{"text": f"answer {index}"} for index in range(turns)],
+        [f"question {index}" for index in range(turns)],
+    )
+
+    contents = [message["content"] for message in requests[-1]["messages"]]
+    assert contents[1:3] == ["question 0", "answer 0"]
+    assert contents[-1] == f"question {turns - 1}"
+
+
 def test_headless_default_denies_writes(tmp_path: Path, scratch_repo: Path) -> None:
     script = _write_script(
         tmp_path / "script.json",

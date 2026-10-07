@@ -53,24 +53,57 @@ class OpenAIClient:
         self.last_provenance = record
         return record
 
-    def _normalize_messages(self, messages: Iterable[Dict[str, object]]) -> Tuple[Optional[str], List[Dict[str, str]]]:
+    def _normalize_messages(
+        self, messages: Iterable[Dict[str, object]]
+    ) -> Tuple[Optional[str], List[Dict[str, object]]]:
+        """Split off the system text and convert Chat Completions messages to
+        Responses input items: text messages, function calls and their
+        outputs."""
         system_parts: List[str] = []
-        normalized: List[Dict[str, str]] = []
+        normalized: List[Dict[str, object]] = []
 
         for message in messages:
             role = str(message.get("role", "")).strip().lower()
-            content = str(message.get("content", "")).strip()
-            if not content:
-                continue
+            content = str(message.get("content") or "").strip()
             if role == "system":
-                system_parts.append(content)
+                if content:
+                    system_parts.append(content)
+                continue
+            if role == "tool":
+                normalized.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": str(message.get("tool_call_id", "")),
+                        "output": str(message.get("content") or ""),
+                    }
+                )
                 continue
             if role not in {"user", "assistant"}:
                 continue
-            normalized.append({"role": role, "content": content})
+            if content:
+                normalized.append({"role": role, "content": content})
+            for call in cast(List[Dict[str, Any]], message.get("tool_calls") or []):
+                normalized.append(
+                    {
+                        "type": "function_call",
+                        "call_id": str(call["id"]),
+                        "name": str(call["function"]["name"]),
+                        "arguments": str(call["function"]["arguments"]),
+                    }
+                )
 
         system_text = "\n\n".join(system_parts).strip() or None
         return system_text, normalized
+
+    @staticmethod
+    def _chat_messages(
+        system_text: Optional[str], items: List[Dict[str, object]]
+    ) -> List[Dict[str, object]]:
+        """The text messages of a Responses input, for the Chat Completions API."""
+        messages = [item for item in items if "role" in item]
+        if system_text:
+            messages = [{"role": "system", "content": system_text}, *messages]
+        return messages
 
     @staticmethod
     def _item_get(item: object, key: str, default: Any = None) -> Any:
@@ -371,9 +404,7 @@ class OpenAIClient:
             logger.debug("OpenAI Responses API stream failed, falling back to chat completions: %s", exc)
         interrupt.raise_if_set()
 
-        completion_messages = list(normalized_messages)
-        if system_text:
-            completion_messages = [{"role": "system", "content": system_text}] + completion_messages
+        completion_messages = self._chat_messages(system_text, normalized_messages)
 
         completion_kwargs = {
             "model": model_id,
@@ -466,9 +497,7 @@ class OpenAIClient:
         if text:
             return text
 
-        completion_messages = list(normalized_messages)
-        if system_text:
-            completion_messages = [{"role": "system", "content": system_text}] + completion_messages
+        completion_messages = self._chat_messages(system_text, normalized_messages)
         try:
             completion = self.client.chat.completions.create(
                 model=model_id,

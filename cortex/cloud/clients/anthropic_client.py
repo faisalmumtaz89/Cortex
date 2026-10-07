@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 
 from cortex.tooling.types import (
     FinishEvent,
@@ -67,28 +67,50 @@ class AnthropicClient:
     def _normalize_messages(
         self, messages: Iterable[Dict[str, object]]
     ) -> Tuple[Optional[str], List[Dict[str, object]]]:
+        """Split off the system text and convert Chat Completions messages to
+        Messages API turns: tool calls become tool_use blocks and their results
+        tool_result blocks in the following user turn."""
         system_parts: List[str] = []
         normalized: List[Dict[str, object]] = []
+        results: Optional[List[Dict[str, object]]] = None
 
         for message in messages:
             role = str(message.get("role", "")).strip().lower()
-            content = str(message.get("content", "")).strip()
-            if not content:
-                continue
-
+            content = str(message.get("content") or "").strip()
+            if role != "tool":
+                results = None
             if role == "system":
-                system_parts.append(content)
+                if content:
+                    system_parts.append(content)
                 continue
-
+            if role == "tool":
+                if results is None:
+                    results = []
+                    normalized.append({"role": "user", "content": results})
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": str(message.get("tool_call_id", "")),
+                        "content": str(message.get("content") or ""),
+                    }
+                )
+                continue
             if role not in {"user", "assistant"}:
                 continue
-
-            normalized.append(
-                {
-                    "role": role,
-                    "content": [{"type": "text", "text": content}],
-                }
-            )
+            blocks: List[Dict[str, object]] = []
+            if content:
+                blocks.append({"type": "text", "text": content})
+            for call in cast(List[Dict[str, Any]], message.get("tool_calls") or []):
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": str(call["id"]),
+                        "name": str(call["function"]["name"]),
+                        "input": json.loads(call["function"]["arguments"] or "{}"),
+                    }
+                )
+            if blocks:
+                normalized.append({"role": role, "content": blocks})
 
         system_text = "\n\n".join(system_parts).strip() or None
         return system_text, normalized

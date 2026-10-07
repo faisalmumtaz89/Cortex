@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any, Dict, Iterable, List, Optional, cast
 
 from openai import OpenAI
@@ -154,25 +155,28 @@ class ChatCompletionsClient:
                 return
 
             # Feed the assistant's tool calls back, execute each, and continue.
+            # Some servers send no call ids; the conversation needs unique ones.
             ordered = sorted(pending.items())
+            for _, slot in ordered:
+                slot["id"] = slot["id"] or f"call_{uuid.uuid4().hex[:24]}"
             conversation.append(
                 {
                     "role": "assistant",
                     "content": "".join(text_parts) or None,
                     "tool_calls": [
                         {
-                            "id": slot["id"] or f"call_{index}",
+                            "id": slot["id"],
                             "type": "function",
                             "function": {
                                 "name": slot["name"],
                                 "arguments": slot["args"] or "{}",
                             },
                         }
-                        for index, slot in ordered
+                        for _, slot in ordered
                     ],
                 }
             )
-            for index, slot in ordered:
+            for _, slot in ordered:
                 raw_args = slot["args"] or "{}"
                 try:
                     parsed = json.loads(raw_args)
@@ -180,7 +184,7 @@ class ChatCompletionsClient:
                     parsed = {"_raw": raw_args}
                 arguments = parsed if isinstance(parsed, dict) else {"_raw": raw_args}
                 call = ToolCall(
-                    id=slot["id"] or f"call_{index}",
+                    id=slot["id"],
                     name=slot["name"],
                     arguments=arguments,
                 )

@@ -366,7 +366,7 @@ class SessionService:
                     on_retry=on_retry,
                     interrupt=interrupt,
                 )
-            except TurnInterruptedError:
+            except TurnInterruptedError as exc:
                 resolve_dangling_tools("Interrupted.")
                 completed_ms = self._now_ms()
                 partial_text = "".join(assistant_chunks)
@@ -375,6 +375,7 @@ class SessionService:
                     partial_text,
                     conversation_id=conversation.conversation_id,
                     message_id=assistant_message_id,
+                    parts=exc.parts,
                 )
                 emit_event(
                     session_id=session_id,

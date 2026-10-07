@@ -28,10 +28,11 @@ Conversations are composed of `Message` objects:
 - `content`: raw text
 - `timestamp`: ISO timestamp
 - `message_id`: unique identifier
+- `parts`: for assistant replies, the text, tool calls, and tool results in the order they happened
 
 ## Context Handling
 
-Agent turns send a sliding window of the most recent messages (the last 30 non-empty messages) to the model, on top of the system prompt. `Conversation.get_context(max_tokens=...)` can also trim history to a token budget via the API.
+Every turn sends the whole conversation to the model, after the system prompt, including the tool calls each reply made and their results (saved in the message's `parts`). An interrupted reply keeps the tool calls that finished before the interrupt; a turn that fails with an error is not saved, except a reply cut off at the output limit or the context window, which keeps the text it wrote. Tool calls and results from the current turn and the two before it are sent in full; in older turns each result and each long tool argument keeps only its first and last 750 characters. When a conversation outgrows the model's context window, its turns fail; `/clear` starts a fresh one. `Conversation.get_context(max_tokens=...)` can also trim history to a token budget via the API.
 
 ## Branching (Data Model)
 
