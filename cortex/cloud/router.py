@@ -172,15 +172,6 @@ class CloudRouter:
         key, source = self.credential_store.get_api_key_with_source(provider)
         return bool(key), source
 
-    def validate_api_key(self, provider: CloudProvider, api_key: str) -> Tuple[bool, str]:
-        """Validate an API key by creating a provider client and running a cheap check."""
-        try:
-            client = self._build_client(provider, api_key)
-        except Exception as exc:
-            return False, str(exc)
-        valid, message = client.validate_key()
-        return bool(valid), str(message)
-
     def stream_events(
         self,
         *,

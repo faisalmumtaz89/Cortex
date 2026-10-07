@@ -48,14 +48,6 @@ class AnthropicClient:
         self.last_provenance = record
         return record
 
-    def validate_key(self) -> Tuple[bool, str]:
-        """Validate API key using models list call."""
-        try:
-            self.client.models.list(limit=1)
-            return True, "Anthropic API key is valid."
-        except Exception as exc:
-            return False, f"Anthropic authentication failed: {exc}"
-
     @staticmethod
     def _item_get(item: object, key: str, default: Any = None) -> Any:
         if isinstance(item, dict):

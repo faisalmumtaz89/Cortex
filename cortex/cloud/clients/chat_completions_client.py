@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
+from typing import Any, Dict, Iterable, List, Optional, cast
 
 from openai import OpenAI
 
@@ -40,14 +40,6 @@ class ChatCompletionsClient:
             "response_id": response_id[:40],
             "endpoint": self.base_url,
         }
-
-    def validate_key(self) -> Tuple[bool, str]:
-        """Validate API key using a low-cost API call."""
-        try:
-            self.client.models.list()
-            return True, "API key is valid."
-        except Exception as exc:
-            return False, f"Authentication failed: {exc}"
 
     @staticmethod
     def _serialize_tools(tools) -> List[Dict[str, object]]:

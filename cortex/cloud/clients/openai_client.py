@@ -52,14 +52,6 @@ class OpenAIClient:
         self.last_provenance = record
         return record
 
-    def validate_key(self) -> Tuple[bool, str]:
-        """Validate API key using a low-cost API call."""
-        try:
-            self.client.models.list()
-            return True, "OpenAI API key is valid."
-        except Exception as exc:
-            return False, f"OpenAI authentication failed: {exc}"
-
     def _normalize_messages(self, messages: Iterable[Dict[str, object]]) -> Tuple[Optional[str], List[Dict[str, str]]]:
         system_parts: List[str] = []
         normalized: List[Dict[str, str]] = []

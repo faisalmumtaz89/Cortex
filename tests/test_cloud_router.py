@@ -38,9 +38,6 @@ def test_stream_retries_once_when_no_output_emitted():
     attempts = {"count": 0}
 
     class _FlakyClient:
-        def validate_key(self):
-            return True, "ok"
-
         def stream(self, **_kwargs):
             attempts["count"] += 1
             if attempts["count"] == 1:
@@ -92,9 +89,6 @@ def test_stream_times_out_when_client_stalls():
     router.config.cloud.cloud_max_retries = 0
 
     class _HangingClient:
-        def validate_key(self):
-            return True, "ok"
-
         def stream(self, **_kwargs):
             while True:
                 time.sleep(3600)
@@ -123,9 +117,6 @@ def test_stream_uses_non_stream_fallback_after_timeout():
     router.config.cloud.cloud_max_retries = 0
 
     class _TimeoutThenFallbackClient:
-        def validate_key(self):
-            return True, "ok"
-
         def stream(self, **_kwargs):
             while True:
                 time.sleep(3600)
@@ -156,9 +147,6 @@ def test_stream_does_not_retry_after_timeout_without_output():
     attempts = {"count": 0}
 
     class _TimeoutClient:
-        def validate_key(self):
-            return True, "ok"
-
         def stream(self, **_kwargs):
             attempts["count"] += 1
             while True:
