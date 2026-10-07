@@ -436,3 +436,32 @@ def test_tool_history_becomes_tool_use_and_tool_result_blocks():
         {"role": "assistant", "content": [{"type": "text", "text": "a1"}]},
         {"role": "user", "content": [{"type": "text", "text": "u2"}]},
     ]
+
+
+def test_tool_step_limit_finishes_the_turn_after_running_the_calls():
+    client = AnthropicClient.__new__(AnthropicClient)
+    fake_messages = _FakeMessages()
+    client.client = SimpleNamespace(messages=fake_messages)
+    executed = []
+
+    def executor(call):
+        executed.append(call.name)
+        return ToolResult(id=call.id, name=call.name, state=ToolExecutionState.COMPLETED,
+                          ok=True, output="[]")
+
+    events = list(
+        client.stream_events(
+            model_id="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "list"}],
+            max_tokens=64,
+            temperature=0.2,
+            top_p=1.0,
+            tools=[SimpleNamespace(name="list_dir", description="List", parameters={})],
+            tool_executor=executor,
+            max_tool_iterations=1,
+        )
+    )
+
+    assert executed == ["list_dir"]
+    assert fake_messages.calls == 1
+    assert isinstance(events[-1], FinishEvent) and events[-1].reason == "tool_limit"

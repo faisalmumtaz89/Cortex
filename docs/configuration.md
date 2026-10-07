@@ -29,7 +29,7 @@ cloud_default_anthropic_model: claude-fable-5
 # Agent tooling
 tools_enabled: true
 tools_profile: full          # off | read_only | edit | full
-tools_max_iterations: 25
+tools_max_iterations: 100
 
 # Logging
 log_level: INFO
@@ -46,7 +46,7 @@ log_file: ~/.cortex/cortex.log
   - `read_only`: `read_file`, `list_dir`, `search`
   - `edit`: read-only + `edit_file`, `write_file` (the legacy value `patch` is accepted as an alias)
   - `full`: edit + `bash`
-- `tools_max_iterations` (default: `25`) — maximum tool-loop iterations per turn.
+- `tools_max_iterations` (default: `100`, at most `1000`) — model requests one turn may make while it uses tools. A turn that reaches the limit stops with a message naming it; its tool calls and results stay in the conversation, so a new message lets the model continue.
 - `tools_idle_timeout_seconds` (default: `45`) — idle watchdog for cloud event streams.
 - `tools_continue_on_reject` (default: `false`) — reserved toggle for reject handling.
 

@@ -281,7 +281,7 @@ class OpenAIClient:
         tools=None,
         tool_choice: str = "auto",
         tool_executor=None,
-        max_tool_iterations: int = 8,
+        max_tool_iterations: int = 100,
         interrupt: Optional[TurnInterrupt] = None,
     ):
         """Yield normalized events from OpenAI responses."""
@@ -365,7 +365,11 @@ class OpenAIClient:
 
                 request_input = outputs
 
-            raise RuntimeError("OpenAI tool loop exceeded max iterations")
+            # The step limit ends the turn; its tool calls and results are kept.
+            yield FinishEvent(
+                reason="tool_limit", provenance=self._provenance(reported_model, reported_id)
+            )
+            return
 
         response_kwargs = self._build_response_kwargs(
             model_id=model_id,

@@ -172,7 +172,7 @@ class ToolingOrchestrator:
         tools_cfg = getattr(self.cli.config, "tools", None)
         tools_enabled = bool(getattr(tools_cfg, "tools_enabled", False))
         tools_profile = str(getattr(tools_cfg, "tools_profile", "off") or "off")
-        max_iterations = int(getattr(tools_cfg, "tools_max_iterations", 25) or 25)
+        max_iterations = int(getattr(tools_cfg, "tools_max_iterations", 100) or 100)
         return {
             "enabled": tools_enabled and tools_profile != "off",
             "profile": tools_profile,
@@ -388,6 +388,15 @@ class ToolingOrchestrator:
                 "The model reached the output limit "
                 f"(max_tokens={self.cli.config.inference.max_tokens}) before finishing its "
                 "reply. Raise max_tokens in ~/.cortex/config.yaml.",
+                result.parts,
+            )
+        if finish_reason == "tool_limit":
+            raise ReplyCutOffError(
+                f"The turn reached its limit of model requests "
+                f"(tools_max_iterations={max_iterations}). In an interactive session its "
+                "tool calls stay in the conversation, so a new message lets the model "
+                "continue; to allow longer turns, raise tools_max_iterations in "
+                "~/.cortex/config.yaml.",
                 result.parts,
             )
         if finish_reason == "context_window":

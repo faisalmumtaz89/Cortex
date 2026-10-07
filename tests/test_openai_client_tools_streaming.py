@@ -155,3 +155,32 @@ def test_reply_cut_off_at_max_output_tokens_finishes_with_length_and_runs_no_too
         )
     )
     assert [e.reason for e in plain if isinstance(e, FinishEvent)] == ["length"]
+
+
+def test_tool_step_limit_finishes_the_turn_after_running_the_calls():
+    client = OpenAIClient.__new__(OpenAIClient)
+    fake_responses = _FakeResponses()
+    client.client = SimpleNamespace(responses=fake_responses)
+    executed = []
+
+    def executor(call):
+        executed.append(call.name)
+        return ToolResult(id=call.id, name=call.name, state=ToolExecutionState.COMPLETED,
+                          ok=True, output="[]")
+
+    events = list(
+        client.stream_events(
+            model_id="gpt-5.5",
+            messages=[{"role": "user", "content": "list"}],
+            max_tokens=64,
+            temperature=0.2,
+            top_p=1.0,
+            tools=[SimpleNamespace(name="list_dir", description="List", parameters={})],
+            tool_executor=executor,
+            max_tool_iterations=1,
+        )
+    )
+
+    assert executed == ["list_dir"]
+    assert fake_responses.calls == 1
+    assert isinstance(events[-1], FinishEvent) and events[-1].reason == "tool_limit"

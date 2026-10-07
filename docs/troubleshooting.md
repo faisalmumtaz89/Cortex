@@ -110,6 +110,10 @@ Every turn is rejected unless the response proves it came from the selected prov
 
 ## Cloud and Tooling Issues
 
+### Turn reached its limit of model requests
+
+"The turn reached its limit of model requests (tools_max_iterations=N)" means the model kept calling tools until the turn had made N model requests. In an interactive session its tool calls and results stay in the conversation, so a new message (for example "continue") lets it carry on; a headless `-p` run ends with exit code 1. To allow longer turns, raise `tools_max_iterations` in `~/.cortex/config.yaml` (at most 1000).
+
 ### Stuck on "Thinking..." for cloud models
 
 1. Valid provider key via `/login <provider>` (or the provider's environment variable)

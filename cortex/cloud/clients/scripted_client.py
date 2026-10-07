@@ -74,7 +74,7 @@ class ScriptedClient:
         tools=None,
         tool_choice: str = "auto",
         tool_executor=None,
-        max_tool_iterations: int = 25,
+        max_tool_iterations: int = 100,
     ):
         steps = self._select_response(list(messages))
         provenance = {
@@ -88,7 +88,8 @@ class ScriptedClient:
         for step in steps:
             iterations += 1
             if iterations > max_tool_iterations:
-                raise RuntimeError("Tool loop limit reached for scripted response")
+                yield FinishEvent(reason="tool_limit", provenance=provenance)
+                return
 
             # Optional pacing so UI tests can observe busy states deterministically.
             delay_ms = step.get("delay_ms")

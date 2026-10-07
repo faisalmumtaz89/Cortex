@@ -783,6 +783,38 @@ def test_reply_cut_off_at_the_output_limit_shows_the_limit_error(tui_project) ->
         server.close()
 
 
+def test_turn_at_its_request_limit_shows_the_limit_and_can_continue(tui_project) -> None:
+    project, start = tui_project
+    session = start(
+        [
+            [
+                {"text": "Reading.",
+                 "tool_calls": [{"name": "read_file", "arguments": {"path": "calc.py"}}]},
+                {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+                {"text": "NEVER_SHOWN_PAST_THE_LIMIT"},
+            ],
+            [{"text": "CONTINUED_MARKER"}],
+        ],
+        extra_env={"CORTEX_TOOLS_MAX_ITERATIONS": "2"},
+    )
+    _select_scripted_model(session)
+    session.send_line("read everything")
+
+    frame = session.wait_until(
+        lambda frame: "tools_max_iterations=2" in frame
+        and not any(ch in frame for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        description="limit notice with no spinner",
+        timeout=30,
+    )
+    assert "reached its limit of model requests" in frame
+    assert "Reading." in frame
+    assert "Read calc.py" in frame
+    assert "NEVER_SHOWN_PAST_THE_LIMIT" not in frame
+
+    session.send_line("continue")
+    session.wait_for("CONTINUED_MARKER", timeout=30)
+
+
 def test_escape_stops_a_model_request_in_flight(tui_project) -> None:
     from tests.chat_completions_server import ChatCompletionsServer
 

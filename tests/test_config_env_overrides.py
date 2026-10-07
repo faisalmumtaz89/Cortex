@@ -33,7 +33,7 @@ def test_unknown_cortex_env_vars_are_ignored(tmp_path: Path, monkeypatch) -> Non
 
     config = Config(config_path=tmp_path / "missing.yaml")
 
-    assert config.tools.tools_max_iterations == 25  # defaults intact
+    assert config.tools.tools_max_iterations == 100  # defaults intact
 
 
 def test_env_override_parses_booleans(tmp_path: Path, monkeypatch) -> None:

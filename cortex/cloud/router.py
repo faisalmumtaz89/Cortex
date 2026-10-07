@@ -183,7 +183,7 @@ class CloudRouter:
         tools=None,
         tool_choice: str = "auto",
         tool_executor=None,
-        max_tool_iterations: int = 25,
+        max_tool_iterations: int = 100,
         on_wait: Optional[Callable[[int, int, int], None]] = None,
         on_retry: Optional[Callable[[int, int, str], None]] = None,
         interrupt: Optional[TurnInterrupt] = None,

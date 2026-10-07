@@ -414,7 +414,9 @@ class SessionService:
                 resolve_dangling_tools("Aborted.")
                 completed_ms = self._now_ms()
                 partial_text = "".join(assistant_chunks)
-                if isinstance(exc, ReplyCutOffError) and partial_text:
+                if isinstance(exc, ReplyCutOffError) and (
+                    partial_text or any(part.get("type") == "tool" for part in exc.parts)
+                ):
                     self.conversation_manager.add_message(
                         MessageRole.ASSISTANT,
                         partial_text,

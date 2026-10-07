@@ -607,14 +607,18 @@ def test_interrupt_stops_a_model_request_in_flight(tmp_path: Path, scratch_repo:
     assert follow_up["assistant_text"] == "next answer"
 
 
-def _converse_with_gateway(tmp_path: Path, repo: Path, script, prompts):
+def _converse_with_gateway(
+    tmp_path: Path, repo: Path, script, prompts, *, env_overrides=None, results=None
+):
     """Run one worker session through `prompts` against a scripted gateway and
-    return the request bodies the gateway received."""
+    return the request bodies the gateway received. Each turn must succeed,
+    unless `results` is a list: then the turn results are collected in it."""
     server = ChatCompletionsServer(script)
     env = _worker_env(tmp_path, tmp_path / "unused.json")
     env.pop("CORTEX_SCRIPTED_MODEL")
     env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
     env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    env.update(env_overrides or {})
     target = {"backend": "cloud", "provider": "openai-compatible", "model_id": "test-model"}
     harness = WorkerHarness(cwd=repo, env=env)
     try:
@@ -626,7 +630,10 @@ def _converse_with_gateway(tmp_path: Path, repo: Path, script, prompts):
                     {"session_id": session_id, "user_input": prompt, "active_target": target},
                 )
             )
-            assert response["result"].get("ok") is not False, response
+            if results is None:
+                assert response["result"].get("ok") is not False, response
+            else:
+                results.append(response["result"])
     finally:
         harness.close()
         server.close()
@@ -816,6 +823,35 @@ def test_reasoning_sent_in_two_fields_goes_back_once(tmp_path: Path, scratch_rep
     (step,) = [message for message in requests[1]["messages"] if message.get("tool_calls")]
     assert step["reasoning_content"] == "Read it."
     assert "reasoning" not in step
+
+
+def test_turn_stops_at_the_tool_step_limit_and_keeps_its_work(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    results: list = []
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"text": "Reading.",
+             "tool_calls": [{"name": "read_file", "arguments": {"path": "README.md"}}]},
+            {"tool_calls": [{"name": "read_file", "arguments": {"path": "src/app.py"}}]},
+            {"text": "Continuing from both files."},
+        ],
+        ["read everything", "continue"],
+        env_overrides={"CORTEX_TOOLS_MAX_ITERATIONS": "2"},
+        results=results,
+    )
+
+    first, second = results
+    assert first["ok"] is False
+    assert "reached its limit of model requests (tools_max_iterations=2)" in first["error"]
+    assert first["assistant_text"] == "Reading."
+    assert second["assistant_text"] == "Continuing from both files."
+    assert len(requests) == 3
+    replayed = _replayed_tool_history(requests[2])
+    assert [args for _, args, _ in replayed] == [{"path": "README.md"}, {"path": "src/app.py"}]
+    assert "def main" in replayed[1][2]
 
 
 def test_long_conversation_keeps_its_first_turn(tmp_path: Path, scratch_repo: Path) -> None:

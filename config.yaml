@@ -17,7 +17,7 @@ cloud_default_anthropic_model: claude-fable-5
 # Agent tooling
 tools_enabled: true
 tools_profile: full          # off | read_only | edit | full
-tools_max_iterations: 25
+tools_max_iterations: 100
 
 # Logging
 log_level: INFO

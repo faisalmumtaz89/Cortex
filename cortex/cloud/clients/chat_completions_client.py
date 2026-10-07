@@ -89,7 +89,7 @@ class ChatCompletionsClient:
         tools=None,
         tool_choice: str = "auto",
         tool_executor=None,
-        max_tool_iterations: int = 8,
+        max_tool_iterations: int = 100,
         interrupt: Optional[TurnInterrupt] = None,
     ):
         """Yield normalized events from a (possibly multi-hop) tool loop."""
@@ -219,4 +219,7 @@ class ChatCompletionsClient:
                     }
                 )
 
-        raise RuntimeError("Chat Completions tool loop exceeded max iterations")
+        # The step limit ends the turn; its tool calls and results are kept.
+        yield FinishEvent(
+            reason="tool_limit", provenance=self._provenance(reported_model, response_id)
+        )

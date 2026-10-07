@@ -180,7 +180,7 @@ class AnthropicClient:
         tools=None,
         tool_choice: str = "auto",
         tool_executor=None,
-        max_tool_iterations: int = 8,
+        max_tool_iterations: int = 100,
         interrupt: Optional[TurnInterrupt] = None,
     ):
         """Yield normalized events from Anthropic messages API."""
@@ -294,7 +294,11 @@ class AnthropicClient:
                 history.append({"role": "assistant", "content": assistant_blocks})
                 history.append({"role": "user", "content": tool_result_blocks})
 
-            raise RuntimeError("Anthropic tool loop exceeded max iterations")
+            # The step limit ends the turn; its tool calls and results are kept.
+            yield FinishEvent(
+                reason="tool_limit", provenance=self._provenance(reported_model, reported_id)
+            )
+            return
 
         # Sampling params intentionally omitted (see tool-loop comment above).
         final_kwargs: Dict[str, Any] = {

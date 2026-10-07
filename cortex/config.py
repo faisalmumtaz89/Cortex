@@ -31,7 +31,7 @@ class ToolsConfig(BaseModel):
 
     tools_enabled: bool = True
     tools_profile: Literal["off", "read_only", "edit", "full"] = "full"
-    tools_max_iterations: int = Field(default=25, ge=1, le=100)
+    tools_max_iterations: int = Field(default=100, ge=1, le=1000)
     tools_idle_timeout_seconds: int = Field(default=45, ge=1, le=600)
     tools_continue_on_reject: bool = False
 
