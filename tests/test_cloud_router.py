@@ -1,10 +1,10 @@
-import time
 from types import SimpleNamespace
 
 import pytest
 
 from cortex.cloud.router import CloudRouter
 from cortex.cloud.types import CloudModelRef, CloudProvider
+from cortex.tooling.types import TextDeltaEvent, TurnInterrupt, TurnInterruptedError
 
 
 class _DummyCredentials:
@@ -20,10 +20,23 @@ def _make_router(credentials):
     config = SimpleNamespace(
         cloud=SimpleNamespace(
             cloud_timeout_seconds=30,
-            cloud_max_retries=1,
+            cloud_max_retries=3,
         )
     )
     return CloudRouter(config=config, credential_store=credentials)
+
+
+def _events(router, **kwargs):
+    return list(
+        router.stream_events(
+            model_ref=CloudModelRef(provider=CloudProvider.OPENAI, model_id="gpt-5.5"),
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=32,
+            temperature=0.2,
+            top_p=1.0,
+            **kwargs,
+        )
+    )
 
 
 def test_get_auth_status_reports_source():
@@ -33,138 +46,61 @@ def test_get_auth_status_reports_source():
     assert source == "env"
 
 
-def test_stream_retries_once_when_no_output_emitted():
-    router = _make_router(_DummyCredentials(key="abc", source="keychain"))
-    attempts = {"count": 0}
-
-    class _FlakyClient:
-        def stream(self, **_kwargs):
-            attempts["count"] += 1
-            if attempts["count"] == 1:
-                raise RuntimeError("temporary failure")
-            yield "hello"
-            yield " world"
-
-    def _factory(_provider, _api_key):
-        return _FlakyClient()
-
-    router._build_client = _factory
-
-    model_ref = CloudModelRef(provider=CloudProvider.OPENAI, model_id="gpt-5.1")
-    output = "".join(
-        router.stream(
-            model_ref=model_ref,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=32,
-            temperature=0.2,
-            top_p=1.0,
-        )
-    )
-
-    assert attempts["count"] == 2
-    assert output == "hello world"
-
-
 def test_stream_raises_when_credentials_missing():
     router = _make_router(_DummyCredentials(key=None, source=None))
-    model_ref = CloudModelRef(provider=CloudProvider.ANTHROPIC, model_id="claude-sonnet-4-5")
 
     with pytest.raises(RuntimeError) as exc:
-        list(
-            router.stream(
-                model_ref=model_ref,
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=32,
-                temperature=0.2,
-                top_p=1.0,
-            )
-        )
+        _events(router)
 
     assert "No API key configured" in str(exc.value)
 
 
-def test_stream_times_out_when_client_stalls():
+def test_client_gets_the_retry_budget_and_the_turn_interrupt():
     router = _make_router(_DummyCredentials(key="abc", source="keychain"))
-    router.config.cloud.cloud_timeout_seconds = 1
-    router.config.cloud.cloud_max_retries = 0
+    seen = {}
 
-    class _HangingClient:
-        def stream(self, **_kwargs):
-            while True:
-                time.sleep(3600)
-                yield ""
+    class _Client:
+        def stream_events(self, **kwargs):
+            seen.update(kwargs)
+            yield TextDeltaEvent(delta="hello")
 
-    router._build_client = lambda _provider, _api_key: _HangingClient()
+    router._build_client = lambda _provider, _api_key: _Client()
+    interrupt = TurnInterrupt()
 
-    model_ref = CloudModelRef(provider=CloudProvider.OPENAI, model_id="gpt-5.1")
+    events = _events(router, interrupt=interrupt)
+
+    assert [event.delta for event in events] == ["hello"]
+    assert seen["retries"] == 3
+    assert seen["interrupt"] is interrupt
+
+
+def test_failure_names_the_model_and_key_source():
+    router = _make_router(_DummyCredentials(key="abc", source="keychain"))
+
+    class _Client:
+        def stream_events(self, **_kwargs):
+            raise ValueError("boom")
+            yield
+
+    router._build_client = lambda _provider, _api_key: _Client()
+
     with pytest.raises(RuntimeError) as exc:
-        list(
-            router.stream(
-                model_ref=model_ref,
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=32,
-                temperature=0.2,
-                top_p=1.0,
-            )
-        )
+        _events(router)
 
-    assert "Cloud generation failed" in str(exc.value)
+    assert str(exc.value) == "Cloud generation failed for openai:gpt-5.5 (using keychain): boom"
 
 
-def test_stream_uses_non_stream_fallback_after_timeout():
+def test_failure_after_an_interrupt_reports_the_interrupt():
     router = _make_router(_DummyCredentials(key="abc", source="keychain"))
-    router.config.cloud.cloud_timeout_seconds = 1
-    router.config.cloud.cloud_max_retries = 0
+    interrupt = TurnInterrupt()
 
-    class _TimeoutThenFallbackClient:
-        def stream(self, **_kwargs):
-            while True:
-                time.sleep(3600)
-                yield ""
+    class _Client:
+        def stream_events(self, **_kwargs):
+            interrupt.set()
+            raise ConnectionError("socket shut down")
+            yield
 
-        def generate_once(self, **_kwargs):
-            return "fallback response"
+    router._build_client = lambda _provider, _api_key: _Client()
 
-    router._build_client = lambda _provider, _api_key: _TimeoutThenFallbackClient()
-
-    model_ref = CloudModelRef(provider=CloudProvider.OPENAI, model_id="gpt-5.1")
-    output = "".join(
-        router.stream(
-            model_ref=model_ref,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=32,
-            temperature=0.2,
-            top_p=1.0,
-        )
-    )
-    assert output == "fallback response"
-
-
-def test_stream_does_not_retry_after_timeout_without_output():
-    router = _make_router(_DummyCredentials(key="abc", source="keychain"))
-    router.config.cloud.cloud_timeout_seconds = 1
-    router.config.cloud.cloud_max_retries = 2
-    attempts = {"count": 0}
-
-    class _TimeoutClient:
-        def stream(self, **_kwargs):
-            attempts["count"] += 1
-            while True:
-                time.sleep(3600)
-                yield ""
-
-    router._build_client = lambda _provider, _api_key: _TimeoutClient()
-    model_ref = CloudModelRef(provider=CloudProvider.OPENAI, model_id="gpt-5.1")
-
-    with pytest.raises(RuntimeError):
-        list(
-            router.stream(
-                model_ref=model_ref,
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=32,
-                temperature=0.2,
-                top_p=1.0,
-            )
-        )
-
-    assert attempts["count"] == 1
+    with pytest.raises(TurnInterruptedError):
+        _events(router, interrupt=interrupt)

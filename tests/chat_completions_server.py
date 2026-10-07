@@ -7,6 +7,8 @@ per request, in order) and records every request body and Authorization header.
 from __future__ import annotations
 
 import json
+import socket
+import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,7 +21,10 @@ class ChatCompletionsServer:
     {"delay": seconds} to wait before the reply (a model still reasoning),
     {"omit_ids": True} to send tool calls without ids, as some servers do, and
     {"reasoning": str} to stream the model's reasoning first, in the delta fields
-    {"reasoning_field": str or list} (default "reasoning_content")."""
+    {"reasoning_field": str or list} (default "reasoning_content").
+    Failures: {"status": int} answers with that HTTP error (and {"retry_after":
+    seconds}); {"reset": True} resets the connection after the reply's first
+    chunk; {"cut": True} ends the stream before its finish reason."""
 
     def __init__(self, script: List[Dict[str, object]], *, model: str = "test-model"):
         self.script = list(script)
@@ -40,17 +45,37 @@ class ChatCompletionsServer:
                 server.requests.append(body)
                 server.authorization.append(self.headers.get("Authorization", ""))
                 step = server.script.pop(0) if server.script else {"text": "(script exhausted)"}
+                if step.get("status"):
+                    error = {"error": {"message": f"scripted {step['status']}", "type": "test"}}
+                    headers = {}
+                    if "retry_after" in step:
+                        headers["Retry-After"] = str(step["retry_after"])
+                    self._send_json(error, status=int(step["status"]), headers=headers)
+                    return
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
                 time.sleep(float(step.get("delay") or 0))
-                for chunk in server._chunks(step):
+                chunks = server._chunks(step)
+                if step.get("reset"):
+                    self.wfile.write(f"data: {json.dumps(chunks[0])}\n\n".encode())
+                    self.wfile.flush()
+                    linger = struct.pack("ii", 1, 0)
+                    self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)
+                    self.connection.close()
+                    return
+                if step.get("cut"):
+                    chunks = chunks[:-1]
+                for chunk in chunks:
                     self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-                self.wfile.write(b"data: [DONE]\n\n")
+                if not step.get("cut"):
+                    self.wfile.write(b"data: [DONE]\n\n")
 
-            def _send_json(self, payload: Dict[str, object]) -> None:
+            def _send_json(self, payload: Dict[str, object], status: int = 200, headers=None):
                 data = json.dumps(payload).encode()
-                self.send_response(200)
+                self.send_response(status)
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()

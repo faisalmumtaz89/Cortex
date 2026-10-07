@@ -7,6 +7,7 @@ import { SessionRoute } from "./routes/session"
 import { classifySelectionKey } from "./components/selection_list"
 import { exitCortex, registerRendererDestroy } from "./lib/exit"
 import { UI_PALETTE } from "./components/ui_palette"
+import { turnRunning } from "./protocol"
 
 const PERMISSION_REPLIES = ["allow_once", "allow_always", "reject"] as const
 
@@ -89,7 +90,7 @@ function SessionScreen() {
 
     if (
       isEsc &&
-      store.state.status === "busy" &&
+      turnRunning(store.state.status) &&
       !store.state.paletteOpen &&
       !store.state.commandResult &&
       !store.state.commandInFlight

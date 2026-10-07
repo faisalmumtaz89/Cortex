@@ -18,6 +18,7 @@ import { useStore } from "../context/store"
 import { readGitBranch } from "../lib/git_branch"
 import { displayPath } from "../lib/paths"
 import { spinnerFrame } from "../lib/spinner"
+import { turnRunning } from "../protocol"
 import { terminalColumns } from "../lib/terminal_size"
 
 class CustomSpeedScroll implements ScrollAcceleration {
@@ -482,7 +483,7 @@ export function SessionRoute(props: {
     return 0
   })
   const workingLine = createMemo(() => {
-    if (store.state.status !== "busy") {
+    if (!turnRunning(store.state.status)) {
       return ""
     }
     const frame = spinnerFrame()
@@ -653,7 +654,7 @@ export function SessionRoute(props: {
       return
     }
     // Busy turn: queue the follow-up and send it when the turn finishes.
-    if (!commandLike && (store.state.status === "busy" || isSubmitting())) {
+    if (!commandLike && (turnRunning(store.state.status) || isSubmitting())) {
       store.enqueueInput(fingerprint)
       input.clear()
       return
@@ -723,7 +724,7 @@ export function SessionRoute(props: {
           store.clearCommandResult()
           return
         }
-        if (store.state.status === "busy") {
+        if (turnRunning(store.state.status)) {
           event.preventDefault()
           props.onInterrupt()
           return

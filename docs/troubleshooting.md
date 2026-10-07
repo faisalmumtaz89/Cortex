@@ -125,7 +125,7 @@ cloud_max_retries: 2
 tools_idle_timeout_seconds: 45
 ```
 
-Cortex fails fast on true idle stream timeouts and logs attempt details in `~/.cortex/cortex.log` with provider/model and request id.
+A request that waits longer than `tools_idle_timeout_seconds` for data fails and, like other connection errors, is sent again up to `cloud_max_retries` times; once a request has been sent again, the status line reads `retry` until the turn ends, and Esc still interrupts the turn. Failures are logged in `~/.cortex/cortex.log` with the provider and model.
 
 ### Model emits fake tool JSON or `<tool_calls>` text
 

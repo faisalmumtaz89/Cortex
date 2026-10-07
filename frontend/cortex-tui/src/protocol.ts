@@ -2,6 +2,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import readline from "node:readline"
 
 export type SessionStatus = "idle" | "busy" | "retry"
+
+/** A turn is running while its session is busy or waiting to retry a request. */
+export function turnRunning(status: SessionStatus): boolean {
+  return status === "busy" || status === "retry"
+}
 export type EventType =
   | "session.status"
   | "message.updated"

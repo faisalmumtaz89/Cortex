@@ -815,6 +815,69 @@ def test_turn_at_its_request_limit_shows_the_limit_and_can_continue(tui_project)
     session.wait_for("CONTINUED_MARKER", timeout=30)
 
 
+def test_failed_request_shows_retry_and_recovers(tui_project) -> None:
+    from tests.chat_completions_server import ChatCompletionsServer
+
+    server = ChatCompletionsServer([{"status": 503, "retry_after": 3}, {"text": "RECOVERED"}])
+    project, start = tui_project
+    try:
+        session = start(
+            [[{"text": "IGNORED"}]],
+            extra_env={
+                "CORTEX_SCRIPTED_MODEL": "",
+                "OPENAI_COMPATIBLE_BASE_URL": server.base_url,
+                "OPENAI_COMPATIBLE_API_KEY": "sk-compatible-test",
+            },
+        )
+        session.wait_for("Session ready")
+        session.send_key("/model openai-compatible:test-model")
+        time.sleep(0.5)
+        session.send_key("Enter")
+        session.wait_for("openai-compatible:test-model — now active.")
+        session.send_key("Escape")
+        time.sleep(0.5)
+
+        session.send_line("hello")
+        session.wait_for("retry", timeout=10)
+        frame = session.wait_for("RECOVERED", timeout=20)
+        assert "scripted 503" not in frame
+        assert len(server.requests) == 2
+    finally:
+        server.close()
+
+
+def test_escape_stops_a_turn_waiting_to_retry(tui_project) -> None:
+    from tests.chat_completions_server import ChatCompletionsServer
+
+    server = ChatCompletionsServer([{"status": 503, "retry_after": 30}, {"text": "LATE_ANSWER"}])
+    project, start = tui_project
+    try:
+        session = start(
+            [[{"text": "IGNORED"}]],
+            extra_env={
+                "CORTEX_SCRIPTED_MODEL": "",
+                "OPENAI_COMPATIBLE_BASE_URL": server.base_url,
+                "OPENAI_COMPATIBLE_API_KEY": "sk-compatible-test",
+            },
+        )
+        session.wait_for("Session ready")
+        session.send_key("/model openai-compatible:test-model")
+        time.sleep(0.5)
+        session.send_key("Enter")
+        session.wait_for("openai-compatible:test-model — now active.")
+        session.send_key("Escape")
+        time.sleep(0.5)
+
+        session.send_line("hello")
+        session.wait_for("retry", timeout=10)
+        session.send_key("Escape")
+        frame = session.wait_for("Interrupted.", timeout=5)
+        assert "LATE_ANSWER" not in frame
+        assert len(server.requests) == 1
+    finally:
+        server.close()
+
+
 def test_escape_stops_a_model_request_in_flight(tui_project) -> None:
     from tests.chat_completions_server import ChatCompletionsServer
 

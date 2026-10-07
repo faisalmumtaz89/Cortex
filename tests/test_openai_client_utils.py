@@ -28,11 +28,6 @@ def test_normalize_messages_splits_system_and_converts_tool_history():
         {"type": "function_call_output", "call_id": "call_1", "output": "x = 1"},
         {"role": "assistant", "content": "a1"},
     ]
-    assert client._chat_messages(system_text, messages) == [
-        {"role": "system", "content": "s1\n\ns2"},
-        {"role": "user", "content": "u1"},
-        {"role": "assistant", "content": "a1"},
-    ]
 
 
 def test_extract_output_text_prefers_output_text_string():

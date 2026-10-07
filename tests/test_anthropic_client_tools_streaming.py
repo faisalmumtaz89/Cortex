@@ -46,11 +46,14 @@ class _FakeMessages:
                         "name": "list_dir",
                         "input": {"path": "."},
                     }
-                ]
+                ],
+                stop_reason="tool_use",
             )
             return _FakeMessageStream(["Inspecting ", "repo"], final_message)
 
-        final_message = SimpleNamespace(content=[{"type": "text", "text": "Done"}])
+        final_message = SimpleNamespace(
+            content=[{"type": "text", "text": "Done"}], stop_reason="end_turn"
+        )
         return _FakeMessageStream(["Do", "ne"], final_message)
 
     def create(self, **kwargs):
@@ -125,12 +128,15 @@ class _ThinkingFakeMessages:
                         "name": "list_dir",
                         "input": {"path": "."},
                     },
-                ]
+                ],
+                stop_reason="tool_use",
             )
             # Thinking text never reaches text_stream (verified live: the SDK
             # yields no text events for thinking blocks).
             return _FakeMessageStream([], final_message)
-        final_message = SimpleNamespace(content=[{"type": "text", "text": "Done"}])
+        final_message = SimpleNamespace(
+            content=[{"type": "text", "text": "Done"}], stop_reason="end_turn"
+        )
         return _FakeMessageStream(["Done"], final_message)
 
     def create(self, **kwargs):
@@ -210,30 +216,10 @@ def test_empty_thinking_and_redacted_thinking_serialize_verbatim():
     assert redacted == {"type": "redacted_thinking", "data": "opaque-encrypted-payload"}
 
 
-class _CreateCapturingMessages:
-    """Non-stream fake for generate_once: create() captures kwargs and returns
-    a minimal valid message; stream() must never be called."""
-
-    def __init__(self):
-        self.create_kwargs = []
-
-    def create(self, **kwargs):
-        self.create_kwargs.append(kwargs)
-        return SimpleNamespace(
-            model="claude-fable-5",
-            id="msg_1",
-            content=[{"type": "text", "text": "fallback"}],
-        )
-
-    def stream(self, **kwargs):
-        raise AssertionError(f"unexpected stream call from generate_once: {kwargs}")
-
-
 def test_requests_never_carry_sampling_params():
     """Regression (2026-07-05): Claude-5-era models 400 on `temperature`
     ("deprecated for this model"); 4-x-era models 400 when temperature and
-    top_p are both sent. The client must send NEITHER on ANY of its three
-    request builders (tool loop, plain stream, non-stream generate_once) —
+    top_p are both sent. The client must send NEITHER, with or without tools —
     API defaults work on every generation (validated live)."""
     client = AnthropicClient.__new__(AnthropicClient)
     fake_messages = _FakeMessages()
@@ -254,7 +240,6 @@ def test_requests_never_carry_sampling_params():
             output='{"entries":[]}',
         )
 
-    # Tool loop + plain streaming path both go through messages.stream.
     list(
         client.stream_events(
             model_id="claude-fable-5",
@@ -279,25 +264,6 @@ def test_requests_never_carry_sampling_params():
 
     assert fake_messages.stream_kwargs, "no requests captured"
     for kwargs in fake_messages.stream_kwargs:
-        assert "temperature" not in kwargs
-        assert "top_p" not in kwargs
-
-    # generate_once goes through messages.create — the reliability fallback
-    # (router falls back to it when streaming yields nothing) must be equally
-    # clean or it 400s exactly when the primary path already failed.
-    create_client = AnthropicClient.__new__(AnthropicClient)
-    create_fake = _CreateCapturingMessages()
-    create_client.client = SimpleNamespace(messages=create_fake)
-    text = create_client.generate_once(
-        model_id="claude-fable-5",
-        messages=[{"role": "user", "content": "hi"}],
-        max_tokens=64,
-        temperature=0.7,
-        top_p=0.9,
-    )
-    assert text == "fallback"
-    assert create_fake.create_kwargs, "generate_once sent no request"
-    for kwargs in create_fake.create_kwargs:
         assert "temperature" not in kwargs
         assert "top_p" not in kwargs
 

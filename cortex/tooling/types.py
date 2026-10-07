@@ -174,18 +174,22 @@ class TurnInterrupt:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._set = False
+        self._event = threading.Event()
         self._stream: Any = None
 
     def is_set(self) -> bool:
-        return self._set
+        return self._event.is_set()
 
     def set(self) -> None:
         with self._lock:
-            self._set = True
+            self._event.set()
             stream = self._stream
         if stream is not None:
             _shut_down(stream)
+
+    def wait(self, seconds: float) -> None:
+        """Sleep for `seconds`, or until the turn is interrupted."""
+        self._event.wait(seconds)
 
     @contextmanager
     def watching(self, stream: Any) -> Iterator[None]:
@@ -197,13 +201,13 @@ class TurnInterrupt:
         """
         with self._lock:
             self._stream = stream
-            already_set = self._set
+            already_set = self._event.is_set()
         if already_set:
             _shut_down(stream)
         try:
             yield
         except Exception as exc:
-            if self._set:
+            if self.is_set():
                 raise TurnInterruptedError() from exc
             raise
         finally:
@@ -212,7 +216,7 @@ class TurnInterrupt:
         self.raise_if_set()
 
     def raise_if_set(self) -> None:
-        if self._set:
+        if self.is_set():
             raise TurnInterruptedError()
 
 

@@ -854,6 +854,87 @@ def test_turn_stops_at_the_tool_step_limit_and_keeps_its_work(
     assert "def main" in replayed[1][2]
 
 
+def test_connection_lost_mid_turn_is_retried_without_rerunning_tools(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    results: list = []
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"text": "Reading.",
+             "tool_calls": [{"name": "read_file", "arguments": {"path": "src/app.py"}}]},
+            {"reset": True},
+            {"cut": True},
+            {"text": "main returns 1."},
+        ],
+        ["what does main return"],
+        env_overrides={"CORTEX_CLOUD_MAX_RETRIES": "2"},
+        results=results,
+    )
+
+    assert results[0].get("ok") is not False, results
+    assert results[0]["assistant_text"] == "Reading.main returns 1."
+    assert len(requests) == 4
+    assert requests[1]["messages"] == requests[2]["messages"] == requests[3]["messages"]
+
+
+@pytest.mark.parametrize("status", [400, 401, 404])
+def test_rejected_request_is_sent_once(tmp_path: Path, scratch_repo: Path, status: int) -> None:
+    results: list = []
+    requests = _converse_with_gateway(
+        tmp_path, scratch_repo, [{"status": status}], ["hello"], results=results
+    )
+
+    assert results[0]["ok"] is False
+    assert f"scripted {status}" in results[0]["error"]
+    assert len(requests) == 1
+
+
+def test_rate_limited_request_waits_and_is_sent_again(tmp_path: Path, scratch_repo: Path) -> None:
+    results: list = []
+    started = time.time()
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [{"status": 429, "retry_after": 2}, {"status": 503}, {"text": "Done."}],
+        ["hello"],
+        results=results,
+    )
+
+    assert results[0]["assistant_text"] == "Done."
+    assert len(requests) == 3
+    assert time.time() - started >= 3  # Retry-After 2s, then 2s of backoff
+
+
+def test_retries_stop_at_cloud_max_retries(tmp_path: Path, scratch_repo: Path) -> None:
+    results: list = []
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [{"status": 500, "retry_after": 0}] * 3,
+        ["hello"],
+        env_overrides={"CORTEX_CLOUD_MAX_RETRIES": "1"},
+        results=results,
+    )
+
+    assert results[0]["ok"] is False
+    assert len(requests) == 2
+
+
+def test_reply_cut_off_after_its_text_fails_the_turn(tmp_path: Path, scratch_repo: Path) -> None:
+    results: list = []
+    requests = _converse_with_gateway(
+        tmp_path, scratch_repo, [{"text": "The answer is", "cut": True}], ["hello"],
+        results=results,
+    )
+
+    assert results[0]["ok"] is False
+    assert "ended before the reply was complete" in results[0]["error"]
+    assert results[0]["assistant_text"] == "The answer is"
+    assert len(requests) == 1
+
+
 def test_long_conversation_keeps_its_first_turn(tmp_path: Path, scratch_repo: Path) -> None:
     turns = 20
     requests = _converse_with_gateway(

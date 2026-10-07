@@ -320,18 +320,6 @@ class SessionService:
                 # Keeping it centralized avoids duplicate status frames.
                 return
 
-        def on_wait(waited_seconds: int, attempt_num: int, total_attempts: int) -> None:
-            emit_event(
-                session_id=session_id,
-                event_type="session.status",
-                payload={
-                    "status": "busy",
-                    "waited_seconds": waited_seconds,
-                    "attempt": attempt_num,
-                    "total_attempts": total_attempts,
-                },
-            )
-
         def on_retry(attempt_num: int, total_attempts: int, reason: str) -> None:
             emit_event(
                 session_id=session_id,
@@ -362,7 +350,6 @@ class SessionService:
                     conversation=conversation,
                     stop_sequences=stop_sequences,
                     on_event=on_event,
-                    on_wait=on_wait,
                     on_retry=on_retry,
                     interrupt=interrupt,
                 )

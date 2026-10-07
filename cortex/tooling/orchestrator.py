@@ -302,7 +302,6 @@ class ToolingOrchestrator:
         *,
         stop_sequences: Optional[List[str]] = None,
         on_event: Optional[Callable[[ModelEvent], None]] = None,
-        on_wait: Optional[Callable[[int, int, int], None]] = None,
         on_retry: Optional[Callable[[int, int, str], None]] = None,
         interrupt: Optional[TurnInterrupt] = None,
     ) -> AssistantTurnResult:
@@ -357,7 +356,6 @@ class ToolingOrchestrator:
             tool_choice="auto",
             tool_executor=execute_tool if tools_enabled else None,
             max_tool_iterations=max_iterations,
-            on_wait=on_wait,
             on_retry=on_retry,
             interrupt=interrupt,
         )

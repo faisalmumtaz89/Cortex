@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 
+from anthropic import Anthropic
+
+from cortex.cloud.retry import RetryCallback, StreamCutOffError, with_retries
 from cortex.tooling.types import (
     FinishEvent,
     TextDeltaEvent,
@@ -16,27 +18,17 @@ from cortex.tooling.types import (
     TurnInterrupt,
 )
 
-logger = logging.getLogger(__name__)
-
 
 class AnthropicClient:
-    """Anthropic streaming and key validation wrapper."""
+    """Anthropic Messages API client."""
 
     # Class-level defaults: some tests construct via __new__ and skip __init__.
     endpoint: str = "https://api.anthropic.com"
-    last_provenance: Optional[Dict[str, Any]] = None
 
     def __init__(self, api_key: str, timeout_seconds: int = 60):
-        try:
-            from anthropic import Anthropic  # type: ignore
-        except Exception as exc:
-            raise RuntimeError(
-                "Anthropic runtime dependency is missing. Run /login anthropic to auto-install and configure it."
-            ) from exc
-
-        self.client = Anthropic(api_key=api_key, timeout=timeout_seconds)
+        # Retries are Cortex's own (cortex.cloud.retry), not the SDK's.
+        self.client = Anthropic(api_key=api_key, timeout=timeout_seconds, max_retries=0)
         self.endpoint = str(getattr(self.client, "base_url", "") or "https://api.anthropic.com")
-        self.last_provenance: Optional[Dict[str, Any]] = None
 
     def _provenance(self, reported_model: Any, response_id: Any) -> Dict[str, Any]:
         """Response-side identity proof for post-turn verification."""
@@ -46,7 +38,6 @@ class AnthropicClient:
             "response_id": str(response_id or "")[:40],
             "endpoint": self.endpoint,
         }
-        self.last_provenance = record
         return record
 
     @staticmethod
@@ -182,217 +173,122 @@ class AnthropicClient:
         tool_executor=None,
         max_tool_iterations: int = 100,
         interrupt: Optional[TurnInterrupt] = None,
+        retries: int = 0,
+        on_retry: Optional[RetryCallback] = None,
     ):
         """Yield normalized events from Anthropic messages API."""
         interrupt = interrupt or TurnInterrupt()
         system_text, normalized_messages = self._normalize_messages(messages)
         if not normalized_messages:
             raise RuntimeError("No user/assistant messages available for Anthropic request.")
+        use_tools = bool(tools) and tool_executor is not None
 
-        if tools and tool_executor is not None:
-            history = list(normalized_messages)
-            reported_model: Any = ""
-            reported_id: Any = ""
-            for _ in range(max_tool_iterations):
-                # No temperature/top_p: Claude-5-era models 400 on temperature
-                # ("deprecated for this model") and 4-x-era models 400 when both
-                # are sent — omitting both works on every generation (verified
-                # live against fable-5/sonnet-5/opus-4-8/haiku-4-5/opus-4-6).
-                kwargs: Dict[str, Any] = {
-                    "model": model_id,
-                    "messages": history,
-                    "max_tokens": max_tokens,
-                }
-                if system_text:
-                    kwargs["system"] = system_text
+        history = list(normalized_messages)
+        reported_model: Any = ""
+        reported_id: Any = ""
+        for _ in range(max(1, max_tool_iterations)):
+            # No temperature/top_p: Claude-5-era models 400 on temperature
+            # ("deprecated for this model") and 4-x-era models 400 when both
+            # are sent — omitting both works on every generation (verified
+            # live against fable-5/sonnet-5/opus-4-8/haiku-4-5/opus-4-6).
+            kwargs: Dict[str, Any] = {
+                "model": model_id,
+                "messages": history,
+                "max_tokens": max_tokens,
+            }
+            if system_text:
+                kwargs["system"] = system_text
+            if use_tools:
                 kwargs["tools"] = self._serialize_tools(tools)
 
-                emitted_this_turn = False
-                response = None
-                interrupt.raise_if_set()
-                try:
-                    with self.client.messages.stream(**kwargs) as stream:
-                        with interrupt.watching(stream):
-                            for text in stream.text_stream:
-                                if text:
-                                    emitted_this_turn = True
-                                    yield TextDeltaEvent(delta=str(text))
-                        if hasattr(stream, "get_final_message"):
-                            response = stream.get_final_message()
-                except Exception as exc:
-                    logger.debug(
-                        "Anthropic Messages API tool stream failed, falling back to non-streaming create: %s",
-                        exc,
-                    )
-                interrupt.raise_if_set()
-
-                if response is None:
-                    response = self.client.messages.create(**kwargs)
-                    interrupt.raise_if_set()
-
-                reported_model = self._item_get(response, "model", None) or reported_model
-                reported_id = self._item_get(response, "id", None) or reported_id
-
-                content = self._item_get(response, "content", [])
-                if not isinstance(content, list):
-                    content = []
-
-                text_parts: List[str] = []
-                tool_calls: List[ToolCall] = []
-                assistant_blocks: List[Dict[str, object]] = []
-
-                for block in content:
-                    assistant_blocks.append(self._serialize_content_block(block))
-                    block_type = str(self._item_get(block, "type", "")).strip().lower()
-                    if block_type == "text":
-                        text = self._item_get(block, "text", "")
-                        if isinstance(text, str) and text:
-                            text_parts.append(text)
-                    elif block_type == "tool_use":
-                        tool_id = str(self._item_get(block, "id", "") or f"call_{len(tool_calls) + 1}")
-                        name = str(self._item_get(block, "name", "")).strip()
-                        raw_input = self._item_get(block, "input", {})
-                        arguments = raw_input if isinstance(raw_input, dict) else {}
-                        if name:
-                            tool_calls.append(ToolCall(id=tool_id, name=name, arguments=arguments))
-
-                if text_parts and not emitted_this_turn:
-                    yield TextDeltaEvent(delta="".join(text_parts))
-
-                # A reply cut off by a limit ends the turn: its tool calls may
-                # be incomplete and must not run.
-                finish_reason = self._finish_reason(self._item_get(response, "stop_reason", None))
-                if not tool_calls or finish_reason != "stop":
-                    yield FinishEvent(
-                        reason=finish_reason,
-                        provenance=self._provenance(reported_model, reported_id),
-                    )
-                    return
-
-                tool_result_blocks: List[Dict[str, object]] = []
-                for call in tool_calls:
-                    yield ToolCallEvent(call=call)
-                    result: ToolResult = tool_executor(call)
-                    yield ToolResultEvent(result=result)
-
-                    tool_result_blocks.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": call.id,
-                            "content": json.dumps(
-                                {
-                                    "ok": result.ok,
-                                    "output": result.output,
-                                    "error": result.error,
-                                    "metadata": result.metadata,
-                                },
-                                ensure_ascii=True,
-                            ),
-                        }
-                    )
-
-                history.append({"role": "assistant", "content": assistant_blocks})
-                history.append({"role": "user", "content": tool_result_blocks})
-
-            # The step limit ends the turn; its tool calls and results are kept.
-            yield FinishEvent(
-                reason="tool_limit", provenance=self._provenance(reported_model, reported_id)
+            response, emitted = yield from with_retries(
+                lambda: self._request(kwargs, interrupt),
+                retries=retries,
+                interrupt=interrupt,
+                on_retry=on_retry,
             )
-            return
 
-        # Sampling params intentionally omitted (see tool-loop comment above).
-        final_kwargs: Dict[str, Any] = {
-            "model": model_id,
-            "messages": normalized_messages,
-            "max_tokens": max_tokens,
-        }
-        if system_text:
-            final_kwargs["system"] = system_text
+            reported_model = self._item_get(response, "model", None) or reported_model
+            reported_id = self._item_get(response, "id", None) or reported_id
 
-        final_message = None
+            content = self._item_get(response, "content", [])
+            if not isinstance(content, list):
+                content = []
+
+            text_parts: List[str] = []
+            tool_calls: List[ToolCall] = []
+            assistant_blocks: List[Dict[str, object]] = []
+
+            for block in content:
+                assistant_blocks.append(self._serialize_content_block(block))
+                block_type = str(self._item_get(block, "type", "")).strip().lower()
+                if block_type == "text":
+                    text = self._item_get(block, "text", "")
+                    if isinstance(text, str) and text:
+                        text_parts.append(text)
+                elif block_type == "tool_use" and use_tools:
+                    tool_id = str(self._item_get(block, "id", "") or f"call_{len(tool_calls) + 1}")
+                    name = str(self._item_get(block, "name", "")).strip()
+                    raw_input = self._item_get(block, "input", {})
+                    arguments = raw_input if isinstance(raw_input, dict) else {}
+                    if name:
+                        tool_calls.append(ToolCall(id=tool_id, name=name, arguments=arguments))
+
+            if text_parts and not emitted:
+                yield TextDeltaEvent(delta="".join(text_parts))
+
+            # A reply cut off by a limit ends the turn: its tool calls may
+            # be incomplete and must not run.
+            finish_reason = self._finish_reason(self._item_get(response, "stop_reason", None))
+            if not tool_calls or finish_reason != "stop":
+                yield FinishEvent(
+                    reason=finish_reason,
+                    provenance=self._provenance(reported_model, reported_id),
+                )
+                return
+
+            tool_result_blocks: List[Dict[str, object]] = []
+            for call in tool_calls:
+                yield ToolCallEvent(call=call)
+                result: ToolResult = tool_executor(call)
+                yield ToolResultEvent(result=result)
+
+                tool_result_blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": call.id,
+                        "content": json.dumps(
+                            {
+                                "ok": result.ok,
+                                "output": result.output,
+                                "error": result.error,
+                                "metadata": result.metadata,
+                            },
+                            ensure_ascii=True,
+                        ),
+                    }
+                )
+
+            history.append({"role": "assistant", "content": assistant_blocks})
+            history.append({"role": "user", "content": tool_result_blocks})
+
+        # The step limit ends the turn; its tool calls and results are kept.
+        yield FinishEvent(
+            reason="tool_limit", provenance=self._provenance(reported_model, reported_id)
+        )
+
+    def _request(self, kwargs: Dict[str, Any], interrupt: TurnInterrupt):
+        """Send one request and yield its text as it streams; return the final
+        message and whether any text was streamed."""
         interrupt.raise_if_set()
-        with self.client.messages.stream(**final_kwargs) as stream:
+        emitted = False
+        with self.client.messages.stream(**kwargs) as stream:
             with interrupt.watching(stream):
                 for text in stream.text_stream:
                     if text:
+                        emitted = True
                         yield TextDeltaEvent(delta=str(text))
-            if hasattr(stream, "get_final_message"):
-                try:
-                    final_message = stream.get_final_message()
-                except Exception:  # pragma: no cover - SDK-specific edge
-                    final_message = None
-
-        stop_reason = (
-            self._item_get(final_message, "stop_reason", None) if final_message is not None else None
-        )
-        yield FinishEvent(
-            reason=self._finish_reason(stop_reason),
-            provenance=self._provenance(
-                self._item_get(final_message, "model", None) if final_message is not None else None,
-                self._item_get(final_message, "id", None) if final_message is not None else None,
-            ),
-        )
-
-    def stream(
-        self,
-        *,
-        model_id: str,
-        messages: Iterable[Dict[str, object]],
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-    ):
-        """Backward-compatible text-only stream."""
-        for event in self.stream_events(
-            model_id=model_id,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            tools=None,
-            tool_choice="auto",
-            tool_executor=None,
-        ):
-            if isinstance(event, TextDeltaEvent) and event.delta:
-                yield event.delta
-
-    def generate_once(
-        self,
-        *,
-        model_id: str,
-        messages: Iterable[Dict[str, object]],
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-    ) -> str:
-        """Non-stream fallback generation for reliability."""
-        system_text, normalized_messages = self._normalize_messages(messages)
-        if not normalized_messages:
-            raise RuntimeError("No user/assistant messages available for Anthropic request.")
-
-        # Sampling params intentionally omitted (see stream_events comment).
-        kwargs: Dict[str, Any] = {
-            "model": model_id,
-            "messages": normalized_messages,
-            "max_tokens": max_tokens,
-        }
-        if system_text:
-            kwargs["system"] = system_text
-
-        response = self.client.messages.create(**kwargs)
-        self._provenance(
-            self._item_get(response, "model", None), self._item_get(response, "id", None)
-        )
-        content = getattr(response, "content", None)
-        if isinstance(content, list):
-            parts: List[str] = []
-            for item in content:
-                if str(self._item_get(item, "type", "")).strip().lower() != "text":
-                    continue
-                text = self._item_get(item, "text", None)
-                if isinstance(text, str) and text:
-                    parts.append(text)
-            if parts:
-                return "".join(parts)
-
-        raise RuntimeError("Anthropic non-stream fallback returned no text.")
+                response = stream.get_final_message()
+        if self._item_get(response, "stop_reason", None) is None:
+            raise StreamCutOffError("The response stream ended before the reply was complete.")
+        return response, emitted

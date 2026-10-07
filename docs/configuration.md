@@ -47,7 +47,7 @@ log_file: ~/.cortex/cortex.log
   - `edit`: read-only + `edit_file`, `write_file` (the legacy value `patch` is accepted as an alias)
   - `full`: edit + `bash`
 - `tools_max_iterations` (default: `100`, at most `1000`) — model requests one turn may make while it uses tools. A turn that reaches the limit stops with a message naming it; its tool calls and results stay in the conversation, so a new message lets the model continue.
-- `tools_idle_timeout_seconds` (default: `45`) — idle watchdog for cloud event streams.
+- `tools_idle_timeout_seconds` (default: `45`) — seconds a model request may wait for data before it fails; also how long a permission prompt waits for an answer.
 - `tools_continue_on_reject` (default: `false`) — reserved toggle for reject handling.
 
 ### Inference
@@ -59,7 +59,7 @@ log_file: ~/.cortex/cortex.log
 ### Cloud
 
 - `cloud_timeout_seconds` (default: `60`)
-- `cloud_max_retries` (default: `2`)
+- `cloud_max_retries` (default: `2`) — how many times a model request is sent again after a connection error, a timeout, a stream cut off before its end, a rate limit (429), a request timeout or conflict (408, 409), or a server error (5xx, or an overloaded or server error reported inside the stream). Cortex waits as the server asks (`Retry-After` or `retry-after-ms`, at most 60 seconds), otherwise 1, 2, 4, ... seconds (at most 30). Other errors, such as an invalid request (400) or a rejected key (401), fail the turn at once. A request whose reply has started to appear is not sent again.
 - `cloud_default_openai_model` (default: `gpt-5.5`)
 - `cloud_default_anthropic_model` (default: `claude-fable-5`)
 - `cloud_azure_endpoint` (default: empty) — Azure OpenAI resource endpoint; `AZURE_OPENAI_ENDPOINT` env var takes precedence. Azure model ids are deployment names (`azure:<deployment>`).
