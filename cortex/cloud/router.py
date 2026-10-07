@@ -12,7 +12,7 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 from cortex.cloud.clients import AnthropicClient, ChatCompletionsClient, OpenAIClient
 from cortex.cloud.credentials import ENV_KEY_MAP, CloudCredentialStore
 from cortex.cloud.types import CloudModelRef, CloudProvider
-from cortex.tooling.types import FinishEvent, TextDeltaEvent
+from cortex.tooling.types import FinishEvent, TextDeltaEvent, TurnInterrupt, TurnInterruptedError
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +186,7 @@ class CloudRouter:
         max_tool_iterations: int = 25,
         on_wait: Optional[Callable[[int, int, int], None]] = None,
         on_retry: Optional[Callable[[int, int, str], None]] = None,
+        interrupt: Optional[TurnInterrupt] = None,
     ):
         """Yield normalized events from selected cloud provider."""
         script_path = os.environ.get("CORTEX_SCRIPTED_MODEL", "").strip()
@@ -222,6 +223,8 @@ class CloudRouter:
         per_attempt_timeout = max(5, int(self._timeout_seconds()))
 
         for attempt in range(retries + 1):
+            if interrupt is not None:
+                interrupt.raise_if_set()
             attempt_num = attempt + 1
             client = self._build_client(model_ref.provider, api_key)
             emitted = False
@@ -248,6 +251,7 @@ class CloudRouter:
                         tool_choice=tool_choice,
                         tool_executor=tool_executor,
                         max_tool_iterations=max_tool_iterations,
+                        interrupt=interrupt,
                     )
                 else:
                     # Backward compatibility for older test doubles.
@@ -293,6 +297,8 @@ class CloudRouter:
                 )
                 return
             except Exception as exc:
+                if interrupt is not None and interrupt.is_set():
+                    raise TurnInterruptedError() from exc
                 last_error = exc
                 retryable = self._is_retryable_error(exc)
                 logger.warning(
@@ -308,6 +314,7 @@ class CloudRouter:
 
                 # Fallback to single-shot text completion when stream produced nothing.
                 if not emitted and hasattr(client, "generate_once"):
+                    fallback_text = ""
                     try:
                         fallback_text = client.generate_once(
                             model_id=model_ref.model_id,
@@ -316,13 +323,6 @@ class CloudRouter:
                             temperature=temperature,
                             top_p=top_p,
                         )
-                        if fallback_text:
-                            yield TextDeltaEvent(delta=fallback_text)
-                            yield FinishEvent(
-                                reason="stop",
-                                provenance=getattr(client, "last_provenance", None),
-                            )
-                            return
                     except Exception as fallback_exc:
                         last_error = fallback_exc
                         logger.warning(
@@ -334,6 +334,15 @@ class CloudRouter:
                             model_ref.model_id,
                             fallback_exc,
                         )
+                    if interrupt is not None:
+                        interrupt.raise_if_set()
+                    if fallback_text:
+                        yield TextDeltaEvent(delta=fallback_text)
+                        yield FinishEvent(
+                            reason="stop",
+                            provenance=getattr(client, "last_provenance", None),
+                        )
+                        return
 
                 # Retry only if no output emitted and attempts remain.
                 if emitted or attempt >= retries or not retryable:

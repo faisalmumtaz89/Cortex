@@ -13,6 +13,7 @@ from cortex.tooling.types import (
     ToolCallEvent,
     ToolResult,
     ToolResultEvent,
+    TurnInterrupt,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,8 +249,10 @@ class OpenAIClient:
         tool_choice: str = "auto",
         tool_executor=None,
         max_tool_iterations: int = 8,
+        interrupt: Optional[TurnInterrupt] = None,
     ):
         """Yield normalized events from OpenAI responses."""
+        interrupt = interrupt or TurnInterrupt()
         system_text, normalized_messages = self._normalize_messages(messages)
         if not normalized_messages:
             raise RuntimeError("No user/assistant messages available for OpenAI request.")
@@ -276,20 +279,24 @@ class OpenAIClient:
                 response = None
                 outcome: Dict[str, object] = {}
 
+                interrupt.raise_if_set()
                 try:
                     with self.client.responses.stream(**cast(Any, kwargs)) as stream:
-                        for text_event in self._stream_text(stream, outcome):
-                            emitted_this_turn = True
-                            yield text_event
+                        with interrupt.watching(stream):
+                            for text_event in self._stream_text(stream, outcome):
+                                emitted_this_turn = True
+                                yield text_event
                     response = outcome.get("response")
                 except Exception as exc:
                     logger.debug(
                         "OpenAI Responses API tool stream failed, falling back to non-streaming create: %s",
                         exc,
                     )
+                interrupt.raise_if_set()
 
                 if response is None:
                     response = self.client.responses.create(**cast(Any, kwargs))
+                    interrupt.raise_if_set()
 
                 if not emitted_this_turn:
                     text = self._extract_output_text(response)
@@ -336,13 +343,15 @@ class OpenAIClient:
             system_text=system_text,
         )
 
+        interrupt.raise_if_set()
         try:
             with self.client.responses.stream(**cast(Any, response_kwargs)) as stream:
                 emitted = False
                 final_outcome: Dict[str, object] = {}
-                for text_event in self._stream_text(stream, final_outcome):
-                    emitted = True
-                    yield text_event
+                with interrupt.watching(stream):
+                    for text_event in self._stream_text(stream, final_outcome):
+                        emitted = True
+                        yield text_event
 
                 final_response = final_outcome.get("response")
                 if not emitted and final_response is not None:
@@ -360,6 +369,7 @@ class OpenAIClient:
             return
         except Exception as exc:
             logger.debug("OpenAI Responses API stream failed, falling back to chat completions: %s", exc)
+        interrupt.raise_if_set()
 
         completion_messages = list(normalized_messages)
         if system_text:
@@ -388,18 +398,19 @@ class OpenAIClient:
         chunk_model: object = ""
         chunk_id: object = ""
         finish_reason = "stop"
-        for chunk in stream:
-            chunk_model = getattr(chunk, "model", None) or chunk_model
-            chunk_id = getattr(chunk, "id", None) or chunk_id
-            try:
-                choice = chunk.choices[0]
-            except Exception:
-                continue
-            delta = getattr(getattr(choice, "delta", None), "content", None)
-            if delta:
-                yield TextDeltaEvent(delta=str(delta))
-            if getattr(choice, "finish_reason", None) == "length":
-                finish_reason = "length"
+        with interrupt.watching(stream):
+            for chunk in stream:
+                chunk_model = getattr(chunk, "model", None) or chunk_model
+                chunk_id = getattr(chunk, "id", None) or chunk_id
+                try:
+                    choice = chunk.choices[0]
+                except Exception:
+                    continue
+                delta = getattr(getattr(choice, "delta", None), "content", None)
+                if delta:
+                    yield TextDeltaEvent(delta=str(delta))
+                if getattr(choice, "finish_reason", None) == "length":
+                    finish_reason = "length"
 
         yield FinishEvent(reason=finish_reason, provenance=self._provenance(chunk_model, chunk_id))
 

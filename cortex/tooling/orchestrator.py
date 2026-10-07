@@ -31,6 +31,7 @@ from cortex.tooling.types import (
     ToolExecutionState,
     ToolResult,
     ToolResultEvent,
+    TurnInterrupt,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,6 +200,7 @@ class ToolingOrchestrator:
         on_event: Optional[Callable[[ModelEvent], None]] = None,
         on_wait: Optional[Callable[[int, int, int], None]] = None,
         on_retry: Optional[Callable[[int, int, str], None]] = None,
+        interrupt: Optional[TurnInterrupt] = None,
     ) -> AssistantTurnResult:
         """Run one generation turn and return structured output."""
         flags = self._tooling_flags()
@@ -253,6 +255,7 @@ class ToolingOrchestrator:
             max_tool_iterations=max_iterations,
             on_wait=on_wait,
             on_retry=on_retry,
+            interrupt=interrupt,
         )
 
         finish_reason = ""

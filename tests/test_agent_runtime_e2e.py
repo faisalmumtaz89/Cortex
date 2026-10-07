@@ -570,6 +570,43 @@ def test_worker_is_cloud_only_and_clears_saved_local_state(
     assert "local" not in saved and "qwen" not in saved
 
 
+def test_interrupt_stops_a_model_request_in_flight(tmp_path: Path, scratch_repo: Path) -> None:
+    server = ChatCompletionsServer([{"text": "late answer", "delay": 30}, {"text": "next answer"}])
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    target = {"backend": "cloud", "provider": "openai-compatible", "model_id": "test-model"}
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        submitted = time.time()
+        turn = harness.send(
+            "session.submit_user_input",
+            {"session_id": session_id, "user_input": "think hard", "active_target": target},
+        )
+        harness.wait_event("session.status")
+        time.sleep(1)
+        harness.wait_response(harness.send("session.interrupt", {"session_id": session_id}))
+        result = harness.wait_response(turn, timeout=20)["result"]
+        elapsed = time.time() - submitted
+        follow_up = harness.wait_response(
+            harness.send(
+                "session.submit_user_input",
+                {"session_id": session_id, "user_input": "next", "active_target": target},
+            )
+        )["result"]
+    finally:
+        harness.close()
+        server.close()
+
+    assert result["interrupted"] is True
+    assert result["assistant_text"] == ""
+    assert elapsed < 10, elapsed
+    assert len(server.requests) == 2  # no retry or fallback request after the interrupt
+    assert follow_up["assistant_text"] == "next answer"
+
+
 def test_headless_default_denies_writes(tmp_path: Path, scratch_repo: Path) -> None:
     script = _write_script(
         tmp_path / "script.json",

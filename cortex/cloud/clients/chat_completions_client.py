@@ -20,6 +20,7 @@ from cortex.tooling.types import (
     ToolCallEvent,
     ToolResult,
     ToolResultEvent,
+    TurnInterrupt,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,8 +83,10 @@ class ChatCompletionsClient:
         tool_choice: str = "auto",
         tool_executor=None,
         max_tool_iterations: int = 8,
+        interrupt: Optional[TurnInterrupt] = None,
     ):
         """Yield normalized events from a (possibly multi-hop) tool loop."""
+        interrupt = interrupt or TurnInterrupt()
         conversation: List[Dict[str, object]] = [dict(message) for message in messages]
         serialized_tools = self._serialize_tools(tools)
         use_tools = bool(serialized_tools) and tool_executor is not None
@@ -102,42 +105,44 @@ class ChatCompletionsClient:
             if use_tools:
                 kwargs["tools"] = serialized_tools
 
+            interrupt.raise_if_set()
             stream = self.client.chat.completions.create(**cast(Any, kwargs))
 
             text_parts: List[str] = []
             pending: Dict[int, Dict[str, str]] = {}
             finish_reason: Optional[str] = None
 
-            for chunk in stream:
-                chunk_model = getattr(chunk, "model", None)
-                if chunk_model:
-                    reported_model = str(chunk_model)
-                chunk_id = getattr(chunk, "id", None)
-                if chunk_id:
-                    response_id = str(chunk_id)
-                choices = getattr(chunk, "choices", None) or []
-                if not choices:
-                    continue
-                choice = choices[0]
-                delta = getattr(choice, "delta", None)
-                if delta is not None:
-                    content = getattr(delta, "content", None)
-                    if content:
-                        text_parts.append(str(content))
-                        yield TextDeltaEvent(delta=str(content))
-                    for tool_delta in getattr(delta, "tool_calls", None) or []:
-                        index = int(getattr(tool_delta, "index", 0) or 0)
-                        slot = pending.setdefault(index, {"id": "", "name": "", "args": ""})
-                        if getattr(tool_delta, "id", None):
-                            slot["id"] = str(tool_delta.id)
-                        function = getattr(tool_delta, "function", None)
-                        if function is not None:
-                            if getattr(function, "name", None):
-                                slot["name"] = str(function.name)
-                            if getattr(function, "arguments", None):
-                                slot["args"] += str(function.arguments)
-                if getattr(choice, "finish_reason", None):
-                    finish_reason = str(choice.finish_reason)
+            with interrupt.watching(stream):
+                for chunk in stream:
+                    chunk_model = getattr(chunk, "model", None)
+                    if chunk_model:
+                        reported_model = str(chunk_model)
+                    chunk_id = getattr(chunk, "id", None)
+                    if chunk_id:
+                        response_id = str(chunk_id)
+                    choices = getattr(chunk, "choices", None) or []
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = getattr(choice, "delta", None)
+                    if delta is not None:
+                        content = getattr(delta, "content", None)
+                        if content:
+                            text_parts.append(str(content))
+                            yield TextDeltaEvent(delta=str(content))
+                        for tool_delta in getattr(delta, "tool_calls", None) or []:
+                            index = int(getattr(tool_delta, "index", 0) or 0)
+                            slot = pending.setdefault(index, {"id": "", "name": "", "args": ""})
+                            if getattr(tool_delta, "id", None):
+                                slot["id"] = str(tool_delta.id)
+                            function = getattr(tool_delta, "function", None)
+                            if function is not None:
+                                if getattr(function, "name", None):
+                                    slot["name"] = str(function.name)
+                                if getattr(function, "arguments", None):
+                                    slot["args"] += str(function.arguments)
+                    if getattr(choice, "finish_reason", None):
+                        finish_reason = str(choice.finish_reason)
 
             # A reply cut off by max_tokens ends the turn: its tool calls may
             # be incomplete and must not run.

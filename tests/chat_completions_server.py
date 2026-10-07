@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List
 
 
 class ChatCompletionsServer:
     """Script entries: {"text": str} and/or {"tool_calls": [{"name": str, "arguments": dict}]},
-    optionally with {"finish": str} to override the finish reason."""
+    optionally with {"finish": str} to override the finish reason and
+    {"delay": seconds} to wait before the reply (a model still reasoning)."""
 
     def __init__(self, script: List[Dict[str, object]], *, model: str = "test-model"):
         self.script = list(script)
@@ -38,6 +40,7 @@ class ChatCompletionsServer:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
+                time.sleep(float(step.get("delay") or 0))
                 for chunk in server._chunks(step):
                     self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
                 self.wfile.write(b"data: [DONE]\n\n")

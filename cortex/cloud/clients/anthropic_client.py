@@ -13,6 +13,7 @@ from cortex.tooling.types import (
     ToolCallEvent,
     ToolResult,
     ToolResultEvent,
+    TurnInterrupt,
 )
 
 logger = logging.getLogger(__name__)
@@ -158,8 +159,10 @@ class AnthropicClient:
         tool_choice: str = "auto",
         tool_executor=None,
         max_tool_iterations: int = 8,
+        interrupt: Optional[TurnInterrupt] = None,
     ):
         """Yield normalized events from Anthropic messages API."""
+        interrupt = interrupt or TurnInterrupt()
         system_text, normalized_messages = self._normalize_messages(messages)
         if not normalized_messages:
             raise RuntimeError("No user/assistant messages available for Anthropic request.")
@@ -184,12 +187,14 @@ class AnthropicClient:
 
                 emitted_this_turn = False
                 response = None
+                interrupt.raise_if_set()
                 try:
                     with self.client.messages.stream(**kwargs) as stream:
-                        for text in stream.text_stream:
-                            if text:
-                                emitted_this_turn = True
-                                yield TextDeltaEvent(delta=str(text))
+                        with interrupt.watching(stream):
+                            for text in stream.text_stream:
+                                if text:
+                                    emitted_this_turn = True
+                                    yield TextDeltaEvent(delta=str(text))
                         if hasattr(stream, "get_final_message"):
                             response = stream.get_final_message()
                 except Exception as exc:
@@ -197,9 +202,11 @@ class AnthropicClient:
                         "Anthropic Messages API tool stream failed, falling back to non-streaming create: %s",
                         exc,
                     )
+                interrupt.raise_if_set()
 
                 if response is None:
                     response = self.client.messages.create(**kwargs)
+                    interrupt.raise_if_set()
 
                 reported_model = self._item_get(response, "model", None) or reported_model
                 reported_id = self._item_get(response, "id", None) or reported_id
@@ -277,10 +284,12 @@ class AnthropicClient:
             final_kwargs["system"] = system_text
 
         final_message = None
+        interrupt.raise_if_set()
         with self.client.messages.stream(**final_kwargs) as stream:
-            for text in stream.text_stream:
-                if text:
-                    yield TextDeltaEvent(delta=str(text))
+            with interrupt.watching(stream):
+                for text in stream.text_stream:
+                    if text:
+                        yield TextDeltaEvent(delta=str(text))
             if hasattr(stream, "get_final_message"):
                 try:
                     final_message = stream.get_final_message()

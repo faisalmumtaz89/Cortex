@@ -783,6 +783,51 @@ def test_reply_cut_off_at_the_output_limit_shows_the_limit_error(tui_project) ->
         server.close()
 
 
+def test_escape_stops_a_model_request_in_flight(tui_project) -> None:
+    from tests.chat_completions_server import ChatCompletionsServer
+
+    server = ChatCompletionsServer([{"text": "LATE_ANSWER", "delay": 60}, {"text": "NEXT_ANSWER"}])
+    project, start = tui_project
+    try:
+        session = start(
+            [[{"text": "IGNORED"}]],
+            extra_env={
+                "CORTEX_SCRIPTED_MODEL": "",
+                "OPENAI_COMPATIBLE_BASE_URL": server.base_url,
+                "OPENAI_COMPATIBLE_API_KEY": "sk-compatible-test",
+            },
+        )
+        session.wait_for("Session ready")
+        session.send_key("/model openai-compatible:test-model")
+        time.sleep(0.5)
+        session.send_key("Enter")
+        session.wait_for("openai-compatible:test-model — now active.")
+        session.send_key("Escape")
+        time.sleep(0.5)
+
+        session.send_line("think hard")
+        session.wait_until(
+            lambda frame: any(ch in frame for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+            description="spinner while the model works",
+            timeout=10,
+        )
+        time.sleep(1)
+        session.send_key("Escape")
+        frame = session.wait_until(
+            lambda frame: "Interrupted." in frame
+            and not any(ch in frame for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+            description="interrupted turn with no spinner",
+            timeout=5,
+        )
+        assert "LATE_ANSWER" not in frame
+
+        session.send_line("next")
+        session.wait_for("NEXT_ANSWER", timeout=20)
+        assert len(server.requests) == 2
+    finally:
+        server.close()
+
+
 def test_markdown_and_syntax_highlighting_render_with_color(tui_project) -> None:
     project, start = tui_project
     answer = (

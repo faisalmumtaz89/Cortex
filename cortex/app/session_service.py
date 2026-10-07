@@ -19,6 +19,8 @@ from cortex.tooling.types import (
     TextDeltaEvent,
     ToolCallEvent,
     ToolResultEvent,
+    TurnInterrupt,
+    TurnInterruptedError,
 )
 
 
@@ -61,10 +63,6 @@ class _WorkerToolingBridge:
         return self.permission_service.ask(session_id=session_id, request=request, emit_event=emitter)
 
 
-class TurnInterruptedError(RuntimeError):
-    """Raised inside a running turn when the user requests an interrupt."""
-
-
 class SessionService:
     """Manage sessions and generation turns for JSON-RPC worker mode."""
 
@@ -83,16 +81,16 @@ class SessionService:
         self.model_service = model_service
         self.tooling_bridge = tooling_bridge
         self._session_to_conversation: Dict[str, str] = {}
-        self._interrupts: Dict[str, threading.Event] = {}
+        self._interrupts: Dict[str, TurnInterrupt] = {}
         self._lock = threading.Lock()
 
     def request_interrupt(self, session_id: str) -> bool:
         """Signal the session's active turn to stop. True if a turn was live."""
         with self._lock:
-            event = self._interrupts.get(session_id)
-        if event is None:
+            interrupt = self._interrupts.get(session_id)
+        if interrupt is None:
             return False
-        event.set()
+        interrupt.set()
         return True
 
     @staticmethod
@@ -176,7 +174,7 @@ class SessionService:
         # request_interrupt) only at the try boundary right
         # before the turn runs, so no raise in the setup span can ever leak
         # the registry entry — see the registration site below.
-        interrupt_event = threading.Event()
+        interrupt = TurnInterrupt()
 
         user_message = self.conversation_manager.add_message(
             MessageRole.USER,
@@ -246,7 +244,7 @@ class SessionService:
 
         def on_event(event: ModelEvent) -> None:
             if isinstance(event, ToolCallEvent):
-                if interrupt_event.is_set():
+                if interrupt.is_set():
                     # Never surface a new tool row for a turn that is unwinding.
                     raise TurnInterruptedError()
                 pending_tool_calls[event.call.id] = event.call.name
@@ -288,11 +286,11 @@ class SessionService:
                         },
                     },
                 )
-                if interrupt_event.is_set():
+                if interrupt.is_set():
                     raise TurnInterruptedError()
                 return
 
-            if interrupt_event.is_set():
+            if interrupt.is_set():
                 raise TurnInterruptedError()
             if isinstance(event, TextDeltaEvent):
                 delta = event.delta or ""
@@ -354,7 +352,7 @@ class SessionService:
         # on purpose: they take microseconds and nothing interruptible
         # happens before run_turn.
         with self._lock:
-            self._interrupts[session_id] = interrupt_event
+            self._interrupts[session_id] = interrupt
         try:
             self.tooling_bridge.bind_turn(session_id=session_id, emit_event=emit_event)
             try:
@@ -366,6 +364,7 @@ class SessionService:
                     on_event=on_event,
                     on_wait=on_wait,
                     on_retry=on_retry,
+                    interrupt=interrupt,
                 )
             except TurnInterruptedError:
                 resolve_dangling_tools("Interrupted.")
@@ -463,7 +462,7 @@ class SessionService:
             self.tooling_bridge.unbind_turn()
             with self._lock:
                 # Identity-guarded: never remove a newer turn's registration.
-                if self._interrupts.get(session_id) is interrupt_event:
+                if self._interrupts.get(session_id) is interrupt:
                     del self._interrupts[session_id]
 
         # The final frame carries VERIFIED provenance labels (what actually
