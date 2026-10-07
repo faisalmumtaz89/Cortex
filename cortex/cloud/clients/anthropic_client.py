@@ -49,6 +49,15 @@ class AnthropicClient:
         return record
 
     @staticmethod
+    def _finish_reason(stop_reason: object) -> str:
+        """Map a Messages API stop_reason onto the turn's finish reason."""
+        if stop_reason == "max_tokens":
+            return "length"
+        if stop_reason == "model_context_window_exceeded":
+            return "context_window"
+        return "stop"
+
+    @staticmethod
     def _item_get(item: object, key: str, default: Any = None) -> Any:
         if isinstance(item, dict):
             return item.get(key, default)
@@ -221,9 +230,12 @@ class AnthropicClient:
                 if text_parts and not emitted_this_turn:
                     yield TextDeltaEvent(delta="".join(text_parts))
 
-                if not tool_calls:
+                # A reply cut off by a limit ends the turn: its tool calls may
+                # be incomplete and must not run.
+                finish_reason = self._finish_reason(self._item_get(response, "stop_reason", None))
+                if not tool_calls or finish_reason != "stop":
                     yield FinishEvent(
-                        reason="stop",
+                        reason=finish_reason,
                         provenance=self._provenance(reported_model, reported_id),
                     )
                     return
@@ -275,8 +287,11 @@ class AnthropicClient:
                 except Exception:  # pragma: no cover - SDK-specific edge
                     final_message = None
 
+        stop_reason = (
+            self._item_get(final_message, "stop_reason", None) if final_message is not None else None
+        )
         yield FinishEvent(
-            reason="stop",
+            reason=self._finish_reason(stop_reason),
             provenance=self._provenance(
                 self._item_get(final_message, "model", None) if final_message is not None else None,
                 self._item_get(final_message, "id", None) if final_message is not None else None,

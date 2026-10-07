@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from cortex.cloud.clients.anthropic_client import AnthropicClient
 from cortex.tooling.types import (
     FinishEvent,
@@ -326,3 +328,67 @@ def test_unknown_blocks_replay_their_own_shape_verbatim():
     typeless = client._serialize_content_block(SimpleNamespace(text="plain"))
     assert typeless == {"type": "text", "text": "plain"}
 
+
+class _TruncatedMessages:
+    """Every stream ends at a limit and carries a half-written tool call."""
+
+    def __init__(self, stop_reason):
+        self.calls = 0
+        self.stop_reason = stop_reason
+
+    def stream(self, **kwargs):
+        self.calls += 1
+        final_message = SimpleNamespace(
+            stop_reason=self.stop_reason,
+            content=[
+                {"type": "text", "text": "Running"},
+                {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}},
+            ],
+        )
+        return _FakeMessageStream(["Running"], final_message)
+
+    def create(self, **kwargs):
+        raise AssertionError(f"unexpected non-stream fallback call: {kwargs}")
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "finish_reason"),
+    [("max_tokens", "length"), ("model_context_window_exceeded", "context_window")],
+)
+def test_reply_cut_off_at_a_limit_finishes_with_its_reason_and_runs_no_tools(
+    stop_reason, finish_reason
+):
+    client = AnthropicClient.__new__(AnthropicClient)
+    client.client = SimpleNamespace(messages=_TruncatedMessages(stop_reason))
+    executed = []
+    tool_spec = SimpleNamespace(
+        name="bash", description="Run", parameters={"type": "object", "properties": {}}
+    )
+
+    events = list(
+        client.stream_events(
+            model_id="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "run it"}],
+            max_tokens=64,
+            temperature=0.2,
+            top_p=1.0,
+            tools=[tool_spec],
+            tool_executor=executed.append,
+        )
+    )
+
+    finishes = [event for event in events if isinstance(event, FinishEvent)]
+    assert [event.reason for event in finishes] == [finish_reason]
+    assert executed == []
+    assert not any(isinstance(event, ToolCallEvent) for event in events)
+
+    plain = list(
+        client.stream_events(
+            model_id="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "explain"}],
+            max_tokens=64,
+            temperature=0.2,
+            top_p=1.0,
+        )
+    )
+    assert [event.reason for event in plain if isinstance(event, FinishEvent)] == [finish_reason]

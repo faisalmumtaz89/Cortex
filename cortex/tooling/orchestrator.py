@@ -24,6 +24,7 @@ from cortex.tooling.types import (
     ErrorEvent,
     FinishEvent,
     ModelEvent,
+    ReplyCutOffError,
     TextDeltaEvent,
     ToolCall,
     ToolCallEvent,
@@ -254,7 +255,10 @@ class ToolingOrchestrator:
             on_retry=on_retry,
         )
 
+        finish_reason = ""
         for event in events:
+            if isinstance(event, FinishEvent):
+                finish_reason = event.reason
             self._record_event(
                 event=event,
                 result=result,
@@ -268,6 +272,19 @@ class ToolingOrchestrator:
             model_ref=model_ref,
             on_event=on_event,
         )
+        if finish_reason == "length":
+            raise ReplyCutOffError(
+                "The model reached the output limit "
+                f"(max_tokens={self.cli.config.inference.max_tokens}) before finishing its "
+                "reply. Raise max_tokens in ~/.cortex/config.yaml.",
+                result.parts,
+            )
+        if finish_reason == "context_window":
+            raise ReplyCutOffError(
+                "The conversation filled the model's context window before the reply "
+                "finished. Start a new conversation with /clear.",
+                result.parts,
+            )
 
         result.elapsed_seconds = time.time() - started_at
         result.first_token_latency_seconds = first_text_seen.get("first")

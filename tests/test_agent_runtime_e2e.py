@@ -383,6 +383,98 @@ def test_openai_compatible_provider_runs_tool_turn(tmp_path: Path, scratch_repo:
     assert len(tool_messages) == 1
 
 
+def _run_against_gateway(tmp_path: Path, repo: Path, script, *, full_auto: bool = False):
+    server = ChatCompletionsServer(script)
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    command = [sys.executable, "-P", "-m", "cortex", "-p", "fix the bug",
+               "--model", "openai-compatible:test-model"]
+    if full_auto:
+        command.append("--full-auto")
+    try:
+        process = subprocess.run(
+            command, cwd=repo, env=env, capture_output=True, text=True, timeout=120
+        )
+    finally:
+        server.close()
+    return process, server
+
+
+@pytest.mark.parametrize("text", ["", "The fix is to"])
+def test_reply_cut_off_at_the_output_limit_fails_the_turn(
+    tmp_path: Path, scratch_repo: Path, text: str
+) -> None:
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo, [{"text": text, "finish": "length"}]
+    )
+
+    assert process.returncode == 1, process.stdout
+    assert text in process.stdout
+    assert "reached the output limit (max_tokens=32768)" in process.stderr
+    assert server.requests[0]["max_tokens"] == 32768
+
+
+def test_reply_cut_off_at_the_output_limit_stays_in_the_conversation(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    server = ChatCompletionsServer(
+        [{"text": "First, open the parser", "finish": "length"}, {"text": "and fix it."}]
+    )
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    target = {"backend": "cloud", "provider": "openai-compatible", "model_id": "test-model"}
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        results = [
+            harness.wait_response(
+                harness.send(
+                    "session.submit_user_input",
+                    {"session_id": session_id, "user_input": text, "active_target": target},
+                )
+            )["result"]
+            for text in ("how do I fix the bug?", "continue")
+        ]
+    finally:
+        harness.close()
+        server.close()
+
+    assert results[0]["ok"] is False
+    assert "reached the output limit" in results[0]["error"]
+    assert results[1].get("ok", True) is not False
+    history = [
+        (message["role"], message["content"])
+        for message in server.requests[1]["messages"]
+        if message["role"] != "system"
+    ]
+    assert history == [
+        ("user", "how do I fix the bug?"),
+        ("assistant", "First, open the parser"),
+        ("user", "continue"),
+    ]
+
+
+def test_tool_call_cut_off_at_the_output_limit_is_not_executed(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    process, server = _run_against_gateway(
+        tmp_path,
+        scratch_repo,
+        [{"tool_calls": [{"name": "bash", "arguments": {"command": "touch made.txt"}}],
+          "finish": "length"}],
+        full_auto=True,
+    )
+
+    assert process.returncode == 1
+    assert "reached the output limit" in process.stderr
+    assert not (scratch_repo / "made.txt").exists()
+    assert len(server.requests) == 1
+
+
 def test_repository_config_cannot_redirect_provider_endpoint(
     tmp_path: Path, scratch_repo: Path
 ) -> None:

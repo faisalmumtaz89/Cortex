@@ -13,7 +13,8 @@ from typing import Dict, List
 
 
 class ChatCompletionsServer:
-    """Script entries: {"text": str} and/or {"tool_calls": [{"name": str, "arguments": dict}]}."""
+    """Script entries: {"text": str} and/or {"tool_calls": [{"name": str, "arguments": dict}]},
+    optionally with {"finish": str} to override the finish reason."""
 
     def __init__(self, script: List[Dict[str, object]], *, model: str = "test-model"):
         self.script = list(script)
@@ -84,7 +85,7 @@ class ChatCompletionsServer:
                     }
                 )
             )
-        chunks.append(chunk({}, finish="tool_calls" if calls else "stop"))
+        chunks.append(chunk({}, finish=step.get("finish") or ("tool_calls" if calls else "stop")))
         return chunks
 
     def close(self) -> None:

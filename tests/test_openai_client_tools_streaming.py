@@ -12,8 +12,11 @@ from cortex.tooling.types import (
 
 
 class _FakeStream:
+    """Events as the SDK's ResponseStream yields them: text deltas, then
+    response.completed, or response.incomplete for an incomplete response."""
+
     def __init__(self, deltas, final_response):
-        self.text_deltas = deltas
+        self._deltas = deltas
         self._final_response = final_response
 
     def __enter__(self):
@@ -22,8 +25,11 @@ class _FakeStream:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    def get_final_response(self):
-        return self._final_response
+    def __iter__(self):
+        for delta in self._deltas:
+            yield SimpleNamespace(type="response.output_text.delta", delta=delta)
+        status = getattr(self._final_response, "status", "completed")
+        yield SimpleNamespace(type=f"response.{status}", response=self._final_response)
 
 
 class _FakeResponses:
@@ -94,3 +100,58 @@ def test_tool_mode_streams_text_deltas_instead_of_buffering():
     assert fake_responses.create_calls == 0
     assert fake_responses.calls == 2
 
+
+class _TruncatedResponses:
+    """Every response is incomplete at max_output_tokens; it carries a function call."""
+
+    def stream(self, **kwargs):
+        tool_call = SimpleNamespace(
+            type="function_call", call_id="call_1", name="bash", arguments='{"comm'
+        )
+        final = SimpleNamespace(
+            id="resp_1",
+            output=[tool_call],
+            output_text=None,
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        )
+        return _FakeStream(["Running"], final)
+
+    def create(self, **kwargs):
+        raise AssertionError(f"unexpected non-stream fallback call: {kwargs}")
+
+
+def test_reply_cut_off_at_max_output_tokens_finishes_with_length_and_runs_no_tools():
+    client = OpenAIClient.__new__(OpenAIClient)
+    client.client = SimpleNamespace(responses=_TruncatedResponses())
+    executed = []
+    tool_spec = SimpleNamespace(
+        name="bash", description="Run", parameters={"type": "object", "properties": {}}
+    )
+
+    events = list(
+        client.stream_events(
+            model_id="gpt-5.5",
+            messages=[{"role": "user", "content": "run it"}],
+            max_tokens=64,
+            temperature=0.2,
+            top_p=1.0,
+            tools=[tool_spec],
+            tool_executor=executed.append,
+        )
+    )
+
+    assert [e.reason for e in events if isinstance(e, FinishEvent)] == ["length"]
+    assert executed == []
+    assert not any(isinstance(e, ToolCallEvent) for e in events)
+
+    plain = list(
+        client.stream_events(
+            model_id="gpt-5.5",
+            messages=[{"role": "user", "content": "explain"}],
+            max_tokens=64,
+            temperature=0.2,
+            top_p=1.0,
+        )
+    )
+    assert [e.reason for e in plain if isinstance(e, FinishEvent)] == ["length"]

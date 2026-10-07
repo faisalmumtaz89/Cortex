@@ -18,7 +18,7 @@ Files Cortex writes outside the project:
 # Inference
 temperature: 0.7
 top_p: 0.95
-max_tokens: 4096
+max_tokens: 32768
 
 # Models
 cloud_default_openai_model: gpt-5.5
@@ -54,7 +54,7 @@ log_file: ~/.cortex/cortex.log
 
 - `temperature` (default: `0.7`)
 - `top_p` (default: `0.95`)
-- `max_tokens` (default: `4096`)
+- `max_tokens` (default: `32768`) — output budget per model request, including reasoning tokens. A reply that reaches it fails the turn with a message naming the limit.
 
 ### Cloud
 

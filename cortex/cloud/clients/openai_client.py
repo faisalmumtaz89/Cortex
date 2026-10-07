@@ -203,6 +203,32 @@ class OpenAIClient:
             kwargs["previous_response_id"] = previous_response_id
         return kwargs
 
+    @staticmethod
+    def _stream_text(stream, outcome: Dict[str, object]):
+        """Yield the text deltas of a Responses stream and record its final
+        response in ``outcome["response"]``. The final response is taken from
+        the stream's own response.completed / response.incomplete event:
+        the SDK's get_final_response() raises for an incomplete response."""
+        for event in stream:
+            event_type = getattr(event, "type", "")
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", "")
+                if delta:
+                    yield TextDeltaEvent(delta=str(delta))
+            elif event_type in ("response.completed", "response.incomplete"):
+                outcome["response"] = getattr(event, "response", None)
+
+    @staticmethod
+    def _finish_reason(response: object) -> str:
+        """The response's finish reason: length if it stopped at max_output_tokens."""
+        details = getattr(response, "incomplete_details", None)
+        if (
+            getattr(response, "status", None) == "incomplete"
+            and getattr(details, "reason", None) == "max_output_tokens"
+        ):
+            return "length"
+        return "stop"
+
     def _supports_sampling_controls(self, model_id: str) -> bool:
         """Return whether temperature/top_p should be sent for this model."""
         normalized = str(model_id or "").strip().lower()
@@ -248,25 +274,14 @@ class OpenAIClient:
                 )
                 emitted_this_turn = False
                 response = None
+                outcome: Dict[str, object] = {}
 
                 try:
                     with self.client.responses.stream(**cast(Any, kwargs)) as stream:
-                        if hasattr(stream, "text_deltas"):
-                            for delta in stream.text_deltas:
-                                if delta:
-                                    emitted_this_turn = True
-                                    yield TextDeltaEvent(delta=str(delta))
-                        else:
-                            for event in stream:
-                                event_type = getattr(event, "type", "")
-                                if event_type == "response.output_text.delta":
-                                    delta = getattr(event, "delta", "")
-                                    if delta:
-                                        emitted_this_turn = True
-                                        yield TextDeltaEvent(delta=str(delta))
-
-                        if hasattr(stream, "get_final_response"):
-                            response = stream.get_final_response()
+                        for text_event in self._stream_text(stream, outcome):
+                            emitted_this_turn = True
+                            yield text_event
+                    response = outcome.get("response")
                 except Exception as exc:
                     logger.debug(
                         "OpenAI Responses API tool stream failed, falling back to non-streaming create: %s",
@@ -285,9 +300,12 @@ class OpenAIClient:
                 reported_model = getattr(response, "model", None) or reported_model
                 reported_id = getattr(response, "id", None) or reported_id
                 calls = self._extract_tool_calls(response)
-                if not calls:
+                # A reply cut off by max_output_tokens ends the turn: its tool
+                # calls may be incomplete and must not run.
+                finish_reason = self._finish_reason(response)
+                if not calls or finish_reason == "length":
                     yield FinishEvent(
-                        reason="stop",
+                        reason=finish_reason,
                         provenance=self._provenance(reported_model, reported_id),
                     )
                     return
@@ -321,34 +339,19 @@ class OpenAIClient:
         try:
             with self.client.responses.stream(**cast(Any, response_kwargs)) as stream:
                 emitted = False
+                final_outcome: Dict[str, object] = {}
+                for text_event in self._stream_text(stream, final_outcome):
+                    emitted = True
+                    yield text_event
 
-                if hasattr(stream, "text_deltas"):
-                    for delta in stream.text_deltas:
-                        if delta:
-                            emitted = True
-                            yield TextDeltaEvent(delta=str(delta))
-                else:
-                    for event in stream:
-                        event_type = getattr(event, "type", "")
-                        if event_type == "response.output_text.delta":
-                            delta = getattr(event, "delta", "")
-                            if delta:
-                                emitted = True
-                                yield TextDeltaEvent(delta=str(delta))
-
-                final_response = None
-                if hasattr(stream, "get_final_response"):
-                    try:
-                        final_response = stream.get_final_response()
-                    except Exception:  # pragma: no cover - SDK-specific edge
-                        final_response = None
+                final_response = final_outcome.get("response")
                 if not emitted and final_response is not None:
                     final_text = self._extract_output_text(final_response)
                     if final_text:
                         yield TextDeltaEvent(delta=final_text)
 
             yield FinishEvent(
-                reason="stop",
+                reason=self._finish_reason(final_response),
                 provenance=self._provenance(
                     getattr(final_response, "model", None),
                     getattr(final_response, "id", None),
@@ -384,17 +387,21 @@ class OpenAIClient:
 
         chunk_model: object = ""
         chunk_id: object = ""
+        finish_reason = "stop"
         for chunk in stream:
             chunk_model = getattr(chunk, "model", None) or chunk_model
             chunk_id = getattr(chunk, "id", None) or chunk_id
             try:
-                delta = chunk.choices[0].delta.content
+                choice = chunk.choices[0]
             except Exception:
-                delta = None
+                continue
+            delta = getattr(getattr(choice, "delta", None), "content", None)
             if delta:
                 yield TextDeltaEvent(delta=str(delta))
+            if getattr(choice, "finish_reason", None) == "length":
+                finish_reason = "length"
 
-        yield FinishEvent(reason="stop", provenance=self._provenance(chunk_model, chunk_id))
+        yield FinishEvent(reason=finish_reason, provenance=self._provenance(chunk_model, chunk_id))
 
     def stream(
         self,

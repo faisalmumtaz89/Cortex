@@ -15,6 +15,7 @@ from cortex.tooling.types import (
     ErrorEvent,
     FinishEvent,
     ModelEvent,
+    ReplyCutOffError,
     TextDeltaEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -413,6 +414,14 @@ class SessionService:
                 resolve_dangling_tools("Aborted.")
                 completed_ms = self._now_ms()
                 partial_text = "".join(assistant_chunks)
+                if isinstance(exc, ReplyCutOffError) and partial_text:
+                    self.conversation_manager.add_message(
+                        MessageRole.ASSISTANT,
+                        partial_text,
+                        conversation_id=conversation.conversation_id,
+                        message_id=assistant_message_id,
+                        parts=exc.parts,
+                    )
                 emit_event(
                     session_id=session_id,
                     event_type="session.error",

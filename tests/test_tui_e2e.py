@@ -753,6 +753,36 @@ def test_absolute_tool_paths_display_repo_relative(tui_project) -> None:
     assert "return a - b" in (project / "calc.py").read_text(encoding="utf-8")
 
 
+def test_reply_cut_off_at_the_output_limit_shows_the_limit_error(tui_project) -> None:
+    from tests.chat_completions_server import ChatCompletionsServer
+
+    server = ChatCompletionsServer([{"text": "The fix is to", "finish": "length"}])
+    project, start = tui_project
+    try:
+        session = start(
+            [[{"text": "IGNORED"}]],
+            extra_env={
+                "CORTEX_SCRIPTED_MODEL": "",
+                "OPENAI_COMPATIBLE_BASE_URL": server.base_url,
+                "OPENAI_COMPATIBLE_API_KEY": "sk-compatible-test",
+            },
+        )
+        session.wait_for("Session ready")
+        session.send_key("/model openai-compatible:test-model")
+        time.sleep(0.5)
+        session.send_key("Enter")
+        session.wait_for("openai-compatible:test-model — now active.")
+        session.send_key("Escape")
+        time.sleep(0.5)
+
+        session.send_line("fix the bug")
+        frame = session.wait_for("reached the output limit (max_tokens=32768)", timeout=30)
+        assert "The fix is to" in frame
+        assert "Raise max_tokens" in frame
+    finally:
+        server.close()
+
+
 def test_markdown_and_syntax_highlighting_render_with_color(tui_project) -> None:
     project, start = tui_project
     answer = (

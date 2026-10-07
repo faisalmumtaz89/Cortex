@@ -12,7 +12,7 @@ class InferenceConfig(BaseModel):
     """Inference settings."""
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.95, ge=0.0, le=1.0)
-    max_tokens: int = Field(default=4096, ge=1)
+    max_tokens: int = Field(default=32768, ge=1)
 
 
 class CloudConfig(BaseModel):

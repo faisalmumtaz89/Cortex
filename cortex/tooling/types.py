@@ -137,3 +137,12 @@ class AssistantTurnResult:
     provenance: Optional[Dict[str, Any]] = None
     provenance_verified: bool = False
     served_model_label: Optional[str] = None  # e.g. "openai:gpt-5.1"
+
+
+class ReplyCutOffError(RuntimeError):
+    """The model's reply stopped at a limit before it finished. The reply was
+    verified, so what the turn produced (``parts``) stays in the conversation."""
+
+    def __init__(self, message: str, parts: List[Dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.parts = parts

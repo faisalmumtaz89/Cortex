@@ -97,6 +97,10 @@ Azure needs its resource endpoint (`AZURE_OPENAI_ENDPOINT` or `cloud_azure_endpo
 
 Every turn is rejected unless the response proves it came from the selected provider and model. A mismatch usually means a proxy or gateway rewrote the model name, or the endpoint is not the one you configured — check `cloud_openai_compatible_base_url` / `cloud_azure_endpoint` and the model id you selected.
 
+### Reply cut off at the output limit
+
+"The model reached the output limit (max_tokens=N)" means the reply, including the model's reasoning, used the whole output budget. The partial reply stays in the conversation, so you can ask the model to continue; to give it more room, raise `max_tokens` in `~/.cortex/config.yaml`. Some OpenAI-compatible servers (for example a local vLLM with a small context window) reject a `max_tokens` larger than they support; lower it for those endpoints.
+
 ### Poor response quality
 
 - Try a stronger model.

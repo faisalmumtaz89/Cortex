@@ -139,7 +139,9 @@ class ChatCompletionsClient:
                 if getattr(choice, "finish_reason", None):
                     finish_reason = str(choice.finish_reason)
 
-            if not pending or not use_tools:
+            # A reply cut off by max_tokens ends the turn: its tool calls may
+            # be incomplete and must not run.
+            if not pending or not use_tools or finish_reason == "length":
                 yield FinishEvent(
                     reason=finish_reason or "stop",
                     provenance=self._provenance(reported_model, response_id),

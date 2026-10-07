@@ -12,6 +12,7 @@ from cortex.conversation_manager import MessageRole
 from cortex.tooling.types import (
     AssistantTurnResult,
     FinishEvent,
+    ReplyCutOffError,
     TextDeltaEvent,
     ToolCall,
     ToolCallEvent,
@@ -549,3 +550,54 @@ def test_turn_registration_spans_the_turn_and_clears_after_success_and_failure(
     )
     assert failure["ok"] is False
     assert failing._interrupts == {}
+
+
+def test_cut_off_reply_keeps_its_text_and_parts_in_the_conversation(tmp_path: Path) -> None:
+    parts = [
+        {"type": "text", "text": "Reading app.py."},
+        {"type": "tool", "tool": "read_file", "state": "completed"},
+        {"type": "text", "text": "The fix is to"},
+        {"type": "finish", "reason": "length"},
+    ]
+
+    class _CutOffOrchestrator:
+        def run_turn(self, *_args, **kwargs):
+            on_event = kwargs.get("on_event")
+            on_event(TextDeltaEvent(delta="Reading app.py."))
+            on_event(TextDeltaEvent(delta="The fix is to"))
+            raise ReplyCutOffError("The model reached the output limit", parts)
+
+    service = _build_service(tmp_path, orchestrator=_CutOffOrchestrator())
+    service.create_or_resume(session_id="s1", conversation_id=None)
+    result = service.submit_user_input(
+        session_id="s1",
+        user_input="fix it",
+        active_target_input=None,
+        stop_sequences=None,
+        emit_event=_silent_emit,
+    )
+
+    assert result["ok"] is False
+    conversation = next(iter(service.conversation_manager.conversations.values()))
+    assistant = [m for m in conversation.messages if m.role == MessageRole.ASSISTANT]
+    assert [(m.content, m.parts) for m in assistant] == [("Reading app.py.The fix is to", parts)]
+
+
+def test_failed_turn_does_not_keep_its_text(tmp_path: Path) -> None:
+    class _FailingAfterTextOrchestrator:
+        def run_turn(self, *_args, **kwargs):
+            kwargs.get("on_event")(TextDeltaEvent(delta="unverified text"))
+            raise RuntimeError("Model provenance mismatch")
+
+    service = _build_service(tmp_path, orchestrator=_FailingAfterTextOrchestrator())
+    service.create_or_resume(session_id="s1", conversation_id=None)
+    service.submit_user_input(
+        session_id="s1",
+        user_input="fix it",
+        active_target_input=None,
+        stop_sequences=None,
+        emit_event=_silent_emit,
+    )
+
+    conversation = next(iter(service.conversation_manager.conversations.values()))
+    assert [m.role for m in conversation.messages] == [MessageRole.USER]
