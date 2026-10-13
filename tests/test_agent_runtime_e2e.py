@@ -468,6 +468,99 @@ def test_bash_commands_inherit_no_worker_warning_filters(
     assert (scratch_repo / "warnoptions.txt").read_text(encoding="utf-8").strip() == "[]"
 
 
+def _bash_results(
+    tmp_path: Path, repo: Path, calls: list, *, timeout: float = 60, linger: float = 0
+) -> list:
+    """Run each bash call (a dict of its arguments) in its own turn, approving
+    it; return each call's finished tool part. Every turn must end in time,
+    and the worker must still answer afterwards."""
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "bash", "arguments": args}]}, {"text": "Done."}]
+         for args in calls],
+    )
+    harness = WorkerHarness(cwd=repo, env=_worker_env(tmp_path, script))
+    try:
+        session_id = _start_session(harness)
+        for index in range(len(calls)):
+            started = time.time()
+            _turn_answering_prompts(harness, session_id, f"run {index}", "allow_once")
+            assert time.time() - started < timeout, f"call {index} took too long"
+        harness.wait_response(harness.send("app.handshake", {"protocol_version": "1.0.0"}))
+        time.sleep(linger)  # the worker keeps running, as it does between turns
+        return [part for part in harness.tool_parts()
+                if part.get("tool") == "bash" and part.get("state") in ("completed", "error")]
+    finally:
+        harness.close()
+
+
+def test_bash_commands_cannot_read_the_workers_stdin(tmp_path: Path, scratch_repo: Path) -> None:
+    (result,) = _bash_results(tmp_path, scratch_repo, [{"command": "cat; echo after-cat"}])
+
+    assert "after-cat" in str(result.get("output"))
+
+
+def test_bash_commands_do_not_see_provider_keys_or_cortex_internals(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    (result,) = _bash_results(tmp_path, scratch_repo, [{"command": "env; echo HOME_IS=$HOME"}])
+
+    output = str(result.get("output"))
+    assert "HOME_IS=" in output
+    assert "OPENAI_API_KEY" not in output and "sk-test-scripted" not in output
+    assert "CORTEX_" not in output
+
+
+def test_bash_timeout_ends_commands_that_ignore_sigterm(tmp_path: Path, scratch_repo: Path) -> None:
+    (result,) = _bash_results(
+        tmp_path, scratch_repo,
+        [{"command": "trap '' TERM; echo waiting; sleep 60", "timeout_ms": 1000}],
+        timeout=20,
+    )
+
+    output = str(result.get("output"))
+    assert "waiting" in output and "timed out" in output
+
+
+def test_bash_returns_when_the_command_ends_even_if_a_background_child_runs_on(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    (result,) = _bash_results(
+        tmp_path, scratch_repo, [{"command": "sleep 60 & echo started"}], timeout=20
+    )
+
+    assert "started" in str(result.get("output"))
+
+
+def test_bash_background_child_keeps_running_after_the_call_returns(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    writer = "(for i in 1 2 3 4 5 6; do echo tick $i; echo alive $i >> bg.log; sleep 0.3; done) &"
+    (result,) = _bash_results(
+        tmp_path, scratch_repo, [{"command": f"{writer} echo started"}], linger=3
+    )
+
+    assert "started" in str(result.get("output"))
+    assert (scratch_repo / "bg.log").read_text().split()[-1] == "6"
+
+
+def test_bash_output_keeps_order_and_the_end_of_long_output(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    long_output = (
+        f'"{sys.executable}" -c "import sys; print(\'x\' * 400000); '
+        f'print(\'THE END\', file=sys.stderr)"'
+    )
+    ordered, long = _bash_results(
+        tmp_path, scratch_repo,
+        [{"command": "echo one; echo two >&2; echo three"}, {"command": long_output}],
+    )
+
+    assert str(ordered.get("output")).split() == ["one", "two", "three"]
+    assert str(long.get("output")).rstrip().endswith("THE END")
+    assert "bytes of output not shown" in str(long.get("output"))
+
+
 def test_openai_compatible_provider_runs_tool_turn(tmp_path: Path, scratch_repo: Path) -> None:
     server = ChatCompletionsServer(
         [
