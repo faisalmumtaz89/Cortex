@@ -138,7 +138,7 @@ tools_profile: full
 
 ### Tool permission prompts
 
-When a tool call needs approval, the TUI shows an arrow menu: **Allow once** / **Allow always** / **Reject** (↑↓ + Enter; Esc rejects). Persistent approvals are stored in `~/.cortex/tool_permissions.yaml` — delete that file to reset them.
+When a tool call needs approval, the TUI shows an arrow menu: **Allow once** / **Allow always** / **Reject** (↑↓ + Enter; Esc rejects). "Allow always" covers only that exact command (run in the same directory) or file, in the directory Cortex was started in. Persistent approvals are stored in `~/.cortex/tool_permissions.yaml` — delete that file to reset them; running sessions pick up the change.
 
 ### Headless edits are denied
 

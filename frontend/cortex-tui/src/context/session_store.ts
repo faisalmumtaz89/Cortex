@@ -7,6 +7,8 @@ import { batch, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { isOutOfBandNotice } from "../lib/notices"
 import type { EventEnvelope, SessionStatus } from "../protocol"
+import { permissionShownInFull } from "../lib/permission_prompt"
+import { terminalColumns, terminalRows } from "../lib/terminal_size"
 
 type MessageRole = "user" | "assistant" | "system"
 type ToolState = "pending" | "running" | "completed" | "error"
@@ -507,13 +509,19 @@ export function createSessionStore() {
       case "permission.asked": {
         const patternsRaw = event.payload.patterns
         const patterns = Array.isArray(patternsRaw) ? patternsRaw.map((item) => String(item)) : []
+        const metadata = (event.payload.metadata as Record<string, unknown>) ?? {}
         setState("pendingPermission", {
           request_id: String(event.payload.request_id ?? ""),
           permission: String(event.payload.permission ?? ""),
           patterns,
-          metadata: (event.payload.metadata as Record<string, unknown>) ?? {},
+          metadata,
         })
-        setState("permissionChoiceIndex", 0) // default highlight = Allow once
+        // Default highlight = Allow once, or Reject when the prompt cannot show
+        // the whole call: Enter must not approve what the user could not see.
+        const pending = { permission: String(event.payload.permission ?? ""), patterns, metadata }
+        const queued = state.queuedInputs.length
+        const full = permissionShownInFull(pending, terminalColumns(), terminalRows(), queued)
+        setState("permissionChoiceIndex", full ? 0 : 2)
         return
       }
       case "permission.replied": {

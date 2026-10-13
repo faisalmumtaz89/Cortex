@@ -16,8 +16,9 @@ import {
 } from "../commands"
 import { useStore } from "../context/store"
 import { readGitBranch } from "../lib/git_branch"
-import { displayPath } from "../lib/paths"
 import { spinnerFrame } from "../lib/spinner"
+import { permissionLines } from "../lib/permission_prompt"
+import { visibleText } from "../lib/visible_text"
 import { turnRunning } from "../protocol"
 import { terminalColumns } from "../lib/terminal_size"
 
@@ -569,46 +570,11 @@ export function SessionRoute(props: {
     }, 50)
   }
 
-  // Patterns/paths display repo-relative when inside the repo (display only).
-  const permissionTarget = () =>
-    store.state.pendingPermission?.patterns.map(displayPath).join(", ") || "*"
-
-  const permissionSummary = () => {
+  const permissionText = () => {
     const pending = store.state.pendingPermission
-    if (!pending) {
-      return ""
-    }
-
-    // Tool metadata is {tool, arguments: {...}} — the details live in arguments.
-    const meta = (pending.metadata || {}) as Record<string, unknown>
-    const args = (meta.arguments ?? {}) as Record<string, unknown>
-    const tool = String(meta.tool ?? "")
-    const argPath = displayPath(String(args.path ?? pending.patterns[0] ?? ""))
-
-    if (pending.permission === "read") {
-      return `Read file: ${argPath}`
-    }
-    if (pending.permission === "list") {
-      return `List directory: ${argPath}`
-    }
-    if (pending.permission === "grep") {
-      return `Search pattern: ${String(args.query ?? args.pattern ?? "")}`
-    }
-    if (pending.permission === "bash") {
-      return `Run command: ${String(args.command ?? "")}`
-    }
-    if (pending.permission === "edit") {
-      const action = tool === "write_file" ? "Write file" : "Edit file"
-      return `${action}: ${argPath}`
-    }
-    if (pending.permission === "external_directory") {
-      return `Access external directory: ${String(args.parentDir ?? args.filepath ?? pending.patterns[0] ?? "")}`
-    }
-    if (pending.permission === "doom_loop") {
-      return "Continue after repeated identical tool calls."
-    }
-    return `Permission: ${pending.permission}${tool ? ` (${tool})` : ""}`
+    return pending ? permissionLines(pending).map(visibleText) : []
   }
+
 
   const submitFromPrompt = async () => {
     if (!input) {
@@ -973,10 +939,9 @@ export function SessionRoute(props: {
             customBorderChars={OVERLAY_BORDER}
           >
             <text fg={UI_PALETTE.statusBusy}>Permission required</text>
-            <text fg={UI_PALETTE.text}>{permissionSummary()}</text>
-            {/* Only show Target when it adds info beyond the summary line. */}
-            <Show when={permissionTarget() && !permissionSummary().includes(permissionTarget())}>
-              <text fg={UI_PALETTE.textMuted}>{`Target: ${permissionTarget()}`}</text>
+            <text fg={UI_PALETTE.text}>{permissionText()[0] ?? ""}</text>
+            <Show when={permissionText()[1]}>
+              <text fg={UI_PALETTE.textMuted}>{permissionText()[1]}</text>
             </Show>
             {/* Blank row above the options and above the footer (menu rhythm). */}
             <box flexShrink={0} marginTop={1}>

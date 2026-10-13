@@ -29,11 +29,13 @@ class PermissionAction(str, Enum):
 
 @dataclass(frozen=True)
 class PermissionRule:
-    """Permission rule with wildcard path pattern."""
+    """Permission rule with wildcard pattern, for one repository (its resolved
+    root) or, with an empty `repo`, for every repository."""
 
     permission: str
     pattern: str
     action: PermissionAction
+    repo: str = ""
 
 
 @dataclass(frozen=True)

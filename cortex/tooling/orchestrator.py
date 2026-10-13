@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import shlex
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, cast
@@ -179,16 +181,45 @@ class ToolingOrchestrator:
             "max_iterations": max(1, max_iterations),
         }
 
-    def _extract_permission_patterns(self, call: ToolCall) -> List[str]:
+    def _extract_permission_patterns(self, call: ToolCall, repo_root: Path) -> List[str]:
+        """What the call does, as permission rules match it: for bash the command
+        exactly as it will run, with the directory it runs in; for other tools
+        the file they touch, relative to the repository. A call without either
+        gets "*", which "Allow always" never saves."""
         args = call.arguments or {}
-        patterns: List[str] = []
-        for key in ("path", "filePath", "workdir"):
-            value = args.get(key)
-            if isinstance(value, str) and value.strip():
-                patterns.append(value.strip())
-        if not patterns:
-            patterns.append("*")
-        return patterns
+
+        def inside(raw: str) -> Optional[str]:
+            """`raw` resolved as the tools resolve it, relative to the
+            repository; None when it is outside it or not a usable path."""
+            try:
+                path = Path(raw)
+                path = (path if path.is_absolute() else repo_root / path).resolve()
+            except (TypeError, ValueError, OSError):
+                return None
+            if not path.is_relative_to(repo_root):
+                return None
+            return path.relative_to(repo_root).as_posix()
+
+        if call.name == "bash":
+            command, workdir = args.get("command"), args.get("workdir")
+            if not isinstance(command, str) or not command.strip():
+                return ["*"]
+            if not workdir:
+                return [command]
+            # Resolved as the bash tool resolves it, and written as a script that
+            # runs the command there or not at all, as the tool does: "./"
+            # keeps `cd` from reading the directory as an option or looking it
+            # up in CDPATH, and "|| exit 1" stops if it is missing.
+            where = inside(os.path.expanduser(workdir)) if isinstance(workdir, str) else None
+            if where is None:
+                return ["*"]
+            if where == ".":
+                return [command]
+            return [f"cd {shlex.quote('./' + where)} || exit 1\n{command}"]
+        # Edit tools strip the path before they resolve it; so does the pattern.
+        path = args.get("path")
+        where = inside(path.strip()) if isinstance(path, str) and path.strip() else None
+        return [where] if where is not None else ["*"]
 
     def _prompt_permission(self, request: PermissionRequest) -> PermissionDecision:
         prompt_fn = getattr(self.cli, "prompt_tool_permission", None)
@@ -207,14 +238,13 @@ class ToolingOrchestrator:
             )
 
         permission = registry.permission_for(call.name)
-        patterns = self._extract_permission_patterns(call)
+        patterns = self._extract_permission_patterns(call, registry.repo_root)
 
         try:
             self.permission_manager.request(
                 permission=permission,
                 patterns=patterns,
                 metadata={"tool": call.name, "arguments": call.arguments},
-                session_id=session_id,
                 prompt_callback=self._prompt_permission,
             )
         except PermissionDeniedError as exc:

@@ -659,6 +659,68 @@ def test_permission_modal_shows_command_and_executes_it(tui_project) -> None:
     assert (project / "proof.txt").read_text(encoding="utf-8").strip() == "proof"
 
 
+def test_permission_modal_shows_the_directory_a_command_runs_in(tui_project) -> None:
+    project, start = tui_project
+    (project / "sub").mkdir()
+    session = start(
+        [
+            [
+                {"tool_calls": [{"name": "bash", "arguments": {
+                    "command": "echo here > here.txt", "workdir": "sub"}}]},
+                {"text": "RAN_IN_SUB_MARKER"},
+            ]
+        ]
+    )
+    _select_scripted_model(session)
+    session.send_line("write the file in sub")
+
+    modal = session.wait_for("Permission required")
+    assert "Run command: cd ./sub || exit 1\\necho here > here.txt" in modal
+
+    session.send_key("Enter")
+    session.wait_for("RAN_IN_SUB_MARKER")
+    assert (project / "sub" / "here.txt").exists()
+
+
+def test_permission_modal_shows_every_line_of_a_command(tui_project) -> None:
+    project, start = tui_project
+    command = "echo hello" + " " * 20000 + "\n" * 60 + "; touch HIDDEN.txt"
+    session = start(
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+          {"text": "DONE_MARKER"}]]
+    )
+    _select_scripted_model(session)
+    session.send_line("run it")
+
+    modal = session.wait_for("Permission required")
+    assert "blank or invisible characters⟩; touch HIDDEN.txt" in modal
+    assert "Allow once" in modal and "Reject" in modal
+    session.send_key("Escape")
+    session.wait_for("DONE_MARKER")
+    assert not (project / "HIDDEN.txt").exists()
+
+
+def test_permission_modal_for_a_command_too_long_to_show_starts_on_reject(tui_project) -> None:
+    project, start = tui_project
+    command = "echo " + "A" * 9000 + "; touch LONG.txt"
+    session = start(
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+          {"text": "DONE_MARKER"}]]
+    )
+    subprocess.run(["tmux", "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
+                   check=True)
+    _select_scripted_model(session)
+    session.send_line("run it")
+
+    modal = session.wait_for("Permission required")
+    assert "characters not shown⟩" in modal
+    assert "touch LONG.txt" in modal
+    assert "❯ Reject" in modal
+    session.send_key("Enter")
+    session.wait_for("DONE_MARKER")
+    assert not (project / "LONG.txt").exists()
+
+
 def test_interrupt_during_tool_resolves_the_tool_row(tui_project) -> None:
     """Regression (2026-07-06 screenshot): Esc while a bash tool was executing
     finalized the turn as interrupted but left the tool row spinning forever —

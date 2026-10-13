@@ -285,6 +285,124 @@ def test_agent_edit_requires_permission_and_changes_file(
         harness.close()
 
 
+def _turn_answering_prompts(harness: WorkerHarness, session_id: str, text: str, reply: str):
+    """Run one turn, answering every permission prompt with `reply`; return
+    the prompts that were asked."""
+    submit_id = harness.send(
+        "session.submit_user_input",
+        {"session_id": session_id, "user_input": text, "active_target": CLOUD_TARGET},
+    )
+    asked: list[dict] = []
+    cursor = len(harness.events)
+    deadline = time.time() + 60
+    while submit_id not in harness.responses:
+        assert harness._pump(deadline), "turn did not finish"
+        for event in harness.events[cursor:]:
+            if event["event_type"] == "permission.asked":
+                asked.append(event["payload"])
+                harness.send(
+                    "permission.reply",
+                    {"session_id": session_id,
+                     "request_id": event["payload"]["request_id"], "reply": reply},
+                )
+        cursor = len(harness.events)
+    return asked
+
+
+def _bash_turn(command: str) -> list:
+    return [{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+            {"text": "Ran it."}]
+
+
+def test_allow_always_covers_only_that_command_in_that_repository(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    script = _write_script(
+        tmp_path / "script.json",
+        [_bash_turn("touch one.txt"), _bash_turn("touch one.txt"), _bash_turn("touch two.txt")],
+    )
+    env = _worker_env(tmp_path, script)
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        assert len(_turn_answering_prompts(harness, session_id, "one", "allow_always")) == 1
+        assert _turn_answering_prompts(harness, session_id, "one again", "reject") == []
+        # A different command still asks, and rejecting it keeps it from running.
+        assert len(_turn_answering_prompts(harness, session_id, "two", "reject")) == 1
+        assert not (scratch_repo / "two.txt").exists()
+    finally:
+        harness.close()
+
+    # The same command in another repository asks again (same HOME, same store).
+    other_repo = _make_scratch_repo(tmp_path / "other")
+    _write_script(tmp_path / "script.json", [_bash_turn("touch one.txt")])
+    harness = WorkerHarness(cwd=other_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        assert len(_turn_answering_prompts(harness, session_id, "one", "reject")) == 1
+        assert not (other_repo / "one.txt").exists()
+    finally:
+        harness.close()
+
+
+def test_allow_always_for_a_command_in_one_directory_asks_in_another(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    in_src = [{"tool_calls": [{"name": "bash", "arguments": {
+        "command": "touch made.txt", "workdir": "src"}}]}, {"text": "Ran it."}]
+    script = _write_script(
+        tmp_path / "script.json", [in_src, _bash_turn("touch made.txt")]
+    )
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    try:
+        session_id = _start_session(harness)
+        (asked,) = _turn_answering_prompts(harness, session_id, "in src", "allow_always")
+        assert asked["patterns"] == ["cd ./src || exit 1\ntouch made.txt"]
+        assert len(_turn_answering_prompts(harness, session_id, "at root", "reject")) == 1
+        assert (scratch_repo / "src" / "made.txt").exists()
+        assert not (scratch_repo / "made.txt").exists()
+    finally:
+        harness.close()
+
+
+@pytest.mark.parametrize(
+    "workdir, pattern",
+    [(5, "*"), (["src"], "*"), ("src\x00", "*"), ("/elsewhere", "*"), ("~", "*"),
+     ("-P", "cd ./-P || exit 1\ntouch made.txt")],
+)
+def test_workdir_pattern_cannot_run_anywhere_else(
+    tmp_path: Path, scratch_repo: Path, workdir, pattern
+) -> None:
+    """A bad or outside directory gives no rule to save; an odd name is written
+    so that `cd` cannot read it as an option. Neither breaks the turn."""
+    call = [{"tool_calls": [{"name": "bash", "arguments": {
+        "command": "touch made.txt", "workdir": workdir}}]}, {"text": "Done."}]
+    script = _write_script(tmp_path / "script.json", [call])
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    try:
+        session_id = _start_session(harness)
+        asked = _turn_answering_prompts(harness, session_id, "run", "allow_always")
+        assert harness.events_of("session.error") == []
+        assert [prompt["patterns"] for prompt in asked] == [[pattern]]
+        saved = (tmp_path / "home" / ".cortex" / "tool_permissions.yaml").exists()
+        assert saved == (pattern != "*")
+    finally:
+        harness.close()
+
+
+def test_allow_once_covers_only_that_call(tmp_path: Path, scratch_repo: Path) -> None:
+    script = _write_script(
+        tmp_path / "script.json", [_bash_turn("touch one.txt"), _bash_turn("touch one.txt")]
+    )
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    try:
+        session_id = _start_session(harness)
+        assert len(_turn_answering_prompts(harness, session_id, "one", "allow_once")) == 1
+        assert len(_turn_answering_prompts(harness, session_id, "again", "reject")) == 1
+    finally:
+        harness.close()
+
+
 def _run_headless(
     *, cwd: Path, env: dict, prompt: str, extra_args: list[str]
 ) -> subprocess.CompletedProcess:

@@ -248,7 +248,8 @@ def test_tool_rows_and_permission_modal_display_repo_relative_paths() -> None:
     assert 'from "../lib/paths"' in tool_block
     assert 'typeof args.path === "string" ? displayPath(args.path) : ""' in tool_block
 
-    session = _read("frontend/cortex-tui/src/routes/session.tsx")
-    assert 'from "../lib/paths"' in session
-    assert "patterns.map(displayPath)" in session
-    assert "displayPath(String(args.path ?? pending.patterns[0] ?? \"\"))" in session
+    # The permission modal's lines are built in lib/permission_prompt.ts.
+    prompt = _read("frontend/cortex-tui/src/lib/permission_prompt.ts")
+    assert 'from "./paths"' in prompt
+    assert "patterns.map(displayPath)" in prompt
+    assert "displayPath(String(args.path ?? pending.patterns[0] ?? \"\"))" in prompt

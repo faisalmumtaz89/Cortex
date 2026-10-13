@@ -22,7 +22,7 @@ Type a message to run an agent turn with the active model, or a slash command to
 |---|---|
 | `Enter` | Submit input |
 | `Shift+Enter` | Insert newline |
-| `1` / `2` / `3` / `Esc` | Answer a pending permission prompt |
+| `↑` / `↓`, `Enter` / `Esc` | Choose an answer to a pending permission prompt / reject it |
 | `Ctrl+C` | Exit Cortex |
 
 ## Headless Mode
@@ -104,11 +104,13 @@ With tools enabled (the default: `tools_enabled: true`, `tools_profile: full`), 
 - `edit_file` (exact string replacement), `write_file` — prompt for permission
 - `bash` — prompts for permission
 
-Every tool is sandboxed to the directory Cortex was started in. When permission is needed, the TUI shows an arrow menu (↑↓ to choose, Enter to confirm):
+File tools work only inside the directory Cortex was started in, and `bash` runs there or in a directory below it; `bash` commands are not otherwise sandboxed. When permission is needed, the TUI shows an arrow menu (↑↓ to choose, Enter to confirm):
 
-- **Allow once** — remembered for the current session
-- **Allow always** — persisted to `~/.cortex/tool_permissions.yaml`
+- **Allow once** — allows this one call; the next call asks again
+- **Allow always** — allows this exact command, run in the same directory (for `bash`), or this file (for edits) from now on, only in the directory Cortex was started in; saved in `~/.cortex/tool_permissions.yaml`. A call with no command or file to name is allowed this once only.
 - **Reject** (or `Esc`) — the model continues without the tool result
+
+The prompt shows a command on one line: backslashes, line breaks, tabs and invisible or blank-looking characters appear as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count. A command too long to show in full keeps its start and end, with a count of the characters not shown, and the prompt then starts on **Reject**.
 
 Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds `edit_file`/`write_file`), `full` (adds `bash`). See `docs/configuration.md` for the `tools_*` keys.
 
