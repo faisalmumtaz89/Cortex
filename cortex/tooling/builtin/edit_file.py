@@ -5,7 +5,15 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
-from cortex.tooling.builtin.common import is_binary_file, resolve_repo_path
+from cortex.tooling.builtin.common import (
+    LINE_BREAK,
+    LineView,
+    is_binary_file,
+    line_break,
+    resolve_repo_path,
+    view_of,
+    write_text_atomic,
+)
 from cortex.tooling.builtin.diff_util import build_line_diff
 from cortex.tooling.types import ToolExecutionState, ToolResult
 
@@ -40,11 +48,31 @@ class EditFileTool(BaseTool[EditFileArgs]):
             raise ToolExecutionError("new_text must differ from old_text")
 
         try:
-            content = target.read_text(encoding="utf-8")
+            content = target.read_bytes().decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ToolExecutionError(f"file is not valid UTF-8: {exc}") from exc
 
-        occurrences = content.count(parsed_args.old_text)
+        # old_text and new_text are matched against the file as read_file
+        # shows it, every line break as "\n"; the edit then changes only the
+        # part of the file it covers, so other lines keep their own line breaks.
+        # read_file never shows a "\r", so one in the arguments is dropped.
+        lines = LineView(content)
+        old_text = parsed_args.old_text.replace("\r", "")
+        new_text = parsed_args.new_text.replace("\r", "")
+        if not old_text:
+            raise ToolExecutionError("old_text has no text besides line breaks")
+        if old_text == new_text:
+            raise ToolExecutionError(
+                "old_text and new_text differ only in line breaks, which edit_file keeps "
+                "as the file has them; to change a file's line breaks, use bash"
+            )
+
+        found: list[int] = []
+        at = lines.view.find(old_text)
+        while at != -1:
+            found.append(at)
+            at = lines.view.find(old_text, at + len(old_text))
+        occurrences = len(found)
         if occurrences == 0:
             raise ToolExecutionError(
                 "old_text not found in file; re-read the file and match its contents exactly"
@@ -56,11 +84,19 @@ class EditFileTool(BaseTool[EditFileArgs]):
             )
 
         replaced = occurrences if parsed_args.replace_all else 1
-        if parsed_args.replace_all:
-            updated = content.replace(parsed_args.old_text, parsed_args.new_text)
-        else:
-            updated = content.replace(parsed_args.old_text, parsed_args.new_text, 1)
-        target.write_text(updated, encoding="utf-8")
+        expected = new_text.join(lines.view.split(old_text, replaced))
+        updated = _replace(content, lines, found[:replaced], len(old_text), new_text, False)
+        if view_of(updated) != expected:
+            # A "\r" break followed by a "\n" one read as one "\r\n": use
+            # "\r\n" for the replacement's breaks, which joins with no other.
+            updated = _replace(content, lines, found[:replaced], len(old_text), new_text, True)
+        if view_of(updated) != expected:
+            # Removing all text between a "\r" and a "\n" joins the two.
+            raise ToolExecutionError(
+                "this edit would join a \\r and a \\n line break into one; keep some text "
+                "between them, or make the change with bash"
+            )
+        write_text_atomic(target, updated)
 
         rel_path = str(target.relative_to(context.repo_root))
         metadata: dict = {"path": rel_path, "replacements": replaced}
@@ -68,8 +104,8 @@ class EditFileTool(BaseTool[EditFileArgs]):
         # old vs new content (not just old_text/new_text) keeps line numbers
         # absolute and handles replace_all correctly.
         diff = build_line_diff(
-            content,
-            updated,
+            lines.view,
+            view_of(updated),
             path=rel_path,
             op="edit",
             language=target.suffix.lstrip(".").lower() or None,
@@ -85,3 +121,25 @@ class EditFileTool(BaseTool[EditFileArgs]):
             output=f"edited {rel_path} ({replaced} replacement(s))",
             metadata=metadata,
         )
+
+
+def _replace(
+    content: str, lines: LineView, found: list[int], length: int, new_text: str, crlf: bool
+) -> str:
+    """`content` with the view's text of `length` at each of `found` replaced
+    by `new_text`. Its line breaks are those of the text it replaces, in
+    order, when it has as many, otherwise the file's usual one; with `crlf`,
+    every one is "\\r\\n"."""
+    usual = line_break(content)
+    new_parts = new_text.split("\n")
+    pieces: list[str] = []
+    done = 0
+    for at in found:
+        start, stop = lines.position(at), lines.position(at + length)
+        breaks = LINE_BREAK.findall(content, start, stop)
+        if crlf or len(breaks) != len(new_parts) - 1:
+            breaks = ["\r\n" if crlf else usual] * (len(new_parts) - 1)
+        inserted = new_parts[0] + "".join(b + part for b, part in zip(breaks, new_parts[1:]))
+        pieces += [content[done:start], inserted]
+        done = stop
+    return "".join([*pieces, content[done:]])

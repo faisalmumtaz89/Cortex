@@ -468,16 +468,16 @@ def test_bash_commands_inherit_no_worker_warning_filters(
     assert (scratch_repo / "warnoptions.txt").read_text(encoding="utf-8").strip() == "[]"
 
 
-def _bash_results(
+def _tool_results(
     tmp_path: Path, repo: Path, calls: list, *, timeout: float = 60, linger: float = 0
 ) -> list:
-    """Run each bash call (a dict of its arguments) in its own turn, approving
-    it; return each call's finished tool part. Every turn must end in time,
-    and the worker must still answer afterwards."""
+    """Run each (tool, arguments) call in its own turn, approving it; return
+    each call's finished tool part. Every turn must end in time, and the worker
+    must still answer afterwards."""
     script = _write_script(
         tmp_path / "script.json",
-        [[{"tool_calls": [{"name": "bash", "arguments": args}]}, {"text": "Done."}]
-         for args in calls],
+        [[{"tool_calls": [{"name": name, "arguments": args}]}, {"text": "Done."}]
+         for name, args in calls],
     )
     harness = WorkerHarness(cwd=repo, env=_worker_env(tmp_path, script))
     try:
@@ -489,9 +489,134 @@ def _bash_results(
         harness.wait_response(harness.send("app.handshake", {"protocol_version": "1.0.0"}))
         time.sleep(linger)  # the worker keeps running, as it does between turns
         return [part for part in harness.tool_parts()
-                if part.get("tool") == "bash" and part.get("state") in ("completed", "error")]
+                if part.get("state") in ("completed", "error")]
     finally:
         harness.close()
+
+
+def _bash_results(tmp_path: Path, repo: Path, calls: list, **kwargs) -> list:
+    return _tool_results(tmp_path, repo, [("bash", args) for args in calls], **kwargs)
+
+
+def _edit(path: str, old: str, new: str) -> tuple:
+    return ("edit_file", {"path": path, "old_text": old, "new_text": new})
+
+
+def test_edits_keep_each_files_line_endings_and_byte_order_mark(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    (scratch_repo / "crlf.txt").write_bytes(b"one\r\ntwo\r\nthree\r\n")
+    (scratch_repo / "mixed.txt").write_bytes(b"one\r\ntwo\nthree\r\n")
+    (scratch_repo / "bom.txt").write_bytes(b"\xef\xbb\xbfone\ntwo\n")
+    (scratch_repo / "rewrite.txt").write_bytes(b"old\r\nfile\r\n")
+    results = _tool_results(tmp_path, scratch_repo, [
+        _edit("crlf.txt", "one\ntwo", "ONE\nTWO"),
+        _edit("mixed.txt", "three", "THREE"),
+        _edit("bom.txt", "one", "ONE"),
+        ("write_file", {"path": "rewrite.txt", "content": "new\ncontent\n"}),
+    ])
+
+    assert all(part.get("state") == "completed" for part in results), results
+    assert (scratch_repo / "crlf.txt").read_bytes() == b"ONE\r\nTWO\r\nthree\r\n"
+    assert (scratch_repo / "mixed.txt").read_bytes() == b"one\r\ntwo\nTHREE\r\n"
+    assert (scratch_repo / "bom.txt").read_bytes() == b"\xef\xbb\xbfONE\ntwo\n"
+    assert (scratch_repo / "rewrite.txt").read_bytes() == b"new\r\ncontent\r\n"
+
+
+def test_edits_in_mixed_files_count_every_match_and_keep_other_lines(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    (scratch_repo / "all.txt").write_bytes(b"x = 1\r\ny\nx = 1\nz\r\n")
+    (scratch_repo / "one.txt").write_bytes(b"x = 1\r\ny\nx = 1\nz\r\n")
+    (scratch_repo / "span.txt").write_bytes(b"one\r\ntwo\nthree\r\n")
+    (scratch_repo / "mac.txt").write_bytes(b"one\rtwo\rthree\r")
+    replace_all, ambiguous, span, mac, endings_only = _tool_results(tmp_path, scratch_repo, [
+        ("edit_file", {"path": "all.txt", "old_text": "x = 1\n", "new_text": "x = 2\n",
+                       "replace_all": True}),
+        _edit("one.txt", "x = 1\n", "x = 2\n"),
+        _edit("span.txt", "one\ntwo\nthree", "ONE\nTWO"),
+        _edit("mac.txt", "one\ntwo", "ONE\nTWO"),
+        ("edit_file", {"path": "all.txt", "old_text": "\r\n", "new_text": "\n",
+                       "replace_all": True}),
+    ])
+
+    assert (scratch_repo / "all.txt").read_bytes() == b"x = 2\r\ny\nx = 2\nz\r\n"
+    assert "matches 2 locations" in str(ambiguous.get("error"))
+    assert (scratch_repo / "one.txt").read_bytes() == b"x = 1\r\ny\nx = 1\nz\r\n"
+    assert (scratch_repo / "span.txt").read_bytes() == b"ONE\r\nTWO\r\n"
+    assert (scratch_repo / "mac.txt").read_bytes() == b"ONE\rTWO\rthree\r"
+    assert "differ only in line breaks" in str(endings_only.get("error"))
+    assert replace_all.get("state") == span.get("state") == mac.get("state") == "completed"
+
+
+def test_edits_keep_the_owner_and_hard_links_and_refuse_read_only_files(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    owned = scratch_repo / "owned.txt"
+    owned.write_text("one\n")
+    if os.geteuid() == 0:
+        os.chown(owned, 1000, 1000)
+    linked = scratch_repo / "linked.txt"
+    linked.write_text("one\n")
+    os.link(linked, tmp_path / "other_link.txt")
+    locked = scratch_repo / "locked.txt"
+    locked.write_text("one\n")
+    locked.chmod(0o444)
+    *_, refused = _tool_results(tmp_path, scratch_repo, [
+        _edit("owned.txt", "one", "two"),
+        _edit("linked.txt", "one", "two"),
+        _edit("locked.txt", "one", "two"),
+    ])
+
+    if os.geteuid() == 0:
+        assert (owned.stat().st_uid, owned.stat().st_gid) == (1000, 1000)
+    assert (tmp_path / "other_link.txt").read_text() == "two\n"
+    if os.geteuid() != 0:  # root may write any file
+        assert "read-only" in str(refused.get("error"))
+        assert locked.read_text() == "one\n"
+
+
+def test_read_file_reads_only_up_to_the_range(tmp_path: Path, scratch_repo: Path) -> None:
+    (scratch_repo / "log.txt").write_bytes(b"l1\nl2\nl3\n\xffbroken later\n")
+    (result,) = _tool_results(
+        tmp_path, scratch_repo, [("read_file", {"path": "log.txt", "end_line": 2})]
+    )
+
+    assert str(result.get("output")).splitlines()[:2] == ["1: l1", "2: l2"]
+
+
+def test_edits_keep_the_file_mode_and_leave_no_temporary_files(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    script = scratch_repo / "run.sh"
+    script.write_text("#!/bin/sh\necho one\n")
+    script.chmod(0o755)
+    _tool_results(tmp_path, scratch_repo, [_edit("run.sh", "echo one", "echo two")])
+
+    assert script.read_text() == "#!/bin/sh\necho two\n"
+    assert script.stat().st_mode & 0o777 == 0o755
+    assert sorted(p.name for p in scratch_repo.iterdir()) == ["README.md", "run.sh", "src"]
+
+
+def test_read_file_numbers_lines_and_says_how_to_read_on(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    (scratch_repo / "big.txt").write_text("".join(f"line {i}\n" for i in range(1, 3001)))
+    (scratch_repo / "wide.txt").write_text("x" * 5000 + "\nend\n")
+    first, wide = _tool_results(tmp_path, scratch_repo, [
+        ("read_file", {"path": "big.txt"}),
+        ("read_file", {"path": "wide.txt"}),
+    ])
+
+    lines = str(first.get("output")).splitlines()
+    assert lines[0] == "1: line 1" and lines[1999] == "2000: line 2000"
+    assert lines[-1] == (
+        "(Showing lines 1-2000; the file has more lines. Use start_line=2001 to continue.)"
+    )
+    wide_lines = str(wide.get("output")).splitlines()
+    assert wide_lines[0].endswith("... (line cut at 2000 characters)")
+    assert len(wide_lines[0]) < 2100
+    assert wide_lines[-1] == "2: end"
 
 
 def test_bash_commands_cannot_read_the_workers_stdin(tmp_path: Path, scratch_repo: Path) -> None:
