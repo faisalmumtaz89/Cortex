@@ -43,6 +43,9 @@ class _WorkerToolingBridge:
         self._active_session_id: Optional[str] = None
         self._emit_event = None
         self._lock = threading.Lock()
+        # False where nobody can answer a permission prompt (headless runs):
+        # prompts are then rejected at once.
+        self.interactive = True
 
     def bind_turn(self, *, session_id: str, emit_event) -> None:
         with self._lock:
@@ -54,11 +57,15 @@ class _WorkerToolingBridge:
             self._active_session_id = None
             self._emit_event = None
 
+    def cancel_prompts(self, session_id: str) -> None:
+        """Reject the session's pending permission prompts."""
+        self.permission_service.cancel(session_id)
+
     def prompt_tool_permission(self, request) -> PermissionDecision:
         with self._lock:
             session_id = self._active_session_id or "session"
             emitter = self._emit_event
-        if emitter is None:
+        if emitter is None or not self.interactive:
             return PermissionDecision.REJECT
         return self.permission_service.ask(session_id=session_id, request=request, emit_event=emitter)
 
@@ -91,6 +98,7 @@ class SessionService:
         if interrupt is None:
             return False
         interrupt.set()
+        self.tooling_bridge.cancel_prompts(session_id)
         return True
 
     @staticmethod

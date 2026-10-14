@@ -23,11 +23,9 @@ class CloudRouter:
         self.credential_store = credential_store or CloudCredentialStore()
 
     def _timeout_seconds(self) -> int:
+        """How long a model request may wait for data before it fails."""
         cloud_cfg = getattr(self.config, "cloud", None)
-        tools_cfg = getattr(self.config, "tools", None)
-        cloud_timeout = int(getattr(cloud_cfg, "cloud_timeout_seconds", 60))
-        tools_idle = int(getattr(tools_cfg, "tools_idle_timeout_seconds", cloud_timeout))
-        return max(1, tools_idle)
+        return max(1, int(getattr(cloud_cfg, "cloud_timeout_seconds", 60)))
 
     def _max_retries(self) -> int:
         cloud_cfg = getattr(self.config, "cloud", None)

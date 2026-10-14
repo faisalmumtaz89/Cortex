@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from io import TextIOBase
@@ -18,6 +19,8 @@ def _build_components() -> tuple[Any, Any]:
 
     config = Config()
     configure_logging(config)
+    for warning in config.warnings:
+        logging.getLogger("cortex.config").warning(warning)
     conversation_manager = ConversationManager(config)
     return config, conversation_manager
 

@@ -767,6 +767,18 @@ def test_interrupt_during_tool_stops_it_and_resolves_the_tool_row(tui_project) -
     assert not (project / "finished.txt").exists()
 
 
+def test_a_bad_setting_is_reported_when_the_session_starts(tui_project) -> None:
+    project, start = tui_project
+    config = project.parent / "home" / ".cortex" / "config.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("tools_max_iterations: 1001\n", encoding="utf-8")
+
+    session = start([[{"text": "HI"}]])
+    frame = session.wait_for("Session ready")
+
+    assert "Ignored tools_max_iterations: 1001" in frame.replace("\n", " ").replace("┃", "")
+
+
 def test_absolute_tool_paths_display_repo_relative(tui_project) -> None:
     """Models sometimes pass ABSOLUTE paths in tool arguments. Tool rows and
     the permission modal must DISPLAY them repo-relative when they are inside

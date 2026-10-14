@@ -71,8 +71,7 @@ class WorkerRuntime:
         self.cloud_catalog = CloudModelCatalog()
         self.cloud_router = CloudRouter(config, self.credential_store)
 
-        permission_timeout = int(getattr(config.tools, "tools_idle_timeout_seconds", 45) or 45)
-        self.permission_service = PermissionService(timeout_seconds=permission_timeout)
+        self.permission_service = PermissionService()
 
         self.tooling_bridge = _WorkerToolingBridge(
             config=config,
@@ -113,7 +112,10 @@ class WorkerRuntime:
         self._pending_update_notice: str | None = None
         self._update_notice_session_id: str | None = None
         self._update_notice_emitted = False
-        self._startup_notices: list[str] = self._restore_startup_target()
+        self._startup_notices: list[str] = [
+            *getattr(config, "warnings", []),
+            *self._restore_startup_target(),
+        ]
         if os.environ.get("CORTEX_SCRIPTED_MODEL", "").strip():
             # A scripted override answers EVERY turn with canned output — make
             # that impossible to miss in a real session.

@@ -82,6 +82,9 @@ class _FakeBridge:
     def unbind_turn(self) -> None:
         return None
 
+    def cancel_prompts(self, session_id: str) -> None:
+        return None
+
 
 class _FakeOrchestrator:
     def run_turn(self, *_args, **kwargs):

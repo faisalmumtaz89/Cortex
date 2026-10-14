@@ -45,6 +45,10 @@ def run_headless(
     from cortex.app.worker_runtime import WorkerRuntime
 
     config, conversation_manager = components
+    # There is no session notice in a headless run: settings that were not
+    # valid are reported on stderr.
+    for warning in getattr(config, "warnings", []):
+        print(f"warning: {warning}", file=sys.stderr)
 
     runtime = WorkerRuntime(
         config=config,
@@ -52,6 +56,9 @@ def run_headless(
         rpc_stdin=io.StringIO(),
         rpc_stdout=io.StringIO(),
     )
+
+    # Nobody can answer a permission prompt here (a saved rule may still ask).
+    runtime.tooling_bridge.interactive = False
 
     # Headless permission policy: reads stay allowed via default rules; writes
     # and bash are auto-approved with --full-auto and denied otherwise (there

@@ -122,10 +122,9 @@ Every turn is rejected unless the response proves it came from the selected prov
 ```yaml
 cloud_timeout_seconds: 60
 cloud_max_retries: 2
-tools_idle_timeout_seconds: 45
 ```
 
-A request that waits longer than `tools_idle_timeout_seconds` for data fails and, like other connection errors, is sent again up to `cloud_max_retries` times; once a request has been sent again, the status line reads `retry` until the turn ends, and Esc still interrupts the turn. Failures are logged in `~/.cortex/cortex.log` with the provider and model.
+A request that waits longer than `cloud_timeout_seconds` for data fails and, like other connection errors, is sent again up to `cloud_max_retries` times; once a request has been sent again, the status line reads `retry` until the turn ends, and Esc still interrupts the turn. Failures are logged in `~/.cortex/cortex.log` with the provider and model.
 
 ### Model emits fake tool JSON or `<tool_calls>` text
 

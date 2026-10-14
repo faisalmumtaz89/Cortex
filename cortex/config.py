@@ -1,11 +1,14 @@
 """Configuration management for Cortex."""
 
+import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Type
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+
+logger = logging.getLogger(__name__)
 
 
 class InferenceConfig(BaseModel):
@@ -32,7 +35,6 @@ class ToolsConfig(BaseModel):
     tools_enabled: bool = True
     tools_profile: Literal["off", "read_only", "edit", "full"] = "full"
     tools_max_iterations: int = Field(default=100, ge=1, le=1000)
-    tools_idle_timeout_seconds: int = Field(default=45, ge=1, le=600)
     tools_continue_on_reject: bool = False
 
 
@@ -79,6 +81,26 @@ class PathsConfig(BaseModel):
     templates_dir: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "templates")
     plugins_dir: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "plugins")
 
+_SECTIONS: Dict[str, Type[BaseModel]] = {
+    "inference": InferenceConfig,
+    "cloud": CloudConfig,
+    "tools": ToolsConfig,
+    "ui": UIConfig,
+    "logging": LoggingConfig,
+    "conversation": ConversationConfig,
+    "system": SystemConfig,
+    "developer": DeveloperConfig,
+    "paths": PathsConfig,
+}
+
+
+# Settings Cortex no longer reads, with what replaces them.
+_RETIRED = {
+    "tools_idle_timeout_seconds": "no longer used; set cloud_timeout_seconds for the "
+    "request timeout (a permission prompt now waits for your answer)",
+}
+
+
 class Config:
     """Main configuration class for Cortex."""
 
@@ -90,6 +112,9 @@ class Config:
         self.config_path = config_path or Path.home() / ".cortex" / "config.yaml"
         self._raw_config: Dict[str, Any] = {}
         self._state: Dict[str, Any] = {}
+        self.warnings: List[str] = []
+        self._file_values: Dict[str, Any] = {}
+        self._env_values: Dict[str, Any] = {}
 
         self.inference: InferenceConfig
         self.cloud: CloudConfig
@@ -105,33 +130,39 @@ class Config:
         self._load_state()
 
     def load(self) -> None:
-        """Load configuration from YAML file plus CORTEX_* env overrides."""
+        """Load configuration from YAML file plus CORTEX_* env overrides. A
+        setting that is unknown or not valid is reported in `warnings`, and
+        the others still apply; cortex/__main__.py logs the warnings once
+        logging is set up."""
+        self.warnings = []
+        file_values: Dict[str, Any] = {}
         if self.config_path.exists():
             try:
                 with open(self.config_path, 'r') as f:
-                    self._raw_config = yaml.safe_load(f) or {}
+                    loaded = yaml.safe_load(f) or {}
+                if not isinstance(loaded, dict):
+                    raise ValueError("it does not hold key: value settings")
+                file_values = loaded
             except Exception as e:
-                print(f"Warning: Failed to load config from {self.config_path}: {e}")
-                self._raw_config = {}
-        else:
-            self._raw_config = {}
+                first_line = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+                self.warnings.append(f"Ignored {self.config_path}: {first_line}")
+        for key in sorted(str(key) for key in file_values if key not in self._known_keys()):
+            hint = _RETIRED.get(key, "")
+            self.warnings.append(
+                f"Ignored {key} in {self.config_path}: "
+                + (hint or "not a Cortex setting")
+            )
 
-        self._raw_config.update(self._env_overrides())
-        if not self._raw_config:
-            self._use_defaults()
-            return
-
+        self._file_values = file_values
+        self._env_values = self._env_overrides()
+        self._raw_config = {**file_values, **self._env_values}
         self._parse_config()
 
     @staticmethod
     def _known_keys() -> set:
         """All flat config keys across section models."""
-        sections: List[type[BaseModel]] = [
-            InferenceConfig, CloudConfig, ToolsConfig, UIConfig, LoggingConfig,
-            ConversationConfig, SystemConfig, DeveloperConfig, PathsConfig,
-        ]
         keys: set = set()
-        for section in sections:
+        for section in _SECTIONS.values():
             keys.update(section.model_fields.keys())
         return keys
 
@@ -155,86 +186,48 @@ class Config:
                 overrides[key] = raw
         return overrides
 
-    def _use_defaults(self) -> None:
-        """Use default configuration values."""
-        self.inference = InferenceConfig()
-        self.cloud = CloudConfig()
-        self.tools = ToolsConfig()
-        self.ui = UIConfig()
-        self.logging = LoggingConfig()
-        self.conversation = ConversationConfig()
-        self.system = SystemConfig()
-        self.developer = DeveloperConfig()
-        self.paths = PathsConfig()
-
     def _parse_config(self) -> None:
-        """Parse configuration from raw dictionary."""
-        try:
-            self.inference = InferenceConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["temperature", "top_p", "max_tokens"]
-            }))
-
-            self.cloud = CloudConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in [
-                    "cloud_timeout_seconds",
-                    "cloud_max_retries",
-                    "cloud_default_openai_model",
-                    "cloud_default_anthropic_model",
-                    "cloud_azure_endpoint",
-                    "cloud_openai_compatible_base_url",
-                ]
-            }))
-
-            raw_tools = self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in [
-                    "tools_enabled",
-                    "tools_profile",
-                    "tools_max_iterations",
-                    "tools_idle_timeout_seconds",
-                    "tools_continue_on_reject",
-                ]
+        """Build each section from its settings. A setting that is not valid
+        falls back to the config file's value when it came from a CORTEX_*
+        variable, otherwise to its default; each fallback is reported."""
+        for name, section in _SECTIONS.items():
+            values = self._get_section({
+                k: v for k, v in self._raw_config.items() if k in section.model_fields
             })
-            self.tools = ToolsConfig(**self._normalize_tools_section(raw_tools))
+            if name == "tools":
+                values = self._normalize_tools_section(values)
+            while True:
+                try:
+                    setattr(self, name, section(**values))
+                    break
+                except ValidationError as exc:
+                    bad = {
+                        str(error["loc"][0]): error["msg"]
+                        for error in exc.errors()
+                        if error["loc"] and error["loc"][0] in values
+                    }
+                    if not bad:
+                        self.warnings.append(f"Ignored the {name} settings ({exc}); using defaults")
+                        setattr(self, name, section())
+                        break
+                    for key, problem in bad.items():
+                        self._report_invalid(key, values.pop(key), problem)
+                        from_env = key in self._env_values
+                        if from_env and self._file_values.get(key) is not None:
+                            self._env_values.pop(key)
+                            values[key] = self._file_values[key]
 
-            self.ui = UIConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["ui_theme", "syntax_highlighting", "markdown_rendering",
-                        "show_performance_metrics", "auto_scroll", "copy_on_select", "mouse_support"]
-            }))
-
-            self.logging = LoggingConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["log_level", "log_file", "log_rotation", "max_log_size",
-                        "performance_logging"]
-            }))
-
-            self.conversation = ConversationConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["auto_save", "save_format", "save_directory",
-                        "max_conversation_history", "enable_branching"]
-            }))
-
-            self.system = SystemConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["shutdown_timeout", "crash_recovery", "auto_update_check"]
-            }))
-
-            self.developer = DeveloperConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["debug_mode"]
-            }))
-
-            self.paths = PathsConfig(**self._get_section({
-                k: v for k, v in self._raw_config.items()
-                if k in ["templates_dir", "plugins_dir"]
-            }))
-
-        except Exception as e:
-            print(f"Error parsing configuration: {e}")
-            self._use_defaults()
+    def _report_invalid(self, key: str, value: Any, problem: str) -> None:
+        shown = repr(value)
+        if len(shown) > 60:
+            shown = shown[:57] + "..."
+        source = f"CORTEX_{key.upper()}" if key in self._env_values else key
+        fallback = (
+            "using the value in the config file"
+            if key in self._env_values and self._file_values.get(key) is not None
+            else "using the default"
+        )
+        self.warnings.append(f"Ignored {source}: {shown} ({problem}); {fallback}")
 
     def _get_section(self, section_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Get a configuration section."""
@@ -243,10 +236,6 @@ class Config:
     def _normalize_tools_section(self, section: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize tooling keys so old/bad values don't break startup."""
         data = dict(section)
-
-        enabled = data.get("tools_enabled")
-        if isinstance(enabled, str):
-            data["tools_enabled"] = enabled.strip().lower() in {"1", "true", "yes", "on"}
 
         profile = data.get("tools_profile")
         if isinstance(profile, bool):
@@ -273,7 +262,7 @@ class Config:
                 with open(self.STATE_FILE, 'r') as f:
                     self._state = yaml.safe_load(f) or {}
             except Exception as e:
-                print(f"Warning: Failed to load state from {self.STATE_FILE}: {e}")
+                logger.warning("Failed to load state from %s: %s", self.STATE_FILE, e)
                 self._state = {}
         # Selection keys for local models, which Cortex does not run.
         obsolete = [key for key in ("last_used_backend", "last_used_model") if key in self._state]
@@ -290,7 +279,7 @@ class Config:
             with open(self.STATE_FILE, 'w') as f:
                 yaml.dump(self._state, f, default_flow_style=False)
         except Exception as e:
-            print(f"Warning: Failed to save state to {self.STATE_FILE}: {e}")
+            logger.warning("Failed to save state to %s: %s", self.STATE_FILE, e)
 
     def get_state_value(self, key: str, default: Any = None) -> Any:
         """Get a runtime state value."""

@@ -721,6 +721,93 @@ def test_interrupt_stops_a_running_bash_command(tmp_path: Path, scratch_repo: Pa
         harness.close()
 
 
+def _bash_turn_with_prompt(tmp_path: Path, repo: Path, env_overrides: dict):
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": "touch approved.txt"}}]},
+          {"text": "Done."}]],
+    )
+    env = _worker_env(tmp_path, script)
+    env.update(env_overrides)
+    harness = WorkerHarness(cwd=repo, env=env)
+    session_id = _start_session(harness)
+    submit_id = harness.send(
+        "session.submit_user_input",
+        {"session_id": session_id, "user_input": "run", "active_target": CLOUD_TARGET},
+    )
+    asked = harness.wait_event("permission.asked")
+    return harness, session_id, submit_id, asked["payload"]["request_id"]
+
+
+def test_a_permission_prompt_waits_for_its_answer(tmp_path: Path, scratch_repo: Path) -> None:
+    harness, session_id, submit_id, request_id = _bash_turn_with_prompt(
+        tmp_path, scratch_repo,
+        {"CORTEX_CLOUD_TIMEOUT_SECONDS": "1", "CORTEX_TOOLS_IDLE_TIMEOUT_SECONDS": "1"},
+    )
+    try:
+        time.sleep(3)  # longer than any configured timeout
+        harness.send("permission.reply", {"session_id": session_id,
+                     "request_id": request_id, "reply": "allow_once"})
+        harness.wait_response(submit_id)
+        assert (scratch_repo / "approved.txt").exists()
+    finally:
+        harness.close()
+
+
+def test_interrupting_a_turn_answers_its_permission_prompt(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    harness, session_id, submit_id, _ = _bash_turn_with_prompt(tmp_path, scratch_repo, {})
+    try:
+        harness.wait_response(harness.send("session.interrupt", {"session_id": session_id}))
+        result = harness.wait_response(submit_id, timeout=10)["result"]
+        assert result.get("interrupted") is True
+        assert not (scratch_repo / "approved.txt").exists()
+    finally:
+        harness.close()
+
+
+def test_a_bad_setting_keeps_the_others_and_is_reported(tmp_path: Path, scratch_repo: Path) -> None:
+    script = _write_script(tmp_path / "script.json", [[{"text": "Hi."}]])
+    env = _worker_env(tmp_path, script)
+    config = tmp_path / "home" / ".cortex" / "config.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("tools_max_iterations: 1001\ntemperature: 0.3\ntools_profile: read_only\n")
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        _start_session(harness)  # every stdout line must still be a JSON-RPC frame
+        notice = harness.wait_event("system.notice")["payload"]["message"]
+        assert "tools_max_iterations" in notice
+    finally:
+        harness.close()
+
+
+def test_headless_rejects_a_prompt_it_cannot_answer_and_keeps_stdout_clean(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": "touch asked.txt"}}]},
+          {"text": "FINAL_REPLY"}]],
+    )
+    env = _worker_env(tmp_path, script)
+    cortex_home = tmp_path / "home" / ".cortex"
+    cortex_home.mkdir(parents=True, exist_ok=True)
+    (cortex_home / "tool_permissions.yaml").write_text(
+        "version: 2\nrules:\n- {permission: bash, pattern: '*', action: ask}\n"
+    )
+    (cortex_home / "config.yaml").write_text("tools_max_iterations: 1001\n")
+
+    started = time.time()
+    process = _run_headless(cwd=scratch_repo, env=env, prompt="run it", extra_args=["--full-auto"])
+
+    assert time.time() - started < 60
+    assert not (scratch_repo / "asked.txt").exists()
+    assert process.stdout.strip() == "FINAL_REPLY"
+    assert "Ignored tools_max_iterations: 1001" in process.stderr
+    assert "Ignored tools_max_iterations: 1001" in (cortex_home / "cortex.log").read_text()
+
+
 def test_openai_compatible_provider_runs_tool_turn(tmp_path: Path, scratch_repo: Path) -> None:
     server = ChatCompletionsServer(
         [

@@ -244,3 +244,31 @@ def test_permission_denied_by_rule_short_circuits_prompt(tmp_path: Path):
             patterns=["*"],
             prompt_callback=lambda _request: PermissionDecision.ALLOW_ONCE,
         )
+
+
+def test_a_reply_after_an_interrupt_does_not_undo_the_rejection():
+    import threading
+
+    from cortex.app.permission_service import PermissionService
+    from cortex.tooling.permissions import PermissionRequest
+
+    service = PermissionService()
+    asked = []
+    decided = []
+    request = PermissionRequest(permission="bash", patterns=["make"], metadata={})
+
+    def emit(*, session_id, event_type, payload):
+        if event_type == "permission.asked":
+            asked.append(payload["request_id"])
+
+    thread = threading.Thread(
+        target=lambda: decided.append(service.ask(session_id="s", request=request, emit_event=emit))
+    )
+    thread.start()
+    while not asked:
+        time.sleep(0.01)
+    service.cancel("s")
+    service.reply(session_id="s", request_id=asked[0], reply="allow_once")
+    thread.join(timeout=5)
+
+    assert decided == [PermissionDecision.REJECT]
