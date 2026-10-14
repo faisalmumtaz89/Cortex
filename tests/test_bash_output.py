@@ -1,7 +1,12 @@
+import sys
+import threading
+import time
+
 import pytest
 
 from cortex.tooling.builtin import bash
 from cortex.tooling.builtin.bash import _Output
+from cortex.tooling.types import TurnInterrupt
 
 
 def test_output_within_limits_is_kept_whole_and_decoded_in_one_piece():
@@ -36,3 +41,19 @@ def test_carriage_returns_become_line_breaks():
     output.add(b"progress 10%\rprogress 100%\r\ndone\n")
 
     assert output.text() == "progress 10%\nprogress 100%\ndone\n"
+
+
+def test_stopping_a_command_also_ends_children_that_ignore_sigterm(tmp_path):
+    child = (
+        f'"{sys.executable}" -c "import signal, time; '
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(5); "
+        "open('escaped.txt', 'w')\"; true"
+    )
+    interrupt = TurnInterrupt()
+    threading.Timer(1.0, interrupt.set).start()
+
+    _, _, ended_by = bash._run(child, cwd=tmp_path, timeout=60, interrupt=interrupt)
+
+    assert ended_by == "interrupt"
+    time.sleep(5)
+    assert not (tmp_path / "escaped.txt").exists()

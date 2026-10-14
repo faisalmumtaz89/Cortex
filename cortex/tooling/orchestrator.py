@@ -227,7 +227,14 @@ class ToolingOrchestrator:
             return cast(PermissionDecision, prompt_fn(request))
         return PermissionDecision.REJECT
 
-    def _execute_tool_call(self, *, registry: ToolRegistry, session_id: str, call: ToolCall) -> ToolResult:
+    def _execute_tool_call(
+        self,
+        *,
+        registry: ToolRegistry,
+        session_id: str,
+        call: ToolCall,
+        interrupt: Optional[TurnInterrupt] = None,
+    ) -> ToolResult:
         if not registry.has(call.name):
             return ToolResult(
                 id=call.id,
@@ -256,7 +263,7 @@ class ToolingOrchestrator:
                 error=str(exc),
             )
 
-        return registry.execute(call=call, session_id=session_id)
+        return registry.execute(call=call, session_id=session_id, interrupt=interrupt)
 
     def _record_event(
         self,
@@ -374,6 +381,7 @@ class ToolingOrchestrator:
                 registry=registry,
                 session_id=session_id,
                 call=call,
+                interrupt=interrupt,
             )
 
         events = self.cli.cloud_router.stream_events(

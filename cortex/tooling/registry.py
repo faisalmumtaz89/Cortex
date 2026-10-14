@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
 from cortex.tooling.builtin import (
@@ -14,7 +14,13 @@ from cortex.tooling.builtin import (
     SearchTool,
     WriteFileTool,
 )
-from cortex.tooling.types import ToolCall, ToolExecutionState, ToolResult, ToolSpec
+from cortex.tooling.types import (
+    ToolCall,
+    ToolExecutionState,
+    ToolResult,
+    ToolSpec,
+    TurnInterrupt,
+)
 
 _TOOL_PROFILE_ORDER = {
     "off": 0,
@@ -64,7 +70,9 @@ class ToolRegistry:
             return name
         return tool.permission
 
-    def execute(self, *, call: ToolCall, session_id: str) -> ToolResult:
+    def execute(
+        self, *, call: ToolCall, session_id: str, interrupt: Optional[TurnInterrupt] = None
+    ) -> ToolResult:
         tool = self._tools.get(call.name)
         if tool is None:
             return ToolResult(
@@ -79,6 +87,7 @@ class ToolRegistry:
             repo_root=self.repo_root,
             session_id=session_id,
             call_id=call.id,
+            interrupt=interrupt or TurnInterrupt(),
         )
 
         try:

@@ -721,18 +721,17 @@ def test_permission_modal_for_a_command_too_long_to_show_starts_on_reject(tui_pr
     assert not (project / "LONG.txt").exists()
 
 
-def test_interrupt_during_tool_resolves_the_tool_row(tui_project) -> None:
-    """Regression (2026-07-06 screenshot): Esc while a bash tool was executing
-    finalized the turn as interrupted but left the tool row spinning forever —
-    the tool's result frame arrived after the interrupt flag and was
-    swallowed. The row must resolve to a terminal state (here: the tool
-    actually completes, so ◆ completed), and no spinner may survive an
-    interrupted turn."""
+def test_interrupt_during_tool_stops_it_and_resolves_the_tool_row(tui_project) -> None:
+    """Esc while a bash command runs stops the command at once, and its tool
+    row resolves: no spinner survives the interrupted turn (regression,
+    2026-07-06: the row kept spinning when its result frame arrived after the
+    interrupt)."""
     project, start = tui_project
     session = start(
         [
             [
-                {"tool_calls": [{"name": "bash", "arguments": {"command": "sleep 4 && echo done"}}]},
+                {"tool_calls": [{"name": "bash", "arguments": {
+                    "command": "sleep 6 && touch finished.txt"}}]},
                 {"text": "NEVER_SHOWN_AFTER_INTERRUPT"},
             ]
         ]
@@ -741,31 +740,31 @@ def test_interrupt_during_tool_resolves_the_tool_row(tui_project) -> None:
     session.send_line("run a slow command")
 
     modal = session.wait_for("Permission required")
-    assert "sleep 4" in modal
-    session.send_key("Enter")  # Allow once — bash starts, 4s window
+    assert "sleep 6" in modal
+    session.send_key("Enter")  # Allow once — bash starts
 
     # The tool row is live (spinner) while sleep runs.
     session.wait_until(
-        lambda frame: "Bash sleep 4" in frame
+        lambda frame: "Bash sleep 6" in frame
         and any(ch in frame for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
         description="running bash row with spinner",
         timeout=10,
     )
     session.send_key("Escape")  # interrupt mid-execution
 
-    # The turn unwinds once bash finishes: interrupted notice + resolved row.
-    interrupted = session.wait_for("Interrupted.", timeout=20)
+    # The command is stopped, so the turn ends at once.
+    interrupted = session.wait_for("Interrupted.", timeout=4)
     resolved = session.wait_until(
         lambda frame: "Interrupted." in frame
         and not any(ch in frame for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
         description="no spinner survives the interrupted turn",
-        timeout=15,
+        timeout=4,
     )
-    # The bash row resolved (the tool genuinely ran to completion — its result
-    # frame must not be swallowed by the interrupt unwind).
-    assert "Bash sleep 4" in resolved
+    assert "Bash sleep 6" in resolved
     assert "NEVER_SHOWN_AFTER_INTERRUPT" not in resolved
     assert "interrupted" in interrupted
+    time.sleep(6)  # past the point where the command would have finished
+    assert not (project / "finished.txt").exists()
 
 
 def test_absolute_tool_paths_display_repo_relative(tui_project) -> None:

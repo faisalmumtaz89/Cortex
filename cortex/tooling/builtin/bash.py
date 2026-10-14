@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from cortex.cloud.credentials import ENV_KEY_MAP
 from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
-from cortex.tooling.types import ToolExecutionState, ToolResult
+from cortex.tooling.types import ToolExecutionState, ToolResult, TurnInterrupt
 
 # Output kept from a command: its first and last bytes.
 _HEAD_BYTES = 20_000
@@ -58,14 +58,30 @@ class BashTool(BaseTool[BashArgs]):
                 f"workdir escapes repository root: {cwd}"
             )
 
-        output, exit_code, timed_out = _run(
-            parsed_args.command, cwd=cwd, timeout=parsed_args.timeout_ms / 1000
+        if context.interrupt.is_set():  # the turn ended before the command started
+            return ToolResult(
+                id=context.call_id,
+                name=self.name,
+                state=ToolExecutionState.ERROR,
+                ok=False,
+                output="[command not run: the turn was interrupted]",
+                error="interrupted",
+                metadata={"exit_code": None, "timed_out": False, "workdir": str(cwd),
+                          "truncated": False, "interrupted": True},
+            )
+        output, exit_code, ended_by = _run(
+            parsed_args.command,
+            cwd=cwd,
+            timeout=parsed_args.timeout_ms / 1000,
+            interrupt=context.interrupt,
         )
         truncated = output.omitted > 0
-        combined = output.text()
-        if timed_out:
-            combined = combined + "\n\n[command timed out]"
-        ok = exit_code == 0 and not timed_out
+        timed_out = ended_by == "timeout"
+        ending = {"timeout": "timed out", "interrupt": "interrupted"}.get(ended_by, "")
+        combined = output.text().rstrip()
+        if ending:
+            combined = f"{combined}\n\n[command {ending}]"
+        ok = exit_code == 0 and not ending
 
         return ToolResult(
             id=context.call_id,
@@ -73,10 +89,11 @@ class BashTool(BaseTool[BashArgs]):
             state=ToolExecutionState.COMPLETED if ok else ToolExecutionState.ERROR,
             ok=ok,
             output=combined.strip(),
-            error=None if ok else f"exit_code={exit_code}",
+            error=None if ok else (ending or f"exit_code={exit_code}"),
             metadata={
                 "exit_code": exit_code,
                 "timed_out": timed_out,
+                "interrupted": ended_by == "interrupt",
                 "workdir": str(cwd),
                 "truncated": truncated,
             },
@@ -151,13 +168,16 @@ def _command_env() -> dict[str, str]:
     }
 
 
-def _run(command: str, *, cwd: Path, timeout: float) -> tuple[_Output, int, bool]:
+def _run(
+    command: str, *, cwd: Path, timeout: float, interrupt: TurnInterrupt
+) -> tuple[_Output, int, str]:
     """Run `command` in its own process group, with no stdin (the worker's
     stdin is its JSON-RPC channel) and stderr merged into stdout. Returns when
     the command exits; a background child it started keeps running, and its
     later output is read and discarded so writing it does not kill the child.
-    At the timeout the whole group gets SIGTERM, then SIGKILL if it is still
-    running after a grace period."""
+    At the timeout, or when the turn is interrupted, the whole group gets
+    SIGTERM, then SIGKILL if it is still running after a grace period. The
+    third value says which ended it: "timeout", "interrupt" or ""."""
     proc = subprocess.Popen(
         command,
         cwd=cwd,
@@ -173,7 +193,7 @@ def _run(command: str, *, cwd: Path, timeout: float) -> tuple[_Output, int, bool
     output = _Output()
     deadline = time.monotonic() + timeout
     exited_at: float | None = None
-    timed_out = False
+    ended_by = ""
     closed = False
     try:
         with selectors.DefaultSelector() as selector:
@@ -184,8 +204,8 @@ def _run(command: str, *, cwd: Path, timeout: float) -> tuple[_Output, int, bool
                     exited_at = now
                 if exited_at is not None and (closed or now - exited_at > _DRAIN_SECONDS):
                     break
-                if exited_at is None and now >= deadline:
-                    timed_out = True
+                if exited_at is None and (now >= deadline or interrupt.is_set()):
+                    ended_by = "interrupt" if interrupt.is_set() else "timeout"
                     _stop(proc)
                     exited_at = time.monotonic()
                     continue
@@ -207,7 +227,7 @@ def _run(command: str, *, cwd: Path, timeout: float) -> tuple[_Output, int, bool
     else:
         # A background child still holds the output open.
         threading.Thread(target=_discard, args=(pipe,), daemon=True).start()
-    return output, proc.returncode, timed_out
+    return output, proc.returncode, ended_by
 
 
 def _discard(pipe: IO[bytes]) -> None:
@@ -217,14 +237,26 @@ def _discard(pipe: IO[bytes]) -> None:
 
 
 def _stop(proc: subprocess.Popen) -> None:
-    """SIGTERM the command's process group; SIGKILL it if still running."""
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    """SIGTERM the command's process group; SIGKILL the group if anything in
+    it, the shell or a child it started, is still running after the grace
+    period."""
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + _KILL_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        proc.poll()
         try:
-            os.killpg(proc.pid, sig)
+            os.killpg(proc.pid, 0)
         except ProcessLookupError:
-            return
-        try:
-            proc.wait(timeout=_KILL_GRACE_SECONDS)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+            return  # the whole group is gone
+        time.sleep(0.05)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=_KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass

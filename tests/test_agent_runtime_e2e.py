@@ -561,6 +561,41 @@ def test_bash_output_keeps_order_and_the_end_of_long_output(
     assert "bytes of output not shown" in str(long.get("output"))
 
 
+def test_interrupt_stops_a_running_bash_command(tmp_path: Path, scratch_repo: Path) -> None:
+    command = "echo started; sleep 4; touch finished.txt"
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+          {"text": "NOT_REACHED"}]],
+    )
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    try:
+        session_id = _start_session(harness)
+        submit_id = harness.send(
+            "session.submit_user_input",
+            {"session_id": session_id, "user_input": "run", "active_target": CLOUD_TARGET},
+        )
+        asked = harness.wait_event("permission.asked")
+        harness.send("permission.reply", {"session_id": session_id,
+                     "request_id": asked["payload"]["request_id"], "reply": "allow_once"})
+        time.sleep(1.5)
+        started = time.time()
+        harness.wait_response(harness.send("session.interrupt", {"session_id": session_id}))
+        result = harness.wait_response(submit_id, timeout=15)["result"]
+
+        assert time.time() - started < 8
+        assert result.get("interrupted") is True
+        assert "NOT_REACHED" not in result["assistant_text"]
+        (part,) = [p for p in harness.tool_parts()
+                   if p.get("tool") == "bash" and p.get("state") in ("completed", "error")]
+        assert "started" in str(part.get("output")) and "interrupted" in str(part.get("output"))
+        assert part.get("error") == "interrupted"
+        time.sleep(4)  # past the point where the command would have finished
+        assert not (scratch_repo / "finished.txt").exists()
+    finally:
+        harness.close()
+
+
 def test_openai_compatible_provider_runs_tool_turn(tmp_path: Path, scratch_repo: Path) -> None:
     server = ChatCompletionsServer(
         [

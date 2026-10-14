@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Generic, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from cortex.tooling.types import ToolResult, ToolSpec
+from cortex.tooling.types import ToolResult, ToolSpec, TurnInterrupt
 
 
 @dataclass
@@ -18,6 +18,8 @@ class ToolContext:
     repo_root: Path
     session_id: str
     call_id: str
+    # Set when the user interrupts the turn; long-running tools stop on it.
+    interrupt: TurnInterrupt = field(default_factory=TurnInterrupt)
 
 
 class ToolExecutionError(RuntimeError):
