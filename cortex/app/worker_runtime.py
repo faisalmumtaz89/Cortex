@@ -34,6 +34,7 @@ from cortex.protocol.schema import (
     SessionCreateOrResumeParams,
     SessionInterruptParams,
     SessionSubmitUserInputParams,
+    SkillListParams,
 )
 from cortex.protocol.types import PROTOCOL_VERSION, EventType
 from cortex.tooling.orchestrator import ToolingOrchestrator
@@ -447,6 +448,9 @@ class WorkerRuntime:
             name="model.list", params_model=ModelListParams, handler=self._rpc_model_list
         )
         self._register_typed_method(
+            name="skill.list", params_model=SkillListParams, handler=self._rpc_skill_list
+        )
+        self._register_typed_method(
             name="model.select", params_model=ModelSelectParams, handler=self._rpc_model_select
         )
         self._register_typed_method(
@@ -577,6 +581,15 @@ class WorkerRuntime:
 
     def _rpc_model_list(self, _params: ModelListParams):
         return self.model_service.list_models()
+
+    def _rpc_skill_list(self, _params: SkillListParams):
+        skills = self.tooling_orchestrator.available_skills()
+        return {
+            "skills": [
+                {"name": skill.name, "description": skill.description}
+                for skill in skills.values()
+            ]
+        }
 
     def _rpc_model_select(self, params: ModelSelectParams):
         if not params.provider or not params.model_id:

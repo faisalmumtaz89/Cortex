@@ -24,7 +24,7 @@ They communicate over line-delimited JSON-RPC 2.0 on the worker's stdio, plus st
 ## Agent Turn Flow
 
 1. The frontend submits user input via `session.submit_user_input`.
-2. `SessionService` builds the turn and hands it to the `ToolingOrchestrator`, which assembles the system prompt (identity, working directory, and `AGENTS.md`/`CLAUDE.md` project context).
+2. `SessionService` builds the turn and hands it to the `ToolingOrchestrator`, which assembles the system prompt (identity, working directory, the skills' names and descriptions, and `AGENTS.md`/`CLAUDE.md` project context).
 3. The model streams text and native tool calls.
 4. Each tool call passes through the `PermissionManager`. Reads are allowed by default rules; `edit`/`bash` permissions trigger a `permission.asked` event, which the frontend answers via the `permission.reply` method (allow once / allow always / reject).
 5. Tool results are fed back to the model until it answers without tool calls, up to `tools_max_iterations`.

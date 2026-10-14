@@ -131,6 +131,10 @@ class ModelListParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SkillListParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 METHOD_PARAM_MODELS: Dict[str, Type[BaseModel]] = {
     "app.handshake": HandshakeParams,
     "session.create_or_resume": SessionCreateOrResumeParams,
@@ -139,6 +143,7 @@ METHOD_PARAM_MODELS: Dict[str, Type[BaseModel]] = {
     "permission.reply": PermissionReplyParams,
     "command.execute": CommandExecuteParams,
     "model.list": ModelListParams,
+    "skill.list": SkillListParams,
     "model.select": ModelSelectParams,
     "cloud.auth.status": CloudAuthStatusParams,
     "cloud.auth.save_key": CloudAuthSaveKeyParams,

@@ -1,5 +1,5 @@
 import { createContext, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
-import { SLASH_COMMANDS } from "../commands"
+import { SLASH_COMMANDS, isSkillInput, setSkills, skills } from "../commands"
 import { exitCortex, registerWorkerKill } from "../lib/exit"
 import { RpcClient } from "../protocol"
 import { useStore } from "./store"
@@ -11,7 +11,8 @@ function buildHelpText(): string {
     const name = command.name === "quit" ? "/quit (/exit)" : `/${command.name}`
     return `${name.padEnd(16)}${command.description}`
   })
-  return rows.join("\n")
+  const skillRows = skills().map((skill) => `/${skill.name.padEnd(15)}${skill.description}`)
+  return skillRows.length ? [...rows, "", "Skills:", ...skillRows].join("\n") : rows.join("\n")
 }
 
 type RpcContextValue = {
@@ -155,6 +156,16 @@ export function RpcProvider(props: ParentProps) {
     const session = await client.request("session.create_or_resume", {})
     store.setSessionID(String(session.session_id ?? ""))
     await refreshModels()
+    await refreshSkills()
+  }
+
+  const refreshSkills = async (): Promise<void> => {
+    try {
+      const listing = await client.request("skill.list", {})
+      setSkills(Array.isArray(listing.skills) ? (listing.skills as { name: string; description: string }[]) : [])
+    } catch {
+      // Non-fatal: the palette keeps the skills it listed last.
+    }
   }
 
   const refreshModels = async (): Promise<void> => {
@@ -237,7 +248,7 @@ export function RpcProvider(props: ParentProps) {
     }
     store.clearError()
     try {
-      const maybeCommand = normalizeSlashCommand(normalized)
+      const maybeCommand = isSkillInput(normalized) ? null : normalizeSlashCommand(normalized)
       if (maybeCommand) {
         return runCommand(maybeCommand)
       }
@@ -265,6 +276,7 @@ export function RpcProvider(props: ParentProps) {
       }
       store.flushPendingEvents()
       store.applySubmitResultFallback(result)
+      void refreshSkills() // skills added meanwhile show up in the palette
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

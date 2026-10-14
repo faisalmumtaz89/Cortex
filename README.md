@@ -30,6 +30,7 @@ Requires an Apple Silicon Mac, macOS 13.3+, Python 3.11+, and Xcode Command Line
 - Reading, searching, and listing files is free; every edit, write, and shell command asks first.
 - Edits render as green/red diffs before they land.
 - Every reply is provenance-verified: it must come from the provider you picked — the model shown is the model that answered.
+- Skills give the model step-by-step instructions for kinds of task. Add your own in `~/.cortex/skills/` or the project's `.cortex/skills/`. The model loads one when a request matches it, or you run one with `/<skill> request`. See [Skills](docs/cli.md#skills).
 - Headless mode for scripts and CI: `cortex -p "fix the failing test" --full-auto`.
 
 ## Commands

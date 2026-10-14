@@ -12,8 +12,10 @@ from cortex.tooling.builtin import (
     ListDirTool,
     ReadFileTool,
     SearchTool,
+    SkillTool,
     WriteFileTool,
 )
+from cortex.tooling.skills import Skill, load_skills
 from cortex.tooling.types import (
     ToolCall,
     ToolExecutionState,
@@ -38,6 +40,8 @@ class ToolRegistry:
         self.profile = profile if profile in _TOOL_PROFILE_ORDER else "off"
 
         self._tools: Dict[str, BaseTool] = {}
+        # Read once per registry, so the system prompt and the skill tool agree.
+        self.skills: Dict[str, Skill] = load_skills(self.repo_root) if self.profile != "off" else {}
         self._register_defaults()
 
     def _enabled_for_profile(self, required_profile: str) -> bool:
@@ -54,6 +58,8 @@ class ToolRegistry:
         self._register(EditFileTool(), "edit")
         self._register(WriteFileTool(), "edit")
         self._register(BashTool(), "full")
+        if self.skills:
+            self._register(SkillTool(self.skills), "read_only")
 
     def names(self) -> List[str]:
         return sorted(self._tools.keys())

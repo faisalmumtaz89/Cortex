@@ -7,7 +7,9 @@ receives it as a system message alongside native tool schemas.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
+
+from cortex.tooling.skills import Skill, skills_prompt
 
 # Project context files, in priority order. AGENTS.md is the cross-tool standard.
 PROJECT_CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md")
@@ -67,9 +69,13 @@ def load_project_context(root: Path) -> Optional[str]:
 def build_system_prompt(
     *,
     cwd: Path,
+    skills: Optional[Dict[str, Skill]] = None,
 ) -> str:
     """Assemble the full system prompt for one agent turn."""
     sections = [AGENT_SYSTEM_PROMPT.format(cwd=cwd)]
+
+    if skills:
+        sections.append(skills_prompt(skills))
 
     project_context = load_project_context(cwd)
     if project_context:

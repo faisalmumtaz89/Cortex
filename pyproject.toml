@@ -55,7 +55,7 @@ packages = ["cortex", "cortex.app", "cortex.protocol", "cortex.cloud", "cortex.c
 include-package-data = true
 
 [tool.setuptools.package-data]
-cortex = ["config.yaml", "ui_runtime/bin/*"]
+cortex = ["config.yaml", "ui_runtime/bin/*", "skills/**/*"]
 
 [tool.ruff]
 line-length = 100

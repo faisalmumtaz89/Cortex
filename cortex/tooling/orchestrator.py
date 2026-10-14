@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, cast
 
 from cortex.cloud.types import CloudModelRef, CloudProvider
 from cortex.tooling.agent_prompt import build_system_prompt
+from cortex.tooling.builtin.skill import skill_text
 from cortex.tooling.permissions import (
     PermissionDecision,
     PermissionDeniedError,
@@ -22,6 +23,7 @@ from cortex.tooling.permissions import (
 )
 from cortex.tooling.provenance import verify_turn_provenance
 from cortex.tooling.registry import ToolRegistry
+from cortex.tooling.skills import Skill, load_skills
 from cortex.tooling.stream_normalizer import merge_stream_text
 from cortex.tooling.types import (
     AssistantTurnResult,
@@ -142,6 +144,65 @@ def _assistant_history(parts, full: bool, call_ids: Set[str]) -> List[Dict[str, 
 _API_NAME = re.compile(r"[^a-zA-Z0-9_-]")
 
 
+_SKILL_COMMAND = re.compile(r"/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)")
+
+
+def expand_skill_commands(
+    messages: List[Dict[str, object]], skills: Dict[str, Skill]
+) -> Optional[Skill]:
+    """Give each user message that starts with /<skill name> the skill's
+    instructions, as if the model had loaded it. Returns the skill the last
+    user message runs, if any."""
+    invoked: Optional[Skill] = None
+    for index, message in enumerate(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        match = _SKILL_COMMAND.match(content) if isinstance(content, str) else None
+        skill = skills.get(match.group(1)) if match else None
+        invoked = skill
+        if skill is None:
+            continue
+        messages[index] = {
+            **message,
+            "content": f"{content}\n\nThe user ran the {skill.name} skill for this "
+            f"request. Its instructions:\n\n{skill_text(skill)}",
+        }
+    return invoked
+
+
+class _ToolLimit:
+    """The tools the skills loaded in a turn allow: those every one of them allows."""
+
+    def __init__(self) -> None:
+        self.skills: List[str] = []
+        self.tools: Optional[Set[str]] = None
+
+    def narrow(self, skill: Skill) -> None:
+        if skill.allowed_tools is None:
+            return
+        if skill.name not in self.skills:
+            self.skills.append(skill.name)
+        allowed = set(skill.allowed_tools)
+        self.tools = allowed if self.tools is None else self.tools & allowed
+
+    def refusal(self, tool: str) -> Optional[str]:
+        if self.tools is None or tool == "skill" or tool in self.tools:
+            return None
+        allowed = ", ".join(sorted(self.tools)) or "none"
+        if len(self.skills) == 1:
+            return (
+                f"The {self.skills[0]} skill does not use {tool}; for the rest of this turn "
+                f"only these tools run: {allowed}. Finish within them, or say what is needed "
+                "and stop."
+            )
+        return (
+            f"The {' and '.join(self.skills)} skills together allow only these tools: "
+            f"{allowed}; {tool} is not one of them for the rest of this turn. Finish within "
+            "them, or say what is needed and stop."
+        )
+
+
 def _unique_call_id(call_id: str, taken: Set[str]) -> str:
     """The id made unique in the conversation, within the 64 characters the
     OpenAI Responses API allows."""
@@ -180,6 +241,12 @@ class ToolingOrchestrator:
             "profile": tools_profile,
             "max_iterations": max(1, max_iterations),
         }
+
+    def available_skills(self) -> Dict[str, Skill]:
+        """The skills a turn would offer: none when tools are off."""
+        if not self._tooling_flags()["enabled"]:
+            return {}
+        return load_skills(Path.cwd())
 
     def _extract_permission_patterns(self, call: ToolCall, repo_root: Path) -> List[str]:
         """What the call does, as permission rules match it: for bash the command
@@ -363,11 +430,14 @@ class ToolingOrchestrator:
         if not messages:
             messages = [{"role": "user", "content": user_input}]
 
+        invoked = expand_skill_commands(messages, registry.skills) if tools_enabled else None
         if tools_enabled:
             messages = [
                 {
                     "role": "system",
-                    "content": build_system_prompt(cwd=registry.repo_root),
+                    "content": build_system_prompt(
+                        cwd=registry.repo_root, skills=registry.skills
+                    ),
                 },
                 *messages,
             ]
@@ -376,13 +446,34 @@ class ToolingOrchestrator:
 
         tool_specs = registry.specs() if tools_enabled else []
 
+        # The tools loaded skills limit the rest of this turn to: each skill with
+        # allowed-tools narrows the limit, and none lifts it. The skill tool always runs.
+        limit = _ToolLimit()
+        if invoked is not None:
+            limit.narrow(invoked)
+
         def execute_tool(call: ToolCall) -> ToolResult:
-            return self._execute_tool_call(
+            refusal = limit.refusal(call.name)
+            if refusal:
+                return ToolResult(
+                    id=call.id,
+                    name=call.name,
+                    state=ToolExecutionState.ERROR,
+                    ok=False,
+                    error=refusal,
+                )
+            tool_result = self._execute_tool_call(
                 registry=registry,
                 session_id=session_id,
                 call=call,
                 interrupt=interrupt,
             )
+            metadata = tool_result.metadata or {}
+            if call.name == "skill" and tool_result.ok and metadata.get("file") is None:
+                loaded = registry.skills.get(str(metadata.get("skill")))
+                if loaded is not None:
+                    limit.narrow(loaded)
+            return tool_result
 
         events = self.cli.cloud_router.stream_events(
             model_ref=model_ref,

@@ -58,6 +58,7 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 | `/clear` | Clear conversation history |
 | `/save` | Save the conversation as JSON |
 | `/quit` or `/exit` | Exit Cortex |
+| `/<skill> [request]` | Run a skill on a request (see [Skills](#skills)) |
 
 ### `/model` — switch models
 
@@ -113,6 +114,49 @@ File tools work only inside the directory Cortex was started in, and `bash` runs
 The prompt shows a command on one line: backslashes, line breaks, tabs and invisible or blank-looking characters appear as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count. A command too long to show in full keeps its start and end, with a count of the characters not shown, and the prompt then starts on **Reject**.
 
 Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds `edit_file`/`write_file`), `full` (adds `bash`). See `docs/configuration.md` for the `tools_*` keys.
+
+## Skills
+
+A skill is a set of instructions for one kind of task, in a folder holding a
+`SKILL.md`:
+
+```markdown
+---
+name: map-and-plan
+description: Use when the user asks how code works or wants a change planned before it is made.
+allowed-tools: [read_file, list_dir, search]
+---
+Step-by-step instructions the model follows...
+```
+
+`name` must match the folder's name (lowercase letters, digits and hyphens);
+`description` (at most 400 characters) says when the skill applies; the optional
+`allowed-tools` lists the only tools the skill uses. Other files in the folder,
+such as examples, are read only when the instructions call for them.
+
+Cortex finds skills in three places, and a skill in a later one replaces one of
+the same name in an earlier one:
+
+1. the skills that ship with Cortex,
+2. `~/.cortex/skills/<name>/`, yours, in every project,
+3. `.cortex/skills/<name>/` in the project, trusted as its `AGENTS.md` is.
+
+A skill whose `SKILL.md` cannot be read or is not valid (larger than 1 MB, no
+front matter, a missing or wrong field) is skipped, and the reason is logged.
+
+The model sees only each skill's name and description. When a request matches
+one, it loads the skill with the `skill` tool, which also reads the skill's
+other files (only files inside the skill's folder). To run a skill yourself,
+type `/<name>` followed by your request, such as `/map-and-plan add a --json
+flag to the export command`; skills are listed in the `/` palette and in
+`/help`, and a built-in command of the same name wins. In headless mode,
+`cortex -p "/<name> request"` does the same.
+
+Once a skill with `allowed-tools` is loaded, the other tools are refused for
+the rest of the turn, so a read-only skill cannot change files even if the
+model tries. Loading another skill in the same turn can narrow that set but
+never widen it; the next message starts without a limit. With tools off
+(`tools_profile: off`), skills are neither listed nor run.
 
 ## Configuration
 

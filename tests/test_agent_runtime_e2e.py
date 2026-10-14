@@ -808,6 +808,168 @@ def test_headless_rejects_a_prompt_it_cannot_answer_and_keeps_stdout_clean(
     assert "Ignored tools_max_iterations: 1001" in (cortex_home / "cortex.log").read_text()
 
 
+def _write_skill(root: Path, name: str, description: str, body: str, allowed=None) -> Path:
+    folder = root / name
+    folder.mkdir(parents=True, exist_ok=True)
+    header = [f"name: {name}", f"description: {description}"]
+    if allowed is not None:
+        header.append(f"allowed-tools: [{', '.join(allowed)}]")
+    (folder / "SKILL.md").write_text("---\n" + "\n".join(header) + "\n---\n" + body)
+    return folder
+
+
+def test_skills_are_listed_and_loaded_on_demand(tmp_path: Path, scratch_repo: Path) -> None:
+    project = scratch_repo / ".cortex" / "skills"
+    folder = _write_skill(project, "demo-report", "Use when the user asks for a demo report.",
+                          "SKILL_BODY_MARKER: list the files, then summarize.\n")
+    (folder / "examples").mkdir()
+    (folder / "examples" / "one.md").write_text("EXAMPLE_MARKER\n")
+    # A user skill of the same name is overridden by the project's.
+    _write_skill(tmp_path / "home" / ".cortex" / "skills", "demo-report", "USER_COPY", "USER\n")
+    _write_skill(tmp_path / "home" / ".cortex" / "skills", "user-only", "Use for user things.",
+                 "USER_ONLY\n")
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"tool_calls": [{"name": "skill", "arguments": {"name": "demo-report"}}]},
+            {"tool_calls": [{"name": "skill", "arguments": {
+                "name": "demo-report", "file": "examples/one.md"}}]},
+            {"tool_calls": [{"name": "skill", "arguments": {
+                "name": "demo-report", "file": "../../../README.md"}}]},
+            {"text": "Done."},
+        ],
+        ["give me a demo report"],
+    )
+
+    system = requests[0]["messages"][0]["content"]
+    assert "demo-report: Use when the user asks for a demo report." in system
+    assert "user-only: Use for user things." in system
+    assert "USER_COPY" not in system and "SKILL_BODY_MARKER" not in system
+    results = [m["content"] for m in requests[3]["messages"] if m["role"] == "tool"]
+    assert "SKILL_BODY_MARKER" in results[0] and "examples/one.md" in results[0]
+    assert "EXAMPLE_MARKER" in results[1]
+    assert "outside the skill" in results[2]
+
+
+def test_a_loaded_skill_limits_the_tools_of_the_rest_of_the_turn(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    _write_skill(scratch_repo / ".cortex" / "skills", "look-only", "Use to look around.",
+                 "Only look.\n", allowed=["read_file", "list_dir", "search"])
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"tool_calls": [{"name": "skill", "arguments": {"name": "look-only"}}]},
+            {"tool_calls": [{"name": "write_file", "arguments": {
+                "path": "made.txt", "content": "x"}}]},
+            {"tool_calls": [{"name": "read_file", "arguments": {"path": "README.md"}}]},
+            {"text": "Done."},
+            {"tool_calls": [{"name": "write_file", "arguments": {
+                "path": "later.txt", "content": "x"}}]},
+            {"text": "Done again."},
+        ],
+        ["look around", "now write"],
+        env_overrides={"CORTEX_TOOLS_PROFILE": "full"},
+        approve=True,
+    )
+
+    results = [m["content"] for m in requests[3]["messages"] if m["role"] == "tool"]
+    assert "look-only skill" in results[1] and "write_file" in results[1]
+    assert "Scratch" in results[2]
+    assert not (scratch_repo / "made.txt").exists()
+    assert (scratch_repo / "later.txt").exists()  # the limit lasts one turn
+
+
+def test_a_second_skill_narrows_the_limit_but_never_lifts_it(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    skills = scratch_repo / ".cortex" / "skills"
+    _write_skill(skills, "look-only", "Use to look around.", "Only look.\n",
+                 allowed=["read_file", "list_dir"])
+    _write_skill(skills, "anything", "Use for anything.", "Do anything.\n")
+    _write_skill(skills, "list-only", "Use to list.", "Only list.\n", allowed=["list_dir", "bash"])
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"tool_calls": [{"name": "skill", "arguments": {"name": "anything"}}]},
+            {"tool_calls": [{"name": "write_file", "arguments": {
+                "path": "free.txt", "content": "x"}}]},
+            {"tool_calls": [{"name": "skill", "arguments": {"name": "look-only"}}]},
+            {"tool_calls": [{"name": "skill", "arguments": {"name": "anything"}}]},
+            {"tool_calls": [{"name": "write_file", "arguments": {
+                "path": "made.txt", "content": "x"}}]},
+            {"tool_calls": [{"name": "skill", "arguments": {"name": "list-only"}}]},
+            {"tool_calls": [{"name": "read_file", "arguments": {"path": "README.md"}}]},
+            {"tool_calls": [{"name": "bash", "arguments": {"command": "touch ran.txt"}}]},
+            {"text": "Done."},
+        ],
+        ["go"],
+        env_overrides={"CORTEX_TOOLS_PROFILE": "full"},
+        approve=True,
+    )
+
+    results = [m["content"] for m in requests[-1]["messages"] if m["role"] == "tool"]
+    assert (scratch_repo / "free.txt").exists()  # no limit before a limiting skill
+    assert not (scratch_repo / "made.txt").exists()
+    assert "look-only skill" in results[4]
+    # Both limits apply: only list_dir is in both.
+    assert "look-only" in results[6] and "list-only" in results[6]
+    assert "read_file" in results[6] and "only these tools: list_dir;" in results[6]
+    assert not (scratch_repo / "ran.txt").exists()
+
+
+def test_skills_are_not_listed_when_tools_are_off(tmp_path: Path, scratch_repo: Path) -> None:
+    _write_skill(scratch_repo / ".cortex" / "skills", "look-only", "Use to look around.", "x\n")
+    env = _worker_env(tmp_path, tmp_path / "x.json")
+    env["CORTEX_TOOLS_PROFILE"] = "off"
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        _start_session(harness)
+        listed = harness.wait_response(harness.send("skill.list", {}))["result"]["skills"]
+    finally:
+        harness.close()
+    assert listed == []
+
+
+def test_a_slash_command_runs_a_skill_and_the_worker_lists_skills(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    _write_skill(scratch_repo / ".cortex" / "skills", "look-only", "Use to look around.",
+                 "LOOK_ONLY_BODY: only look.\n", allowed=["read_file"])
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"tool_calls": [{"name": "write_file", "arguments": {
+                "path": "made.txt", "content": "x"}}]},
+            {"text": "Done."},
+            {"text": "Plain answer."},
+        ],
+        ["/look-only check the README", "/look-onlyish is not a skill"],
+        env_overrides={"CORTEX_TOOLS_PROFILE": "full"},
+        approve=True,
+    )
+
+    asked = requests[0]["messages"][-1]["content"]
+    assert asked.startswith("/look-only check the README")
+    assert "LOOK_ONLY_BODY" in asked
+    results = [m["content"] for m in requests[1]["messages"] if m["role"] == "tool"]
+    assert "look-only skill" in results[0]
+    assert not (scratch_repo / "made.txt").exists()
+    assert requests[2]["messages"][-1]["content"] == "/look-onlyish is not a skill"
+
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, tmp_path / "x.json"))
+    try:
+        _start_session(harness)
+        listed = harness.wait_response(harness.send("skill.list", {}))["result"]["skills"]
+    finally:
+        harness.close()
+    assert {"name": "look-only", "description": "Use to look around."} in listed
+
+
 def test_openai_compatible_provider_runs_tool_turn(tmp_path: Path, scratch_repo: Path) -> None:
     server = ChatCompletionsServer(
         [
@@ -1066,11 +1228,13 @@ def test_interrupt_stops_a_model_request_in_flight(tmp_path: Path, scratch_repo:
 
 
 def _converse_with_gateway(
-    tmp_path: Path, repo: Path, script, prompts, *, env_overrides=None, results=None
+    tmp_path: Path, repo: Path, script, prompts, *, env_overrides=None, results=None,
+    approve=False,
 ):
     """Run one worker session through `prompts` against a scripted gateway and
     return the request bodies the gateway received. Each turn must succeed,
-    unless `results` is a list: then the turn results are collected in it."""
+    unless `results` is a list: then the turn results are collected in it.
+    With `approve`, permission prompts are answered "allow_once"."""
     server = ChatCompletionsServer(script)
     env = _worker_env(tmp_path, tmp_path / "unused.json")
     env.pop("CORTEX_SCRIPTED_MODEL")
@@ -1082,12 +1246,22 @@ def _converse_with_gateway(
     try:
         session_id = _start_session(harness)
         for prompt in prompts:
-            response = harness.wait_response(
-                harness.send(
-                    "session.submit_user_input",
-                    {"session_id": session_id, "user_input": prompt, "active_target": target},
-                )
+            submit_id = harness.send(
+                "session.submit_user_input",
+                {"session_id": session_id, "user_input": prompt, "active_target": target},
             )
+            cursor = len(harness.events)
+            deadline = time.time() + 60
+            while approve and submit_id not in harness.responses:
+                assert harness._pump(deadline), "turn did not finish"
+                for event in harness.events[cursor:]:
+                    if event["event_type"] == "permission.asked":
+                        harness.send("permission.reply", {
+                            "session_id": session_id,
+                            "request_id": event["payload"]["request_id"],
+                            "reply": "allow_once"})
+                cursor = len(harness.events)
+            response = harness.wait_response(submit_id)
             if results is None:
                 assert response["result"].get("ok") is not False, response
             else:

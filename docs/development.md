@@ -46,8 +46,9 @@ Cortex/
 │   │   ├── registry.py             # Profile-aware tool registry
 │   │   ├── permissions.py          # Rule engine + persisted approvals
 │   │   ├── provenance.py           # Per-turn model provenance verification
-│   │   ├── agent_prompt.py         # System prompt + AGENTS.md context
-│   │   └── builtin/                # read_file, list_dir, search, edit_file, write_file, bash
+│   │   ├── agent_prompt.py         # System prompt + AGENTS.md context + skill list
+│   │   ├── skills.py               # Skill discovery and SKILL.md parsing
+│   │   └── builtin/                # read_file, list_dir, search, edit_file, write_file, bash, skill
 │   ├── cloud/                      # Model providers
 │   │   ├── router.py               # Provider routing + retries
 │   │   ├── catalog.py              # Model catalog (+ ~/.cortex/cloud_models.json overrides)

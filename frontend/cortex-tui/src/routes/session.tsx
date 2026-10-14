@@ -11,6 +11,7 @@ import {
   commandTakesArgs,
   commandToken,
   findCommand,
+  isSkillInput,
   matchCommands,
   type SlashCommand,
 } from "../commands"
@@ -51,7 +52,7 @@ function isSlashCommandLike(raw: string): boolean {
     return false
   }
   if (trimmed.startsWith("/")) {
-    return true
+    return !isSkillInput(trimmed) // a skill runs as a message to the model
   }
   const firstWord = trimmed.split(/\s+/, 1)[0]?.toLowerCase() || ""
   return SLASH_COMMAND_ALIASES.has(firstWord)
@@ -190,7 +191,7 @@ export function SessionRoute(props: {
     try {
       input.clearAllHighlights()
       const text = input.plainText
-      const match = /^\/([A-Za-z]+)/.exec(text)
+      const match = /^\/([A-Za-z0-9-]+)(?=\s|$)/.exec(text)
       if (match && findCommand(match[1])) {
         input.addHighlightByCharRange({ start: 0, end: match[0].length, styleId: commandStyleId })
       }
@@ -351,7 +352,7 @@ export function SessionRoute(props: {
   }
 
   const completeSelected = (command: SlashCommand) => {
-    setInputText(commandTakesArgs(command.name) ? `/${command.name} ` : `/${command.name}`)
+    setInputText(commandTakesArgs(command.name) || command.skill ? `/${command.name} ` : `/${command.name}`)
   }
 
   const onPaletteEnter = () => {
@@ -372,8 +373,8 @@ export function SessionRoute(props: {
       openLoginPicker()
       return
     }
-    if (commandTakesArgs(command.name)) {
-      completeSelected(command) // drop into arg-hint mode; do not execute yet
+    if (commandTakesArgs(command.name) || command.skill) {
+      completeSelected(command) // drop into arg-hint mode (a skill: type the request)
     } else {
       runSlashCommand(`/${command.name}`)
     }

@@ -343,6 +343,40 @@ def test_slash_palette_opens_filters_executes_without_polluting_transcript(tui_p
     assert "Exit Cortex" not in cleared
 
 
+def test_a_skill_is_in_the_palette_and_its_slash_command_runs_a_turn(tui_project) -> None:
+    project, start = tui_project
+    skill = project / ".cortex" / "skills" / "look-only"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: look-only\ndescription: Use to look around without changing files.\n"
+        "allowed-tools: [read_file]\n---\nOnly look.\n",
+        encoding="utf-8",
+    )
+    session = start(
+        [
+            [
+                {"tool_calls": [{"name": "write_file", "arguments": {
+                    "path": "made.txt", "content": "x"}}]},
+                {"text": "SKILL_TURN_DONE"},
+            ]
+        ]
+    )
+    _select_scripted_model(session)
+
+    session.send_key("/look")
+    palette = session.wait_for("Use to look around without changing files.", timeout=10)
+    assert "/look-only" in palette
+    session.send_key("Tab")  # completes to "/look-only " for the request
+    session.send_key("check calc.py")
+    session.send_key("Enter")
+
+    frame = session.wait_for("SKILL_TURN_DONE")
+    assert "/look-only check calc.py" in frame  # sent as a message, not a command
+    assert "Unknown command" not in frame
+    assert "Permission required" not in frame
+    assert not (project / "made.txt").exists()  # the skill's tool limit held
+
+
 def test_model_picker_lists_models_and_selects_with_wraparound(tui_project) -> None:
     """Bare /model opens one list of provider:model rows with auth tags,
     windowed to the selection; Up from the top wraps to the last row; Enter
