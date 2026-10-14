@@ -94,10 +94,10 @@ _SECTIONS: Dict[str, Type[BaseModel]] = {
 }
 
 
-# Settings Cortex no longer reads, with what replaces them.
+# Settings Cortex does not read, with what to use instead.
 _RETIRED = {
-    "tools_idle_timeout_seconds": "no longer used; set cloud_timeout_seconds for the "
-    "request timeout (a permission prompt now waits for your answer)",
+    "tools_idle_timeout_seconds": "not read; cloud_timeout_seconds sets the request "
+    "timeout, and a permission prompt waits for your answer",
 }
 
 

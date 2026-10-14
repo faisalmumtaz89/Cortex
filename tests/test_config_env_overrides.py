@@ -77,5 +77,5 @@ def test_retired_and_meaningless_settings_are_reported(tmp_path: Path) -> None:
     config = Config(config_path=path)
 
     assert config.tools.tools_enabled is True
-    assert any("set cloud_timeout_seconds" in warning for warning in config.warnings)
+    assert any("cloud_timeout_seconds sets the request" in warning for warning in config.warnings)
     assert any("Ignored tools_enabled: 'maybe'" in warning for warning in config.warnings)
