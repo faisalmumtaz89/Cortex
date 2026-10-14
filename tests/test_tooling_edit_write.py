@@ -116,9 +116,10 @@ def test_registry_profiles_gate_tools(tmp_path: Path) -> None:
     edit = ToolRegistry(repo_root=tmp_path, profile="edit")
     full = ToolRegistry(repo_root=tmp_path, profile="full")
 
-    assert read_only.names() == ["list_dir", "read_file", "search"]
-    assert edit.names() == ["edit_file", "list_dir", "read_file", "search", "write_file"]
-    assert full.names() == ["bash", "edit_file", "list_dir", "read_file", "search", "write_file"]
+    assert read_only.names() == ["list_dir", "read_file", "search", "skill"]
+    assert edit.names() == ["edit_file", "list_dir", "read_file", "search", "skill", "write_file"]
+    assert full.names() == [
+        "bash", "edit_file", "list_dir", "read_file", "search", "skill", "write_file"]
 
 
 def test_project_context_prefers_agents_md(tmp_path: Path) -> None:

@@ -921,6 +921,34 @@ def test_a_second_skill_narrows_the_limit_but_never_lifts_it(
     assert not (scratch_repo / "ran.txt").exists()
 
 
+def test_shipped_map_and_plan_is_listed_and_keeps_the_turn_read_only(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"tool_calls": [{"name": "write_file", "arguments": {
+                "path": "made.txt", "content": "x"}}]},
+            {"tool_calls": [{"name": "bash", "arguments": {"command": "touch ran.txt"}}]},
+            {"text": "Plan."},
+        ],
+        ["/map-and-plan how would I add a --verbose flag?"],
+        env_overrides={"CORTEX_TOOLS_PROFILE": "full"},
+        approve=True,
+    )
+
+    system = requests[0]["messages"][0]["content"]
+    for name in ("map-and-plan", "reproduce-and-fix", "safe-refactor", "review-changes",
+                 "commit-and-pr"):
+        assert f"- {name}: " in system
+    asked = requests[0]["messages"][-1]["content"]
+    assert "# Map and plan" in asked and "examples/plan.md" in asked
+    results = [m["content"] for m in requests[-1]["messages"] if m["role"] == "tool"]
+    assert all("map-and-plan skill does not use" in result for result in results)
+    assert not (scratch_repo / "made.txt").exists() and not (scratch_repo / "ran.txt").exists()
+
+
 def test_skills_are_not_listed_when_tools_are_off(tmp_path: Path, scratch_repo: Path) -> None:
     _write_skill(scratch_repo / ".cortex" / "skills", "look-only", "Use to look around.", "x\n")
     env = _worker_env(tmp_path, tmp_path / "x.json")

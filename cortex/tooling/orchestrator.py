@@ -193,13 +193,13 @@ class _ToolLimit:
         if len(self.skills) == 1:
             return (
                 f"The {self.skills[0]} skill does not use {tool}; for the rest of this turn "
-                f"only these tools run: {allowed}. Finish within them, or say what is needed "
-                "and stop."
+                f"only these tools run: {allowed}. Do not work around this with other tools: "
+                "finish within them, or say what is needed and stop."
             )
         return (
             f"The {' and '.join(self.skills)} skills together allow only these tools: "
-            f"{allowed}; {tool} is not one of them for the rest of this turn. Finish within "
-            "them, or say what is needed and stop."
+            f"{allowed}; {tool} is not one of them for the rest of this turn. Do not work "
+            "around this with other tools: finish within them, or say what is needed and stop."
         )
 
 
