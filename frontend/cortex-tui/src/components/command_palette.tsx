@@ -18,6 +18,13 @@ const SPINE_BORDER = {
   rightT: "",
 }
 
+/** A description cut to the row, so a skill's long one stays on one line. */
+function fitDescription(command: SlashCommand): string {
+  const room = Math.max(10, terminalColumns() - padPrimary(`/${command.name}`).length - 8)
+  const text = command.description.replace(/\s+/g, " ")
+  return text.length > room ? `${text.slice(0, room - 1)}…` : text
+}
+
 /** Command list / arg-hint panel shown above the prompt while typing a slash
  * command. The list body reuses the shared SelectionRows so the palette,
  * permission menu, and model picker are visually identical. */
@@ -58,7 +65,7 @@ export function CommandPalette(props: {
             items={props.matches}
             selectedIndex={props.selectedIndex}
             getPrimary={(command) => padPrimary(`/${command.name}`)}
-            getSecondary={(command) => command.description}
+            getSecondary={(command) => fitDescription(command)}
           />
         </Show>
       </Show>

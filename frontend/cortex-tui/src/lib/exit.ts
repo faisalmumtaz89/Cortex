@@ -2,10 +2,11 @@
 // destroys the renderer (restores the terminal) — it never exits the process,
 // and our app legitimately holds the event loop open (shared spinner interval,
 // worker stdio pipes). So every exit trigger (Ctrl+C key, SIGINT/SIGTERM from
-// a parent, /quit) funnels here: destroy the renderer first, then exit on a
-// short delay so an in-flight render pass can finalize the terminal restore.
-// Exiting closes the worker's stdin → the worker shuts down → its atexit stops
-// any managed lumen-server, so the whole tree tears down from one press.
+// a parent, SIGHUP from a closed terminal, /quit) funnels here: destroy the
+// renderer first, then exit on a short delay so an in-flight render pass can
+// finalize the terminal restore.
+// Exiting closes the worker's stdin and the worker shuts down, so the whole
+// tree tears down from one press.
 
 let exiting = false
 let destroyRenderer: (() => void) | null = null
@@ -15,8 +16,8 @@ export function registerRendererDestroy(destroy: () => void): void {
   destroyRenderer = destroy
 }
 
-/** Registered by the RPC layer: SIGTERMs the worker so the lumen-server
- * teardown starts immediately instead of waiting for stdin EOF. */
+/** Registered by the RPC layer: SIGTERMs the worker so its teardown starts
+ * immediately instead of waiting for stdin EOF. */
 export function registerWorkerKill(kill: () => void): void {
   killWorker = kill
 }

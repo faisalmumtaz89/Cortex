@@ -16,12 +16,14 @@ ENV_KEY_MAP: Dict[CloudProvider, str] = {
     CloudProvider.OPENAI: "OPENAI_API_KEY",
     CloudProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
     CloudProvider.AZURE: "AZURE_OPENAI_API_KEY",
+    CloudProvider.OPENAI_COMPATIBLE: "OPENAI_COMPATIBLE_API_KEY",
 }
 
 KEYRING_KEY_MAP: Dict[CloudProvider, str] = {
     CloudProvider.OPENAI: "openai_api_key",
     CloudProvider.ANTHROPIC: "anthropic_api_key",
     CloudProvider.AZURE: "azure_openai_api_key",
+    CloudProvider.OPENAI_COMPATIBLE: "openai_compatible_api_key",
 }
 
 

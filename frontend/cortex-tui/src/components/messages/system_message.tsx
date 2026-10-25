@@ -1,9 +1,5 @@
 import type { MessageRecord } from "../../context/store"
-import {
-  downloadIndicatorLine,
-  engineUpdateIndicatorLine,
-  loadIndicatorLine,
-} from "../../lib/progress_lines"
+import { engineUpdateIndicatorLine } from "../../lib/progress_lines"
 import { UI_PALETTE } from "../ui_palette"
 
 const SPINE_BORDER = {
@@ -20,14 +16,13 @@ const SPINE_BORDER = {
   rightT: "",
 }
 
-const TERMINAL_PHASES = new Set(["complete", "completed", "ready", "failed", "cancelled"])
+const TERMINAL_PHASES = new Set(["ready", "failed"])
 
 export function SystemMessage(props: { message: MessageRecord; index: number }) {
   // Everything below is a reactive accessor ON PURPOSE: component bodies run
   // once in Solid, so plain consts here would freeze the live/resolved gating
-  // at mount — the exact bug where a "Loading …" row kept spinning forever
-  // after its final frame had already arrived.
-  const progress = () => props.message.downloadProgress
+  // at mount, and a live row would keep spinning after its final frame.
+  const progress = () => props.message.progress
   const phase = () => progress()?.phase?.trim().toLowerCase() ?? ""
   const isTerminalPhase = () => TERMINAL_PHASES.has(phase())
   const showLiveProgress = () =>
@@ -45,9 +40,6 @@ export function SystemMessage(props: { message: MessageRecord; index: number }) 
     }
     if (phase() === "failed") {
       return `Failed: ${record.repoID}`
-    }
-    if (phase() === "cancelled") {
-      return `Cancelled: ${record.repoID}`
     }
     return `Done: ${record.repoID}`
   }
@@ -72,13 +64,7 @@ export function SystemMessage(props: { message: MessageRecord; index: number }) 
         {!showPrimaryContent() && terminalFallbackMessage() && (
           <text fg={UI_PALETTE.textMuted}>{terminalFallbackMessage()}</text>
         )}
-        {showLiveProgress() && progress()?.kind === "model-load" && (
-          <text fg={UI_PALETTE.textMuted}>{loadIndicatorLine(progress()!)}</text>
-        )}
-        {showLiveProgress() && progress()?.kind === "download" && (
-          <text fg={UI_PALETTE.textMuted}>{downloadIndicatorLine(progress()!)}</text>
-        )}
-        {showLiveProgress() && progress()?.kind === "engine-update" && (
+        {showLiveProgress() && (
           <text fg={UI_PALETTE.textMuted}>
             {engineUpdateIndicatorLine(progress()!, props.message.content)}
           </text>

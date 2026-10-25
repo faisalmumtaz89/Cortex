@@ -1,11 +1,11 @@
-"""LumenClient: chat-completions tool loop and wire hygiene."""
+"""ChatCompletionsClient: chat-completions tool loop and wire hygiene."""
 
 from __future__ import annotations
 
 import json
 from types import SimpleNamespace
 
-from cortex.cloud.clients import LumenClient
+from cortex.cloud.clients import ChatCompletionsClient
 from cortex.tooling.types import (
     FinishEvent,
     TextDeltaEvent,
@@ -40,8 +40,8 @@ class _FakeCompletions:
         return iter(self._streams.pop(0))
 
 
-def _client_with(streams) -> tuple[LumenClient, _FakeCompletions]:
-    client = LumenClient(base_url="http://127.0.0.1:1/v1")
+def _client_with(streams) -> tuple[ChatCompletionsClient, _FakeCompletions]:
+    client = ChatCompletionsClient(base_url="http://127.0.0.1:1/v1", api_key="test", timeout_seconds=30)
     completions = _FakeCompletions(streams)
     client.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     return client, completions
@@ -114,7 +114,7 @@ def test_tool_loop_executes_and_feeds_results_back() -> None:
     assert call_event.call.arguments == {"path": "calc.py"}
     assert executed and executed[0].id == "call_1"
 
-    # Wire hygiene: tools sent without tool_choice (Lumen 400s on it).
+    # Tools are sent without tool_choice, so the server's default (auto) applies.
     assert "tools" in completions.requests[0]
     assert "tool_choice" not in completions.requests[0]
 

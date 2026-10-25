@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from cortex.cloud.clients.anthropic_client import AnthropicClient
 from cortex.tooling.types import (
     FinishEvent,
@@ -44,11 +46,14 @@ class _FakeMessages:
                         "name": "list_dir",
                         "input": {"path": "."},
                     }
-                ]
+                ],
+                stop_reason="tool_use",
             )
             return _FakeMessageStream(["Inspecting ", "repo"], final_message)
 
-        final_message = SimpleNamespace(content=[{"type": "text", "text": "Done"}])
+        final_message = SimpleNamespace(
+            content=[{"type": "text", "text": "Done"}], stop_reason="end_turn"
+        )
         return _FakeMessageStream(["Do", "ne"], final_message)
 
     def create(self, **kwargs):
@@ -123,12 +128,15 @@ class _ThinkingFakeMessages:
                         "name": "list_dir",
                         "input": {"path": "."},
                     },
-                ]
+                ],
+                stop_reason="tool_use",
             )
             # Thinking text never reaches text_stream (verified live: the SDK
             # yields no text events for thinking blocks).
             return _FakeMessageStream([], final_message)
-        final_message = SimpleNamespace(content=[{"type": "text", "text": "Done"}])
+        final_message = SimpleNamespace(
+            content=[{"type": "text", "text": "Done"}], stop_reason="end_turn"
+        )
         return _FakeMessageStream(["Done"], final_message)
 
     def create(self, **kwargs):
@@ -208,30 +216,10 @@ def test_empty_thinking_and_redacted_thinking_serialize_verbatim():
     assert redacted == {"type": "redacted_thinking", "data": "opaque-encrypted-payload"}
 
 
-class _CreateCapturingMessages:
-    """Non-stream fake for generate_once: create() captures kwargs and returns
-    a minimal valid message; stream() must never be called."""
-
-    def __init__(self):
-        self.create_kwargs = []
-
-    def create(self, **kwargs):
-        self.create_kwargs.append(kwargs)
-        return SimpleNamespace(
-            model="claude-fable-5",
-            id="msg_1",
-            content=[{"type": "text", "text": "fallback"}],
-        )
-
-    def stream(self, **kwargs):
-        raise AssertionError(f"unexpected stream call from generate_once: {kwargs}")
-
-
 def test_requests_never_carry_sampling_params():
     """Regression (2026-07-05): Claude-5-era models 400 on `temperature`
     ("deprecated for this model"); 4-x-era models 400 when temperature and
-    top_p are both sent. The client must send NEITHER on ANY of its three
-    request builders (tool loop, plain stream, non-stream generate_once) —
+    top_p are both sent. The client must send NEITHER, with or without tools —
     API defaults work on every generation (validated live)."""
     client = AnthropicClient.__new__(AnthropicClient)
     fake_messages = _FakeMessages()
@@ -252,7 +240,6 @@ def test_requests_never_carry_sampling_params():
             output='{"entries":[]}',
         )
 
-    # Tool loop + plain streaming path both go through messages.stream.
     list(
         client.stream_events(
             model_id="claude-fable-5",
@@ -277,25 +264,6 @@ def test_requests_never_carry_sampling_params():
 
     assert fake_messages.stream_kwargs, "no requests captured"
     for kwargs in fake_messages.stream_kwargs:
-        assert "temperature" not in kwargs
-        assert "top_p" not in kwargs
-
-    # generate_once goes through messages.create — the reliability fallback
-    # (router falls back to it when streaming yields nothing) must be equally
-    # clean or it 400s exactly when the primary path already failed.
-    create_client = AnthropicClient.__new__(AnthropicClient)
-    create_fake = _CreateCapturingMessages()
-    create_client.client = SimpleNamespace(messages=create_fake)
-    text = create_client.generate_once(
-        model_id="claude-fable-5",
-        messages=[{"role": "user", "content": "hi"}],
-        max_tokens=64,
-        temperature=0.7,
-        top_p=0.9,
-    )
-    assert text == "fallback"
-    assert create_fake.create_kwargs, "generate_once sent no request"
-    for kwargs in create_fake.create_kwargs:
         assert "temperature" not in kwargs
         assert "top_p" not in kwargs
 
@@ -326,3 +294,140 @@ def test_unknown_blocks_replay_their_own_shape_verbatim():
     typeless = client._serialize_content_block(SimpleNamespace(text="plain"))
     assert typeless == {"type": "text", "text": "plain"}
 
+
+class _TruncatedMessages:
+    """Every stream ends at a limit and carries a half-written tool call."""
+
+    def __init__(self, stop_reason):
+        self.calls = 0
+        self.stop_reason = stop_reason
+
+    def stream(self, **kwargs):
+        self.calls += 1
+        final_message = SimpleNamespace(
+            stop_reason=self.stop_reason,
+            content=[
+                {"type": "text", "text": "Running"},
+                {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}},
+            ],
+        )
+        return _FakeMessageStream(["Running"], final_message)
+
+    def create(self, **kwargs):
+        raise AssertionError(f"unexpected non-stream fallback call: {kwargs}")
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "finish_reason"),
+    [("max_tokens", "length"), ("model_context_window_exceeded", "context_window")],
+)
+def test_reply_cut_off_at_a_limit_finishes_with_its_reason_and_runs_no_tools(
+    stop_reason, finish_reason
+):
+    client = AnthropicClient.__new__(AnthropicClient)
+    client.client = SimpleNamespace(messages=_TruncatedMessages(stop_reason))
+    executed = []
+    tool_spec = SimpleNamespace(
+        name="bash", description="Run", parameters={"type": "object", "properties": {}}
+    )
+
+    events = list(
+        client.stream_events(
+            model_id="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "run it"}],
+            max_tokens=64,
+            temperature=0.2,
+            top_p=1.0,
+            tools=[tool_spec],
+            tool_executor=executed.append,
+        )
+    )
+
+    finishes = [event for event in events if isinstance(event, FinishEvent)]
+    assert [event.reason for event in finishes] == [finish_reason]
+    assert executed == []
+    assert not any(isinstance(event, ToolCallEvent) for event in events)
+
+    plain = list(
+        client.stream_events(
+            model_id="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "explain"}],
+            max_tokens=64,
+            temperature=0.2,
+            top_p=1.0,
+        )
+    )
+    assert [event.reason for event in plain if isinstance(event, FinishEvent)] == [finish_reason]
+
+
+def test_tool_history_becomes_tool_use_and_tool_result_blocks():
+    client = AnthropicClient.__new__(AnthropicClient)
+    calls = [
+        {"id": "call_1", "type": "function",
+         "function": {"name": "read_file", "arguments": '{"path": "a.py"}'}},
+        {"id": "call_2", "type": "function", "function": {"name": "list_dir", "arguments": ""}},
+    ]
+
+    system_text, messages = client._normalize_messages(
+        [
+            {"role": "system", "content": "s1"},
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "Reading.", "tool_calls": calls},
+            {"role": "tool", "tool_call_id": "call_1", "content": "x = 1"},
+            {"role": "tool", "tool_call_id": "call_2", "content": ""},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u2"},
+        ]
+    )
+
+    assert system_text == "s1"
+    assert messages == [
+        {"role": "user", "content": [{"type": "text", "text": "u1"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Reading."},
+                {"type": "tool_use", "id": "call_1", "name": "read_file",
+                 "input": {"path": "a.py"}},
+                {"type": "tool_use", "id": "call_2", "name": "list_dir", "input": {}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "x = 1"},
+                {"type": "tool_result", "tool_use_id": "call_2", "content": ""},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "a1"}]},
+        {"role": "user", "content": [{"type": "text", "text": "u2"}]},
+    ]
+
+
+def test_tool_step_limit_finishes_the_turn_after_running_the_calls():
+    client = AnthropicClient.__new__(AnthropicClient)
+    fake_messages = _FakeMessages()
+    client.client = SimpleNamespace(messages=fake_messages)
+    executed = []
+
+    def executor(call):
+        executed.append(call.name)
+        return ToolResult(id=call.id, name=call.name, state=ToolExecutionState.COMPLETED,
+                          ok=True, output="[]")
+
+    events = list(
+        client.stream_events(
+            model_id="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "list"}],
+            max_tokens=64,
+            temperature=0.2,
+            top_p=1.0,
+            tools=[SimpleNamespace(name="list_dir", description="List", parameters={})],
+            tool_executor=executor,
+            max_tool_iterations=1,
+        )
+    )
+
+    assert executed == ["list_dir"]
+    assert fake_messages.calls == 1
+    assert isinstance(events[-1], FinishEvent) and events[-1].reason == "tool_limit"

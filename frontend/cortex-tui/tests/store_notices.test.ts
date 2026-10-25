@@ -33,7 +33,7 @@ function transcribedContents(store: SessionStore): string[] {
   return store.state.orderedMessageIDs.map((id) => store.state.messages[id]?.content ?? "")
 }
 
-const UPDATE_NOTICE = "Lumen 0.4.0 available — update with /update lumen"
+const UPDATE_NOTICE = "Cortex 9.9.9 available — update with /update cortex"
 
 describe("system.notice transcription gate (store event path)", () => {
   test("out-of-band update notice transcribes even while a command is in flight", () => {

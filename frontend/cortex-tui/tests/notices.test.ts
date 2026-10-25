@@ -9,7 +9,7 @@ import { isOutOfBandNotice } from "../src/lib/notices"
 describe("isOutOfBandNotice", () => {
   test("update-check notices are out-of-band (never dropped mid-command)", () => {
     expect(
-      isOutOfBandNotice({ message: "Lumen 0.4.0 available", origin: "update-check" }),
+      isOutOfBandNotice({ message: "Cortex 9.9.9 available", origin: "update-check" }),
     ).toBe(true)
   })
 

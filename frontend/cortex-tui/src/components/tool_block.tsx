@@ -19,6 +19,7 @@ const TOOL_VERB: Record<string, string> = {
   search: "Search",
   edit_file: "Update",
   write_file: "Write",
+  skill: "Skill",
 }
 
 function toolVerb(tool: string): string {
@@ -95,6 +96,8 @@ export function toolCallSummary(tool: string, input?: Record<string, unknown>): 
       return truncatePath(path, budget)
     case "write_file":
       return truncatePath(path, budget)
+    case "skill":
+      return truncate(args.file ? `${String(args.name ?? "")} ${String(args.file)}` : String(args.name ?? ""))
     default: {
       const raw = Object.entries(args)
         .map(([key, value]) => `${key}=${String(value)}`)

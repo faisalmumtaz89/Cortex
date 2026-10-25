@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 
+from openai import OpenAI
+
+from cortex.cloud.retry import RetryCallback, ServerError, StreamCutOffError, with_retries
 from cortex.tooling.types import (
     FinishEvent,
     TextDeltaEvent,
@@ -13,13 +15,12 @@ from cortex.tooling.types import (
     ToolCallEvent,
     ToolResult,
     ToolResultEvent,
+    TurnInterrupt,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class OpenAIClient:
-    """OpenAI streaming and key validation wrapper.
+    """OpenAI Responses API client.
 
     Also serves OpenAI-compatible endpoints (Azure OpenAI's /openai/v1/ path)
     via base_url.
@@ -27,19 +28,13 @@ class OpenAIClient:
 
     # Class-level defaults: some tests construct via __new__ and skip __init__.
     endpoint: str = "https://api.openai.com/v1"
-    last_provenance: Optional[Dict[str, object]] = None
 
     def __init__(self, api_key: str, timeout_seconds: int = 60, base_url: Optional[str] = None):
-        try:
-            from openai import OpenAI  # type: ignore
-        except Exception as exc:
-            raise RuntimeError(
-                "OpenAI runtime dependency is missing. Run /login openai to auto-install and configure it."
-            ) from exc
-
-        self.client = OpenAI(api_key=api_key, timeout=timeout_seconds, base_url=base_url)
+        # Retries are Cortex's own (cortex.cloud.retry), not the SDK's.
+        self.client = OpenAI(
+            api_key=api_key, timeout=timeout_seconds, base_url=base_url, max_retries=0
+        )
         self.endpoint = str(base_url or "https://api.openai.com/v1")
-        self.last_provenance: Optional[Dict[str, object]] = None
 
     def _provenance(self, reported_model: object, response_id: object) -> Dict[str, object]:
         """Response-side identity proof for post-turn verification."""
@@ -49,32 +44,46 @@ class OpenAIClient:
             "response_id": str(response_id or "")[:40],
             "endpoint": self.endpoint,
         }
-        self.last_provenance = record
         return record
 
-    def validate_key(self) -> Tuple[bool, str]:
-        """Validate API key using a low-cost API call."""
-        try:
-            self.client.models.list()
-            return True, "OpenAI API key is valid."
-        except Exception as exc:
-            return False, f"OpenAI authentication failed: {exc}"
-
-    def _normalize_messages(self, messages: Iterable[Dict[str, object]]) -> Tuple[Optional[str], List[Dict[str, str]]]:
+    def _normalize_messages(
+        self, messages: Iterable[Dict[str, object]]
+    ) -> Tuple[Optional[str], List[Dict[str, object]]]:
+        """Split off the system text and convert Chat Completions messages to
+        Responses input items: text messages, function calls and their
+        outputs."""
         system_parts: List[str] = []
-        normalized: List[Dict[str, str]] = []
+        normalized: List[Dict[str, object]] = []
 
         for message in messages:
             role = str(message.get("role", "")).strip().lower()
-            content = str(message.get("content", "")).strip()
-            if not content:
-                continue
+            content = str(message.get("content") or "").strip()
             if role == "system":
-                system_parts.append(content)
+                if content:
+                    system_parts.append(content)
+                continue
+            if role == "tool":
+                normalized.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": str(message.get("tool_call_id", "")),
+                        "output": str(message.get("content") or ""),
+                    }
+                )
                 continue
             if role not in {"user", "assistant"}:
                 continue
-            normalized.append({"role": role, "content": content})
+            if content:
+                normalized.append({"role": role, "content": content})
+            for call in cast(List[Dict[str, Any]], message.get("tool_calls") or []):
+                normalized.append(
+                    {
+                        "type": "function_call",
+                        "call_id": str(call["id"]),
+                        "name": str(call["function"]["name"]),
+                        "arguments": str(call["function"]["arguments"]),
+                    }
+                )
 
         system_text = "\n\n".join(system_parts).strip() or None
         return system_text, normalized
@@ -211,6 +220,38 @@ class OpenAIClient:
             kwargs["previous_response_id"] = previous_response_id
         return kwargs
 
+    @staticmethod
+    def _stream_text(stream, outcome: Dict[str, object]):
+        """Yield the text deltas of a Responses stream and record its final
+        response in ``outcome["response"]``. The final response is taken from
+        the stream's own response.completed / response.incomplete event:
+        the SDK's get_final_response() raises for an incomplete response. An
+        error event raises ServerError with the server's message."""
+        for event in stream:
+            event_type = getattr(event, "type", "")
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", "")
+                if delta:
+                    yield TextDeltaEvent(delta=str(delta))
+            elif event_type in ("response.completed", "response.incomplete"):
+                outcome["response"] = getattr(event, "response", None)
+            elif event_type in ("error", "response.failed"):
+                error = getattr(getattr(event, "response", None), "error", None) or event
+                code = getattr(error, "code", None)
+                message = getattr(error, "message", None) or "the response failed"
+                raise ServerError(f"{message} ({code})" if code else str(message), code)
+
+    @staticmethod
+    def _finish_reason(response: object) -> str:
+        """The response's finish reason: length if it stopped at max_output_tokens."""
+        details = getattr(response, "incomplete_details", None)
+        if (
+            getattr(response, "status", None) == "incomplete"
+            and getattr(details, "reason", None) == "max_output_tokens"
+        ):
+            return "length"
+        return "stop"
+
     def _supports_sampling_controls(self, model_id: str) -> bool:
         """Return whether temperature/top_p should be sent for this model."""
         normalized = str(model_id or "").strip().lower()
@@ -229,266 +270,93 @@ class OpenAIClient:
         tools=None,
         tool_choice: str = "auto",
         tool_executor=None,
-        max_tool_iterations: int = 8,
+        max_tool_iterations: int = 100,
+        interrupt: Optional[TurnInterrupt] = None,
+        retries: int = 0,
+        on_retry: Optional[RetryCallback] = None,
     ):
         """Yield normalized events from OpenAI responses."""
+        interrupt = interrupt or TurnInterrupt()
         system_text, normalized_messages = self._normalize_messages(messages)
         if not normalized_messages:
             raise RuntimeError("No user/assistant messages available for OpenAI request.")
+        use_tools = bool(tools) and tool_executor is not None
 
-        if tools and tool_executor is not None:
-            request_input: object = normalized_messages
-            previous_response_id: Optional[str] = None
-            reported_model: object = ""
-            reported_id: object = ""
+        request_input: object = normalized_messages
+        previous_response_id: Optional[str] = None
+        reported_model: object = ""
+        reported_id: object = ""
 
-            for _ in range(max_tool_iterations):
-                kwargs = self._build_response_kwargs(
-                    model_id=model_id,
-                    request_input=request_input,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    system_text=system_text,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    previous_response_id=previous_response_id,
+        for _ in range(max(1, max_tool_iterations)):
+            kwargs = self._build_response_kwargs(
+                model_id=model_id,
+                request_input=request_input,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                system_text=system_text,
+                tools=tools if use_tools else None,
+                tool_choice=tool_choice,
+                previous_response_id=previous_response_id,
+            )
+            response, emitted = yield from with_retries(
+                lambda: self._request(kwargs, interrupt),
+                retries=retries,
+                interrupt=interrupt,
+                on_retry=on_retry,
+            )
+
+            if not emitted:
+                text = self._extract_output_text(response)
+                if text:
+                    yield TextDeltaEvent(delta=text)
+
+            previous_response_id = getattr(response, "id", None) or previous_response_id
+            reported_model = getattr(response, "model", None) or reported_model
+            reported_id = getattr(response, "id", None) or reported_id
+            calls = self._extract_tool_calls(response) if use_tools else []
+            # A reply cut off by max_output_tokens ends the turn: its tool
+            # calls may be incomplete and must not run.
+            finish_reason = self._finish_reason(response)
+            if not calls or finish_reason == "length":
+                yield FinishEvent(
+                    reason=finish_reason,
+                    provenance=self._provenance(reported_model, reported_id),
                 )
-                emitted_this_turn = False
-                response = None
+                return
 
-                try:
-                    with self.client.responses.stream(**cast(Any, kwargs)) as stream:
-                        if hasattr(stream, "text_deltas"):
-                            for delta in stream.text_deltas:
-                                if delta:
-                                    emitted_this_turn = True
-                                    yield TextDeltaEvent(delta=str(delta))
-                        else:
-                            for event in stream:
-                                event_type = getattr(event, "type", "")
-                                if event_type == "response.output_text.delta":
-                                    delta = getattr(event, "delta", "")
-                                    if delta:
-                                        emitted_this_turn = True
-                                        yield TextDeltaEvent(delta=str(delta))
+            outputs = []
+            for call in calls:
+                yield ToolCallEvent(call=call)
+                tool_result = tool_executor(call)
+                yield ToolResultEvent(result=tool_result)
+                outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call.id,
+                        "output": self._format_tool_output(tool_result),
+                    }
+                )
 
-                        if hasattr(stream, "get_final_response"):
-                            response = stream.get_final_response()
-                except Exception as exc:
-                    logger.debug(
-                        "OpenAI Responses API tool stream failed, falling back to non-streaming create: %s",
-                        exc,
-                    )
+            request_input = outputs
 
-                if response is None:
-                    response = self.client.responses.create(**cast(Any, kwargs))
-
-                if not emitted_this_turn:
-                    text = self._extract_output_text(response)
-                    if text:
-                        yield TextDeltaEvent(delta=text)
-
-                previous_response_id = getattr(response, "id", None) or previous_response_id
-                reported_model = getattr(response, "model", None) or reported_model
-                reported_id = getattr(response, "id", None) or reported_id
-                calls = self._extract_tool_calls(response)
-                if not calls:
-                    yield FinishEvent(
-                        reason="stop",
-                        provenance=self._provenance(reported_model, reported_id),
-                    )
-                    return
-
-                outputs = []
-                for call in calls:
-                    yield ToolCallEvent(call=call)
-                    tool_result = tool_executor(call)
-                    yield ToolResultEvent(result=tool_result)
-                    outputs.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": call.id,
-                            "output": self._format_tool_output(tool_result),
-                        }
-                    )
-
-                request_input = outputs
-
-            raise RuntimeError("OpenAI tool loop exceeded max iterations")
-
-        response_kwargs = self._build_response_kwargs(
-            model_id=model_id,
-            request_input=normalized_messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            system_text=system_text,
+        # The step limit ends the turn; its tool calls and results are kept.
+        yield FinishEvent(
+            reason="tool_limit", provenance=self._provenance(reported_model, reported_id)
         )
 
-        try:
-            with self.client.responses.stream(**cast(Any, response_kwargs)) as stream:
-                emitted = False
-
-                if hasattr(stream, "text_deltas"):
-                    for delta in stream.text_deltas:
-                        if delta:
-                            emitted = True
-                            yield TextDeltaEvent(delta=str(delta))
-                else:
-                    for event in stream:
-                        event_type = getattr(event, "type", "")
-                        if event_type == "response.output_text.delta":
-                            delta = getattr(event, "delta", "")
-                            if delta:
-                                emitted = True
-                                yield TextDeltaEvent(delta=str(delta))
-
-                final_response = None
-                if hasattr(stream, "get_final_response"):
-                    try:
-                        final_response = stream.get_final_response()
-                    except Exception:  # pragma: no cover - SDK-specific edge
-                        final_response = None
-                if not emitted and final_response is not None:
-                    final_text = self._extract_output_text(final_response)
-                    if final_text:
-                        yield TextDeltaEvent(delta=final_text)
-
-            yield FinishEvent(
-                reason="stop",
-                provenance=self._provenance(
-                    getattr(final_response, "model", None),
-                    getattr(final_response, "id", None),
-                ),
-            )
-            return
-        except Exception as exc:
-            logger.debug("OpenAI Responses API stream failed, falling back to chat completions: %s", exc)
-
-        completion_messages = list(normalized_messages)
-        if system_text:
-            completion_messages = [{"role": "system", "content": system_text}] + completion_messages
-
-        completion_kwargs = {
-            "model": model_id,
-            "messages": completion_messages,
-            "stream": True,
-        }
-        if self._supports_sampling_controls(model_id):
-            completion_kwargs["temperature"] = temperature
-            completion_kwargs["top_p"] = top_p
-
-        try:
-            stream = self.client.chat.completions.create(
-                max_completion_tokens=max_tokens,
-                **cast(Any, completion_kwargs),
-            )
-        except TypeError:
-            stream = self.client.chat.completions.create(
-                max_tokens=max_tokens,
-                **cast(Any, completion_kwargs),
-            )
-
-        chunk_model: object = ""
-        chunk_id: object = ""
-        for chunk in stream:
-            chunk_model = getattr(chunk, "model", None) or chunk_model
-            chunk_id = getattr(chunk, "id", None) or chunk_id
-            try:
-                delta = chunk.choices[0].delta.content
-            except Exception:
-                delta = None
-            if delta:
-                yield TextDeltaEvent(delta=str(delta))
-
-        yield FinishEvent(reason="stop", provenance=self._provenance(chunk_model, chunk_id))
-
-    def stream(
-        self,
-        *,
-        model_id: str,
-        messages: Iterable[Dict[str, object]],
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-    ):
-        """Backward-compatible text-only stream."""
-        for event in self.stream_events(
-            model_id=model_id,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            tools=None,
-            tool_choice="auto",
-            tool_executor=None,
-        ):
-            if isinstance(event, TextDeltaEvent) and event.delta:
-                yield event.delta
-
-    def generate_once(
-        self,
-        *,
-        model_id: str,
-        messages: Iterable[Dict[str, object]],
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-    ) -> str:
-        """Non-stream fallback generation for reliability."""
-        system_text, normalized_messages = self._normalize_messages(messages)
-        if not normalized_messages:
-            raise RuntimeError("No user/assistant messages available for OpenAI request.")
-
-        response_kwargs = self._build_response_kwargs(
-            model_id=model_id,
-            request_input=normalized_messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            system_text=system_text,
-        )
-
-        response = self.client.responses.create(**cast(Any, response_kwargs))
-        self._provenance(getattr(response, "model", None), getattr(response, "id", None))
-        text = self._extract_output_text(response)
-        if text:
-            return text
-
-        completion_messages = list(normalized_messages)
-        if system_text:
-            completion_messages = [{"role": "system", "content": system_text}] + completion_messages
-        try:
-            completion = self.client.chat.completions.create(
-                model=model_id,
-                messages=cast(Any, completion_messages),
-                temperature=temperature,
-                top_p=top_p,
-                max_completion_tokens=max_tokens,
-            )
-        except TypeError:
-            completion = self.client.chat.completions.create(
-                model=model_id,
-                messages=cast(Any, completion_messages),
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-            )
-        self._provenance(getattr(completion, "model", None), getattr(completion, "id", None))
-        try:
-            content = completion.choices[0].message.content
-        except Exception:
-            content = None
-        if isinstance(content, str) and content:
-            return content
-        if isinstance(content, list):
-            parts: List[str] = []
-            for part in content:
-                part_text = getattr(part, "text", None)
-                if isinstance(part_text, str) and part_text:
-                    parts.append(part_text)
-            if parts:
-                return "".join(parts)
-
-        raise RuntimeError("OpenAI non-stream fallback returned no text.")
+    def _request(self, kwargs: Dict[str, object], interrupt: TurnInterrupt):
+        """Send one request and yield its text as it streams; return the
+        response and whether any text was streamed."""
+        interrupt.raise_if_set()
+        outcome: Dict[str, object] = {}
+        emitted = False
+        with self.client.responses.stream(**cast(Any, kwargs)) as stream:
+            with interrupt.watching(stream):
+                for text_event in self._stream_text(stream, outcome):
+                    emitted = True
+                    yield text_event
+        response = outcome.get("response")
+        if response is None:
+            raise StreamCutOffError("The response stream ended before the reply was complete.")
+        return response, emitted

@@ -1,29 +1,47 @@
 // Slash command registry shared by the palette and the command router.
 // Descriptions and arg hints mirror cortex/app/command_service.py.
 
+import { createSignal } from "solid-js"
+
 export interface SlashCommand {
   name: string // canonical, without leading slash
   description: string
   argHint?: string // usage shown in ARG-HINT mode when the command takes arguments
+  skill?: boolean // a skill: "/name request" is sent to the model as a message
 }
 
 // Canonical order (help first); the palette shows this order for an empty query.
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "help", description: "List available commands" },
   { name: "status", description: "Show model & session status" },
-  { name: "gpu", description: "Show GPU / memory status" },
-  { name: "model", description: "Pick a model (or /model <name | provider:model>)", argHint: "<name | provider:model>" },
-  { name: "download", description: "Download a local model (Lumen)", argHint: "<model[:quant]>  \u00b7  /download cancel" },
+  { name: "model", description: "Pick a model (or /model <provider:model>)", argHint: "<provider:model>" },
   { name: "login", description: "Log in to a cloud provider (picker, then paste the key)", argHint: "<provider> <api_key>" },
-  { name: "benchmark", description: "Benchmark local token throughput", argHint: "[tokens] [--prompt <text>]" },
   { name: "clear", description: "Clear the conversation" },
   { name: "save", description: "Save the conversation to disk" },
-  { name: "setup", description: "Load the first local model" },
-  { name: "update", description: "Check for updates, or update Lumen / Cortex", argHint: "[lumen|cortex]" },
+  { name: "update", description: "Check for updates, or update Cortex", argHint: "[cortex]" },
   { name: "quit", description: "Exit Cortex" },
 ]
 
 const BY_NAME = new Map(SLASH_COMMANDS.map((command) => [command.name, command]))
+
+// Skills the worker found (skill.list); a command of the same name wins.
+const [skillCommands, setSkillCommands] = createSignal<SlashCommand[]>([])
+
+export function setSkills(skills: { name: string; description: string }[]): void {
+  setSkillCommands(
+    skills
+      .filter((skill) => !BY_NAME.has(skill.name) && skill.name !== "exit")
+      .map((skill) => ({ name: skill.name, description: skill.description, skill: true })),
+  )
+}
+
+export function skills(): SlashCommand[] {
+  return skillCommands()
+}
+
+function allCommands(): SlashCommand[] {
+  return [...SLASH_COMMANDS, ...skillCommands()]
+}
 
 /** Every accepted command/alias name (for router validation). */
 export const SLASH_COMMAND_NAMES: ReadonlySet<string> = new Set([
@@ -32,7 +50,14 @@ export const SLASH_COMMAND_NAMES: ReadonlySet<string> = new Set([
 ])
 
 export function findCommand(name: string): SlashCommand | undefined {
-  return BY_NAME.get(name.replace(/^\//, "").toLowerCase())
+  const key = name.replace(/^\//, "").toLowerCase()
+  return BY_NAME.get(key) ?? skillCommands().find((command) => command.name === key)
+}
+
+/** Whether the input runs a skill: "/<skill name>" alone or before a request. */
+export function isSkillInput(input: string): boolean {
+  const match = /^\/(\S+)(\s|$)/.exec(input.trim())
+  return Boolean(match && findCommand(match[1])?.skill && match[1] === match[1].toLowerCase())
 }
 
 export function commandTakesArgs(name: string): boolean {
@@ -50,16 +75,17 @@ export function commandToken(input: string): string {
  */
 export function matchCommands(query: string): SlashCommand[] {
   const term = commandToken(query)
+  const commands = allCommands()
   if (!term) {
-    return SLASH_COMMANDS
+    return commands
   }
-  const prefix = SLASH_COMMANDS.filter((command) => command.name.startsWith(term))
+  const prefix = commands.filter((command) => command.name.startsWith(term))
   return prefix.sort((a, b) => {
     const aExact = a.name === term ? 0 : 1
     const bExact = b.name === term ? 0 : 1
     if (aExact !== bExact) {
       return aExact - bExact
     }
-    return SLASH_COMMANDS.indexOf(a) - SLASH_COMMANDS.indexOf(b)
+    return commands.indexOf(a) - commands.indexOf(b)
   })
 }

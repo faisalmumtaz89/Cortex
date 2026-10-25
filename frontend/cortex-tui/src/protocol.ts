@@ -2,6 +2,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import readline from "node:readline"
 
 export type SessionStatus = "idle" | "busy" | "retry"
+
+/** A turn is running while its session is busy or waiting to retry a request. */
+export function turnRunning(status: SessionStatus): boolean {
+  return status === "busy" || status === "retry"
+}
 export type EventType =
   | "session.status"
   | "message.updated"
@@ -232,8 +237,8 @@ export class RpcClient {
     }
   }
 
-  /** SIGTERM the worker — used by the exit path so lumen-server teardown
-   * starts immediately instead of waiting for stdin EOF. */
+  /** SIGTERM the worker — used by the exit path so worker teardown starts
+   * immediately instead of waiting for stdin EOF. */
   killWorker(): void {
     try {
       this.process.kill("SIGTERM")

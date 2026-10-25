@@ -5,7 +5,7 @@ Usage:
         -a "cortex_agent:CortexAgent" -m azure/gpt-5.5 -y ...
 
 The adapter uploads a locally built Cortex wheel (see benchmark/build_wheel.sh)
-into the task container, installs it cloud-only (no MLX), and runs one headless
+into the task container, installs it, and runs one headless
 agent turn: `cortex -p "<instruction>" --model <provider:model> --full-auto`.
 
 Model credentials come from the host environment (AZURE_OPENAI_API_KEY /
@@ -29,9 +29,8 @@ _VENDOR_DIR = _HOST_REPO / "benchmark" / "vendor"
 _REMOTE_VENV = "/installed-agent/venv"
 _UV_RELEASE = "https://github.com/astral-sh/uv/releases/latest/download"
 
-# Cloud-only runtime dependencies (the wheel is installed with --no-deps so the
-# macOS-only MLX/GGUF stack never reaches the Linux container).
-_CLOUD_DEPS = "pydantic pyyaml psutil openai anthropic"
+# Runtime dependencies, installed ahead of the wheel (which goes in with --no-deps).
+_CLOUD_DEPS = "pydantic pyyaml openai anthropic"
 
 _BOOTSTRAP_PYTHON = """
 set -e

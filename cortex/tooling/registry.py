@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
 from cortex.tooling.builtin import (
@@ -12,9 +12,17 @@ from cortex.tooling.builtin import (
     ListDirTool,
     ReadFileTool,
     SearchTool,
+    SkillTool,
     WriteFileTool,
 )
-from cortex.tooling.types import ToolCall, ToolExecutionState, ToolResult, ToolSpec
+from cortex.tooling.skills import Skill, load_skills
+from cortex.tooling.types import (
+    ToolCall,
+    ToolExecutionState,
+    ToolResult,
+    ToolSpec,
+    TurnInterrupt,
+)
 
 _TOOL_PROFILE_ORDER = {
     "off": 0,
@@ -32,6 +40,8 @@ class ToolRegistry:
         self.profile = profile if profile in _TOOL_PROFILE_ORDER else "off"
 
         self._tools: Dict[str, BaseTool] = {}
+        # Read once per registry, so the system prompt and the skill tool agree.
+        self.skills: Dict[str, Skill] = load_skills(self.repo_root) if self.profile != "off" else {}
         self._register_defaults()
 
     def _enabled_for_profile(self, required_profile: str) -> bool:
@@ -48,6 +58,8 @@ class ToolRegistry:
         self._register(EditFileTool(), "edit")
         self._register(WriteFileTool(), "edit")
         self._register(BashTool(), "full")
+        if self.skills:
+            self._register(SkillTool(self.skills), "read_only")
 
     def names(self) -> List[str]:
         return sorted(self._tools.keys())
@@ -64,7 +76,9 @@ class ToolRegistry:
             return name
         return tool.permission
 
-    def execute(self, *, call: ToolCall, session_id: str) -> ToolResult:
+    def execute(
+        self, *, call: ToolCall, session_id: str, interrupt: Optional[TurnInterrupt] = None
+    ) -> ToolResult:
         tool = self._tools.get(call.name)
         if tool is None:
             return ToolResult(
@@ -79,6 +93,7 @@ class ToolRegistry:
             repo_root=self.repo_root,
             session_id=session_id,
             call_id=call.id,
+            interrupt=interrupt or TurnInterrupt(),
         )
 
         try:

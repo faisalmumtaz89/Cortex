@@ -1,12 +1,11 @@
-"""Release discovery for Cortex and the managed Lumen engine.
+"""Release discovery for Cortex.
 
-Both projects publish GitHub releases, and GitHub answers
+Cortex publishes GitHub releases, and GitHub answers
 ``/{repo}/releases/latest`` with a redirect to ``/releases/tag/<tag>`` — a
 rate-limit-free, unauthenticated way to learn the latest version without the
 API. This module probes that redirect (redirects DISABLED — the Location
 header is the answer), parses ``--version``-style output, and caches results
-for a day so the startup check costs at most one round-trip per component per
-day.
+for a day so the startup check costs at most one round-trip per day.
 
 Every network-facing function fails SILENTLY (returns None): update discovery
 is a courtesy, never a startup hazard.
@@ -34,7 +33,6 @@ from typing import Any, Optional, Protocol, Tuple
 
 logger = logging.getLogger(__name__)
 
-LUMEN_REPO = "faisalmumtaz89/Lumen"
 CORTEX_REPO = "faisalmumtaz89/Cortex"
 
 DEFAULT_PROBE_BASE = "https://github.com"
@@ -55,7 +53,7 @@ class UrlOpener(Protocol):
 
 
 def parse_version_token(text: object) -> Optional[Tuple[int, ...]]:
-    """Parse a version from CLI output like ``lumen v0.3.0`` or bare ``0.3.0``.
+    """Parse a version from CLI output like ``cortex v1.0.19`` or bare ``1.0.19``.
 
     The version is the LAST whitespace token (tools prepend their name), an
     optional leading ``v`` is stripped, and the remainder must be dot-separated
@@ -239,8 +237,8 @@ class UpdateCheckCache:
     authoritative 404 = no releases) may refresh a component. A transient
     failure never overwrites a cached tag and never extends its freshness:
     the stale tag stays available as a fallback and the component is re-probed
-    on the next check. The earlier flat schema ({checked_at, lumen_latest,
-    cortex_latest}) is read tolerantly and upgraded on the next write.
+    on the next check. A flat-schema file ({checked_at, cortex_latest, ...}) is
+    read tolerantly and upgraded on the next write.
     """
 
     def __init__(
@@ -290,13 +288,12 @@ class UpdateCheckCache:
         checked_at = payload.get("checked_at")
         if not isinstance(checked_at, (int, float)):
             return {}
-        entries = {}
-        for name, key in (("lumen", "lumen_latest"), ("cortex", "cortex_latest")):
-            tag = payload.get(key)
-            entries[name] = CachedComponent(
+        tag = payload.get("cortex_latest")
+        return {
+            "cortex": CachedComponent(
                 tag=tag if isinstance(tag, str) else None, checked_at=float(checked_at)
             )
-        return entries
+        }
 
     def is_fresh(self, entry: CachedComponent) -> bool:
         age = float(self.clock()) - entry.checked_at
@@ -315,14 +312,10 @@ class UpdateCheckCache:
         except OSError:
             logger.debug("failed to write update-check cache at %s", self.path, exc_info=True)
 
-    def store(self, *, lumen_latest: Optional[str], cortex_latest: Optional[str]) -> None:
-        """Convenience writer: both components definitively answered NOW."""
-        now = float(self.clock())
+    def store(self, *, cortex_latest: Optional[str]) -> None:
+        """Convenience writer: the probe definitively answered NOW."""
         self.store_components(
-            {
-                "lumen": CachedComponent(tag=lumen_latest, checked_at=now),
-                "cortex": CachedComponent(tag=cortex_latest, checked_at=now),
-            }
+            {"cortex": CachedComponent(tag=cortex_latest, checked_at=float(self.clock()))}
         )
 
 
@@ -331,9 +324,9 @@ class UpdateCheckCache:
 
 @dataclass(frozen=True)
 class UpdateCheckResult:
-    """Latest known release tags (``v``-prefixed as published) per component.
+    """Latest known Cortex release tag (``v``-prefixed as published).
 
-    ``lumen_resolved``/``cortex_resolved`` carry the probe layer's
+    ``cortex_resolved`` carries the probe layer's
     definitive-vs-transient distinction (see ReleaseProbe): a None tag with
     ``resolved=True`` means the repo AUTHORITATIVELY has no releases (GitHub
     404, possibly remembered from the cache), while ``resolved=False`` means
@@ -341,10 +334,8 @@ class UpdateCheckResult:
     simply UNKNOWN. User-facing surfaces must never present the unknown case
     as the factual claim "no releases exist"."""
 
-    lumen_latest: Optional[str]
     cortex_latest: Optional[str]
     from_cache: bool
-    lumen_resolved: bool
     cortex_resolved: bool
 
 
@@ -354,11 +345,10 @@ def check_for_updates(
     opener: UrlOpener | None = None,
     timeout: float = 3.0,
     force: bool = False,
-    lumen_repo: str = LUMEN_REPO,
     cortex_repo: str = CORTEX_REPO,
 ) -> UpdateCheckResult:
-    """Latest release tags for Lumen and Cortex — at most one probe per
-    component per TTL window, with per-component merge semantics:
+    """Latest Cortex release tag — at most one probe per TTL window, with
+    these cache semantics:
 
       - A component with a FRESH cache entry is not probed (unless ``force``,
         for the live /update status path).
@@ -372,7 +362,7 @@ def check_for_updates(
     """
     active_cache = cache or UpdateCheckCache()
     previous = active_cache.load_components()
-    repos = {"lumen": lumen_repo, "cortex": cortex_repo}
+    repos = {"cortex": cortex_repo}
 
     resolved: dict[str, CachedComponent] = {}
     probed_any = False
@@ -398,13 +388,11 @@ def check_for_updates(
         return entry.tag if entry is not None else None
 
     return UpdateCheckResult(
-        lumen_latest=_tag("lumen"),
         cortex_latest=_tag("cortex"),
         from_cache=not probed_any,
         # An entry in ``resolved`` is an authoritative answer: a fresh or
         # stale-fallback tag, or a definitive "no releases" (tag None). A
         # component with NO entry failed transiently with nothing cached.
-        lumen_resolved="lumen" in resolved,
         cortex_resolved="cortex" in resolved,
     )
 

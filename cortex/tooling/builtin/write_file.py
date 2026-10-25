@@ -5,7 +5,13 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
-from cortex.tooling.builtin.common import is_binary_file, resolve_repo_path
+from cortex.tooling.builtin.common import (
+    is_binary_file,
+    line_break,
+    resolve_repo_path,
+    view_of,
+    write_text_atomic,
+)
 from cortex.tooling.builtin.diff_util import build_line_diff
 from cortex.tooling.types import ToolExecutionState, ToolResult
 
@@ -37,31 +43,40 @@ class WriteFileTool(BaseTool[WriteFileArgs]):
         if target.exists() and is_binary_file(target):
             raise ToolExecutionError(f"refusing to overwrite binary file: {parsed_args.path}")
 
-        payload = parsed_args.content.encode("utf-8")
-        if len(payload) > _MAX_WRITE_BYTES:
-            raise ToolExecutionError(
-                f"content too large ({len(payload)} bytes > {_MAX_WRITE_BYTES})"
-            )
-
         existed = target.exists()
         # Capture the old content BEFORE overwriting so the diff is accurate.
         old_content = ""
         if existed:
             try:
-                old_content = target.read_text(encoding="utf-8")
+                old_content = target.read_bytes().decode("utf-8")
             except (UnicodeDecodeError, OSError):
                 old_content = ""  # undecodable old file → skip the diff below
 
+        # read_file shows lines without their "\r" and without a byte order
+        # mark, so new content without them keeps the old file's: its lines
+        # get the line break the old file used most.
+        content = parsed_args.content
+        if "\r" not in content:
+            content = content.replace("\n", line_break(old_content))
+        if content and old_content.startswith("\ufeff") and not content.startswith("\ufeff"):
+            content = "\ufeff" + content
+
+        payload = content.encode("utf-8")
+        if len(payload) > _MAX_WRITE_BYTES:
+            raise ToolExecutionError(
+                f"content too large ({len(payload)} bytes > {_MAX_WRITE_BYTES})"
+            )
+
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(parsed_args.content, encoding="utf-8")
+        write_text_atomic(target, content)
 
         action = "overwrote" if existed else "created"
         rel = target.relative_to(context.repo_root)
         rel_str = str(rel)
         metadata: dict = {"path": rel_str, "bytes": len(payload), "created": not existed}
         diff = build_line_diff(
-            old_content,
-            parsed_args.content,
+            view_of(old_content),
+            view_of(content),
             path=rel_str,
             op="create" if not existed else "overwrite",
             language=target.suffix.lstrip(".").lower() or None,

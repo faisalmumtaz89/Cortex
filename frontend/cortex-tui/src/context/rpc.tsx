@@ -1,5 +1,5 @@
 import { createContext, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
-import { SLASH_COMMANDS } from "../commands"
+import { SLASH_COMMANDS, isSkillInput, setSkills, skills } from "../commands"
 import { exitCortex, registerWorkerKill } from "../lib/exit"
 import { RpcClient } from "../protocol"
 import { useStore } from "./store"
@@ -11,7 +11,8 @@ function buildHelpText(): string {
     const name = command.name === "quit" ? "/quit (/exit)" : `/${command.name}`
     return `${name.padEnd(16)}${command.description}`
   })
-  return rows.join("\n")
+  const skillRows = skills().map((skill) => `/${skill.name.padEnd(15)}${skill.description}`)
+  return skillRows.length ? [...rows, "", "Skills:", ...skillRows].join("\n") : rows.join("\n")
 }
 
 type RpcContextValue = {
@@ -28,18 +29,14 @@ const RpcContext = createContext<RpcContextValue>()
 const SLASH_COMMAND_ALIASES = new Set([
   "help",
   "status",
-  "gpu",
   "model",
   "models",
-  "download",
   "login",
   "clear",
   "save",
-  "benchmark",
   "template",
   "quit",
   "exit",
-  "setup",
   "update",
 ])
 
@@ -101,7 +98,7 @@ function parseWorkerCommand(): { cmd: string; args: string[]; cwd: string } {
 
   return {
     cmd: process.env.PYTHON || "python3",
-    args: ["-m", "cortex", "--worker-stdio"],
+    args: ["-P", "-m", "cortex", "--worker-stdio"],
     cwd,
   }
 }
@@ -149,20 +146,6 @@ export function RpcProvider(props: ParentProps) {
 
   client.onEvent((event) => {
     store.applyEvent(event)
-    // A background operation finished (download auto-load, a model boot, or
-    // an engine update): refresh the catalog so the picker/header show the
-    // new state.
-    if (event.event_type === "message.updated") {
-      const payload = event.payload as Record<string, unknown> | undefined
-      const progress = payload?.progress as Record<string, unknown> | undefined
-      const kind = progress ? String(progress.kind ?? "") : ""
-      if (
-        payload?.final === true &&
-        (kind === "download" || kind === "model-load" || kind === "engine-update")
-      ) {
-        void refreshModels()
-      }
-    }
   })
 
   const bootstrap = async () => {
@@ -173,6 +156,16 @@ export function RpcProvider(props: ParentProps) {
     const session = await client.request("session.create_or_resume", {})
     store.setSessionID(String(session.session_id ?? ""))
     await refreshModels()
+    await refreshSkills()
+  }
+
+  const refreshSkills = async (): Promise<void> => {
+    try {
+      const listing = await client.request("skill.list", {})
+      setSkills(Array.isArray(listing.skills) ? (listing.skills as { name: string; description: string }[]) : [])
+    } catch {
+      // Non-fatal: the palette keeps the skills it listed last.
+    }
   }
 
   const refreshModels = async (): Promise<void> => {
@@ -193,14 +186,10 @@ export function RpcProvider(props: ParentProps) {
 
     const slashCommand = normalizeSlashCommand(normalized) || (normalized.startsWith("/") ? normalized : `/${normalized}`)
     const lowerCommand = slashCommand.toLowerCase()
-    const commandTimeoutMs = parseTimeoutMs(
+    const timeoutMs = parseTimeoutMs(
       process.env.CORTEX_WORKER_COMMAND_TIMEOUT_MS ?? process.env.CORTEX_WORKER_TURN_TIMEOUT_MS,
       1_800_000,
     )
-    const downloadTimeoutMs = parseTimeoutMs(process.env.CORTEX_WORKER_DOWNLOAD_TIMEOUT_MS, commandTimeoutMs)
-    const timeoutMs = lowerCommand.startsWith("/download")
-      ? Math.max(downloadTimeoutMs, commandTimeoutMs)
-      : commandTimeoutMs
 
     store.clearError()
     // /help is rendered from the registry (single source of truth) — no round-trip.
@@ -259,24 +248,14 @@ export function RpcProvider(props: ParentProps) {
     }
     store.clearError()
     try {
-      const maybeCommand = normalizeSlashCommand(normalized)
+      const maybeCommand = isSkillInput(normalized) ? null : normalizeSlashCommand(normalized)
       if (maybeCommand) {
         return runCommand(maybeCommand)
       }
 
       if (store.state.activeModelLabel === "No model loaded") {
-        const firstLocal = (store.state.firstLocalModelName || "").trim()
-        if (firstLocal) {
-          const loaded = await runCommand(`/model ${firstLocal}`)
-          if (!loaded) {
-            return false
-          }
-        } else {
-          store.setError(
-            "No model loaded. Run: download mlx-community/Nanbeige4.1-3B-bf16 --load",
-          )
-          return false
-        }
+        store.setError("No model loaded. Pick one with /model, or add a key with /login.")
+        return false
       }
 
       const result = await client.request(
@@ -297,6 +276,7 @@ export function RpcProvider(props: ParentProps) {
       }
       store.flushPendingEvents()
       store.applySubmitResultFallback(result)
+      void refreshSkills() // skills added meanwhile show up in the palette
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
