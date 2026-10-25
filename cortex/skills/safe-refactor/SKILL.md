@@ -12,14 +12,18 @@ description: >-
 Green to green. The suite passes before you start, after every step, and at
 the end. What the code does for its callers stays the same.
 
+**The gate:** run the whole suite before any edit. If a single test fails or
+errors, anywhere, even in code you will not touch, you do not refactor in this
+turn: your answer is the list of failures and the advice to fix them first.
+
 ## Process
 
 1. **Baseline.** Find the project's test command (AGENTS.md, README, CI
    config, `pyproject.toml`, `package.json`, `Makefile`) and run the full suite.
    Give long suites a longer bash timeout (up to 600000 ms); if a run still
-   times out, run it one directory at a time. If any test fails, stop, even
-   when the failures look unrelated to the code you would touch: report them
-   and do not refactor. Fixing them is a separate task. Note the number of
+   times out, run it one directory at a time. Run it without `-x`, so you see
+   every failure. If any test fails, apply the gate above: report the failures
+   and stop. Fixing them is a separate task. Otherwise note the number of
    passing tests.
 2. **Write down the contract**, everything that must not change: public
    names and signatures (exports, `__all__`, documented APIs), import paths
