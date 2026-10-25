@@ -35,6 +35,8 @@ def test_read_only_skills_cannot_edit(shipped) -> None:
     assert shipped["map-and-plan"].allowed_tools == ("read_file", "list_dir", "search")
     for name in ("review-changes", "commit-and-pr"):
         allowed = set(shipped[name].allowed_tools or ())
-        assert allowed and not allowed & {"edit_file", "write_file"}, name
+        # They may write the file the user asks for (a review, a PR description),
+        # but never edit existing files.
+        assert allowed and "edit_file" not in allowed, name
     for name in ("reproduce-and-fix", "safe-refactor"):
         assert shipped[name].allowed_tools is None, name

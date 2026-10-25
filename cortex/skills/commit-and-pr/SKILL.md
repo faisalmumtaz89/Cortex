@@ -6,13 +6,15 @@ description: >-
   leftovers, writes clear commit messages and PR descriptions, and runs git
   safely: no force pushes, no history rewrites. It never changes source or
   test files; if the request also asks for code changes, make them first.
-allowed-tools: [read_file, list_dir, search, bash]
+allowed-tools: [read_file, list_dir, search, bash, write_file]
 ---
 # Commit and PR
 
 Package finished work: check it, commit it, and push or describe it only when
 asked. You never change source or test files. If they need a change, stop and
-say what.
+say what. The one file you may write is one the user asks for to hold a commit
+message or pull request description (such as `PR_BODY.md`): use write_file
+for it, and only for it.
 
 ## Process
 
@@ -85,4 +87,5 @@ say what.
   for exactly that.
 - Editing source or test files, even to remove a debug line, and writing or
   deleting repository files through bash (`sed -i`, redirects, formatters).
-  Report what needs to change instead.
+  Report what needs to change instead. write_file is only for a message or
+  description file the user asked for.

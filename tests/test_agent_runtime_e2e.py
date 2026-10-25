@@ -921,6 +921,31 @@ def test_a_second_skill_narrows_the_limit_but_never_lifts_it(
     assert not (scratch_repo / "ran.txt").exists()
 
 
+def test_shipped_commit_and_pr_writes_a_requested_description_but_never_edits(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    before = (scratch_repo / "README.md").read_text()
+    requests = _converse_with_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"tool_calls": [{"name": "write_file", "arguments": {
+                "path": "PR_BODY.md", "content": "## Summary\nAdds things.\n"}}]},
+            {"tool_calls": [{"name": "edit_file", "arguments": {
+                "path": "README.md", "old_text": "Scratch", "new_text": "Edited"}}]},
+            {"text": "Done."},
+        ],
+        ["/commit-and-pr write the pull request description into PR_BODY.md"],
+        env_overrides={"CORTEX_TOOLS_PROFILE": "full"},
+        approve=True,
+    )
+
+    results = [m["content"] for m in requests[-1]["messages"] if m["role"] == "tool"]
+    assert (scratch_repo / "PR_BODY.md").read_text() == "## Summary\nAdds things.\n"
+    assert "commit-and-pr skill does not use edit_file" in results[1]
+    assert (scratch_repo / "README.md").read_text() == before
+
+
 def test_shipped_map_and_plan_is_listed_and_keeps_the_turn_read_only(
     tmp_path: Path, scratch_repo: Path
 ) -> None:

@@ -141,8 +141,8 @@ Cortex ships five skills:
 | `map-and-plan` | Map the code a question or change touches, with `path:line` references, and write a step-by-step plan before any edit | read-only: `read_file`, `list_dir`, `search` |
 | `reproduce-and-fix` | Find the first real error in a bug report, failing test or CI log, reproduce it with a failing test, fix the code (never the test) and run the full suite | all |
 | `safe-refactor` | Restructure code or upgrade dependencies from a passing suite, in small steps, keeping behaviour and public APIs | all |
-| `review-changes` | Review a diff for bugs and security flaws, prove each finding by running it, and rank them; it never fixes them | no `edit_file` or `write_file` |
-| `commit-and-pr` | Check a diff for secrets and debug leftovers, write the commit message and PR description, and run git without force pushes or history rewrites | no `edit_file` or `write_file` |
+| `review-changes` | Review a diff for bugs and security flaws, prove each finding by running it, and rank them; it never fixes them | no `edit_file`; `write_file` only for a review file you ask for |
+| `commit-and-pr` | Check a diff for secrets and debug leftovers, write the commit message and PR description, and run git without force pushes or history rewrites | no `edit_file`; `write_file` only for a message or PR description file you ask for |
 
 Cortex finds skills in three places, and a skill in a later one replaces one of
 the same name in an earlier one:

@@ -6,7 +6,7 @@ description: >-
   finding with a reproduction it runs, drops what it cannot prove, and ranks
   findings by severity. Reports only: edits are refused for the rest of the
   turn, so for "review and fix" it reports and fixes come next message.
-allowed-tools: [read_file, list_dir, search, bash]
+allowed-tools: [read_file, list_dir, search, bash, write_file]
 ---
 # Review changes
 
@@ -64,7 +64,9 @@ as proven what you could not prove.
 
 ## Rules
 
-- Never change the repository. Run only read-only git commands (`status`,
+- Never change the repository, except to write the review itself to a file
+  when the user asks for that (use write_file, and only for that file). Run
+  only read-only git commands (`status`,
   `diff`, `log`, `show`, `blame`, `merge-base`, `rev-parse`, `ls-files`,
   `grep`), and never write or delete repository files through bash either: no
   `sed -i`, redirects into the repository, formatters, package installs, or
