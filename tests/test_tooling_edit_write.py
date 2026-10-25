@@ -147,3 +147,10 @@ def test_system_prompt_without_project_context(tmp_path: Path) -> None:
 
     assert "Project instructions" not in prompt
     assert str(tmp_path) in prompt
+
+
+def test_system_prompt_keeps_changes_to_what_was_asked(tmp_path: Path) -> None:
+    prompt = build_system_prompt(cwd=tmp_path)
+
+    assert "Change only what the request needs" in prompt
+    assert "satisfy the other plausible readings" not in prompt
