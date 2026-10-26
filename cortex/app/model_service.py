@@ -127,7 +127,12 @@ class ModelService:
             },
             "cloud": cloud,
             "providers": [
-                {"provider": provider.value, "authenticated": bool(is_auth), "auth_source": source}
+                {
+                    "provider": provider.value,
+                    "authenticated": bool(is_auth),
+                    "auth_source": source,
+                    "url_saved": bool(self.endpoint_url(provider)),
+                }
                 for provider, (is_auth, source) in auth.items()
             ],
         }
@@ -155,12 +160,16 @@ class ModelService:
 
         is_auth, _source = self.cloud_router.get_auth_status(provider_enum)
         if not is_auth:
+            # A saved URL is used again: only the key is missing.
+            url_saved = bool(self.endpoint_url(provider_enum))
+            url_hint = "" if url_saved else _login_url_hint(provider_enum)
+            variables = ENV_KEY_MAP[provider_enum] if url_saved else _setup_variables(provider_enum)
             return {
                 "ok": False,
                 "message": (
                     f"{provider_enum.value} is not authenticated. "
-                    f"Run /login {provider_enum.value} <api_key>{_login_url_hint(provider_enum)} "
-                    f"in cortex, or set {_setup_variables(provider_enum)}."
+                    f"Run /login {provider_enum.value} <api_key>{url_hint} "
+                    f"in cortex, or set {variables}."
                 ),
             }
 

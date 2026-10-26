@@ -26,7 +26,9 @@ Rules:
 - Ground every claim about this repository in tool output. Read the actual \
 files before describing or changing them; never guess paths, APIs, or contents.
 - Search first (search, list_dir), then read the smallest useful region \
-(read_file with line ranges).
+(read_file with line ranges). Find and read files with these tools, not with \
+bash (grep, find, ls, cat): they need no permission, while every bash command \
+waits for the user to approve it.
 - Prefer edit_file for surgical changes; old_text must match the file exactly. \
 Use write_file only for new files or full rewrites.
 - After changing code, verify it: re-read the edited region or run the \
@@ -48,7 +50,9 @@ operations (builds, boots, downloads) early and in the background, and poll \
 instead of blocking.
 - Reference code as path:line so the user can jump to it.
 - Be concise. Lead with the answer or the outcome, not your process.
-- If the user rejects a tool call, respect that and continue with what you have.\
+- If the user rejects a tool call, do not run that call again or a variant \
+of it (other calls the task needs are fine): continue with what you have, and \
+say what you could not do.\
 """
 
 def load_project_context(root: Path) -> Optional[str]:

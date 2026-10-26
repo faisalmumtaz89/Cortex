@@ -8,9 +8,11 @@ stays pipeable. Exit codes: 0 success, 1 turn error, 2 setup error.
 from __future__ import annotations
 
 import io
+import re
 import sys
 from typing import Optional
 
+from cortex.cloud.types import CloudProvider
 from cortex.tooling.types import PermissionAction, PermissionRule
 
 # Slash commands of the interactive app; a skill's /<name> still runs headless.
@@ -22,7 +24,40 @@ _REFUSED = (
     "Not allowed: this headless run (cortex -p) allows edits and shell commands only "
     "with --full-auto."
 )
+_GLOB_ESCAPE = re.compile(r"\[([*?\[])\]")  # how "Allow always" escapes a wildcard
 _MODEL_STATE_KEYS = ("last_used_cloud_provider", "last_used_cloud_model", "selected_models")
+
+
+def _allowed_commands(manager) -> str:
+    """The commands saved rules let this run use, for the refusal the model
+    reads: told only that commands need --full-auto, it gives up on them."""
+    commands = [
+        _GLOB_ESCAPE.sub(r"\1", rule.pattern)
+        for rule in manager.persisted_rules
+        if rule.permission == "bash"
+        and rule.action == PermissionAction.ALLOW
+        and rule.repo in ("", manager.repo)
+    ]
+    if not commands:
+        return ""
+    return " These commands are allowed, written exactly so: " + ", ".join(
+        f"`{command}`" for command in commands
+    ) + "."
+
+
+def _example_model(runtime) -> str:
+    """A --model to suggest: one of a provider whose key is set, else OpenAI's."""
+    router = runtime.model_service.cloud_router
+    for provider in CloudProvider:
+        if router.get_auth_status(provider)[0]:
+            names = {CloudProvider.AZURE: "<deployment>", CloudProvider.OPENAI_COMPATIBLE: "<model>"}
+            catalog = [
+                ref for ref in runtime.model_service.cloud_catalog.list_models()
+                if ref.provider == provider
+            ]
+            model_id = catalog[0].model_id if catalog else names.get(provider, "<model>")
+            return f"--model {provider.value}:{model_id}"
+    return "--model openai:gpt-5.5"
 
 
 def _saved_model(config) -> str:
@@ -77,7 +112,7 @@ class _Printer:
                     print(f"[tool] {tool} {part.get('input', {})}", file=sys.stderr)
                 elif state == "error" or part.get("ok") is False:
                     error = str(part.get("error", ""))
-                    if error == _REFUSED:
+                    if error.startswith(_REFUSED):
                         self.denied += 1
                         print(f"[tool] {tool} refused (needs --full-auto)", file=sys.stderr)
                     else:
@@ -128,7 +163,10 @@ def run_headless(
         manager.base_rules.insert(
             0,
             PermissionRule(
-                permission="*", pattern="*", action=PermissionAction.DENY, reason=_REFUSED
+                permission="*",
+                pattern="*",
+                action=PermissionAction.DENY,
+                reason=_REFUSED + _allowed_commands(manager),
             ),
         )
         manager.base_rules.extend(
@@ -158,7 +196,7 @@ def run_headless(
         if not bool(selection.get("ok")):
             message = str(selection.get("message", model))
             if message.startswith("Usage: /model"):
-                message = "pass --model provider:model, for example --model openai:gpt-5.5"
+                message = f"pass --model provider:model, for example {_example_model(runtime)}"
             print(f"model selection failed: {message}", file=sys.stderr)
             return 2
 
@@ -172,7 +210,7 @@ def run_headless(
             return 2
         print(
             "error: no model selected. Pass one with --model provider:model, "
-            "for example --model openai:gpt-5.5 (see cortex --help).",
+            f"for example {_example_model(runtime)} (see cortex --help).",
             file=sys.stderr,
         )
         return 2

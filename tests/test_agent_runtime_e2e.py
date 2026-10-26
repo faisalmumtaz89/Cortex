@@ -1203,7 +1203,9 @@ def test_model_list_reports_provider_auth_and_active_uncatalogued_model(
 
     providers = {row["provider"]: row for row in listing["providers"]}
     assert providers["openai-compatible"]["authenticated"] is True
+    assert providers["openai-compatible"]["url_saved"] is True
     assert providers["anthropic"]["authenticated"] is False
+    assert providers["azure"]["url_saved"] is False
     active = [row for row in listing["cloud"] if row["active"]]
     assert [row["selector"] for row in active] == ["openai-compatible:org/model:free"]
 
@@ -1684,6 +1686,36 @@ def test_headless_runs_a_command_a_saved_rule_allows(tmp_path: Path, scratch_rep
     assert "refused" not in process.stderr, process.stderr
 
 
+def test_headless_refusal_names_the_commands_a_saved_rule_allows(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A model that tries another command first learns which ones it may run,
+    instead of concluding that the shell is off."""
+    rules = tmp_path / "home" / ".cortex" / "tool_permissions.yaml"
+    rules.parent.mkdir(parents=True)
+    rules.write_text(
+        "version: 2\nrules:\n  - permission: bash\n    pattern: python3 -m pytest -q\n"
+        f"    action: allow\n    repo: {scratch_repo}\n"
+        "  - permission: bash\n    pattern: ls [*].py\n    action: allow\n"
+        "    repo: /somewhere/else\n",
+        encoding="utf-8",
+    )
+    process, server = _run_against_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"tool_calls": [{"name": "bash", "arguments": {"command": "ls -la"}}]},
+            {"text": "Done."},
+        ],
+    )
+
+    assert process.returncode == 0, process.stderr
+    tool_messages = [m for m in server.requests[1]["messages"] if m["role"] == "tool"]
+    refusal = str(tool_messages[0]["content"])
+    assert "`python3 -m pytest -q`" in refusal, refusal
+    assert "*.py" not in refusal, refusal  # another repository's rule
+
+
 def test_headless_refusal_tells_the_model_and_the_user_about_full_auto(
     tmp_path: Path, scratch_repo: Path
 ) -> None:
@@ -1750,6 +1782,26 @@ def test_headless_names_every_setting_a_provider_still_needs(
     assert process.returncode == 2, process.stderr
     assert "OPENAI_COMPATIBLE_API_KEY" in process.stderr, process.stderr
     assert "OPENAI_COMPATIBLE_BASE_URL" in process.stderr, process.stderr
+
+
+def test_headless_asks_only_for_the_key_once_the_base_url_is_saved(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    for name in ("OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_BASE_URL"):
+        env.pop(name, None)
+    state = tmp_path / "home" / ".cortex" / "state.yaml"
+    state.parent.mkdir(parents=True)
+    state.write_text("openai_compatible_base_url: http://127.0.0.1:9/v1\n", encoding="utf-8")
+    process = subprocess.run(
+        [sys.executable, "-P", "-m", "cortex", "-p", "hi", "--model", "openai-compatible:m"],
+        cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+    )
+
+    assert process.returncode == 2, process.stderr
+    assert "OPENAI_COMPATIBLE_API_KEY" in process.stderr, process.stderr
+    assert "OPENAI_COMPATIBLE_BASE_URL" not in process.stderr, process.stderr
+    assert "<base_url>" not in process.stderr, process.stderr
 
 
 def test_login_works_without_a_system_keyring(tmp_path: Path, scratch_repo: Path) -> None:
@@ -1829,6 +1881,8 @@ def test_headless_without_a_model_says_to_pass_one(tmp_path: Path, scratch_repo:
 
     assert process.returncode == 2, process.stderr
     assert "--model" in process.stderr and "/model" not in process.stderr
+    # The example names the provider whose key is set.
+    assert "--model openai-compatible:<model>" in process.stderr, process.stderr
     assert process.stdout.strip() == ""
 
 

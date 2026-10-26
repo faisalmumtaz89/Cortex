@@ -27,6 +27,12 @@ class _FakeCloudRouter:
     def get_auth_status(self, _provider):
         return self.authenticated, "fake"
 
+    def _azure_endpoint(self):
+        return ""
+
+    def openai_compatible_base_url(self):
+        return ""
+
 
 class _FakeCredentialStore:
     def __init__(self) -> None:
