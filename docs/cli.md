@@ -44,7 +44,7 @@ Runs one agent turn through the same worker wiring the TUI uses:
 - Without `--model`, the model last selected (in the TUI or by an earlier `--model`) is used; the first run needs `--model`. `-p` is also available as `--print`.
 - Each run is a new conversation: it does not see earlier `-p` runs, so say everything the task needs in the prompt.
 - Text the model writes after a tool call starts a new paragraph.
-- Slash commands are not run in headless mode, except `/<skill> request`: anything else is sent to the model as written.
+- Slash commands are not run in headless mode, except `/<skill> request`. A prompt that starts with a command of the interactive app (`/model`, `/login`, `/update`, ...) is refused with exit code `2` and not sent to the model; any other text, `/` or not, is sent to the model as written.
 
 Examples:
 

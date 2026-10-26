@@ -13,6 +13,11 @@ from typing import Optional
 
 from cortex.tooling.types import PermissionAction, PermissionRule
 
+# Slash commands of the interactive app; a skill's /<name> still runs headless.
+_APP_COMMANDS = frozenset(
+    {"/help", "/status", "/model", "/login", "/update", "/clear", "/save", "/quit", "/exit"}
+)
+
 
 class _Printer:
     """Assistant text to stdout, tool activity to stderr. Text that follows a
@@ -107,6 +112,16 @@ def run_headless(
         )
 
     session_id = "headless"
+
+    command = prompt.strip().split(maxsplit=1)[0].lower() if prompt.strip() else ""
+    if command in _APP_COMMANDS:
+        hint = " Pick the model with --model provider:model." if command == "/model" else ""
+        print(
+            f"error: {command} is a command of the interactive app: run `cortex` and type it "
+            f"there.{hint}",
+            file=sys.stderr,
+        )
+        return 2
 
     if model:
         selection = runtime.command_service.execute(

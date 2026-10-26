@@ -1808,3 +1808,22 @@ def test_edit_prompts_show_the_change_before_it_is_made(
     # Every prompt was rejected: nothing was written.
     assert (scratch_repo / "src" / "app.py").read_text(encoding="utf-8") == "def main():\n    return 1\n"
     assert not (scratch_repo / "src" / "new.py").exists()
+
+
+@pytest.mark.parametrize("command", ["/update", "/model openai:gpt-5.5", "/login openai sk-x"])
+def test_headless_says_where_an_app_command_runs(
+    tmp_path: Path, scratch_repo: Path, command: str
+) -> None:
+    """A slash command of the interactive app does nothing headless: it is
+    not sent to the model (that wastes a turn); the run says where it works."""
+    script = _write_script(tmp_path / "script.json", [[{"text": "SENT_TO_MODEL"}]])
+    process = _run_headless(
+        cwd=scratch_repo, env=_worker_env(tmp_path, script), prompt=command, extra_args=[]
+    )
+
+    assert process.returncode == 2, process.stderr
+    assert "SENT_TO_MODEL" not in process.stdout
+    assert "interactive app" in process.stderr
+    if command.startswith("/model"):
+        assert "--model" in process.stderr
+    assert "sk-x" not in process.stderr
