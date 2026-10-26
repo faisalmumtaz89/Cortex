@@ -8,7 +8,7 @@
 | Linux x86_64 or arm64 with glibc 2.28 or later | Debian 10, Ubuntu 20.04, RHEL 8, Fedora, Arch, or newer. Not musl distributions such as Alpine. |
 | Windows 10 or 11 | Through WSL (Windows Subsystem for Linux); the PowerShell installer sets it up. |
 
-The installer needs only `curl`. It uses a Python 3.11+ from your system when one is there; otherwise it downloads `uv` (checksum-verified) and installs a private Python 3.12 under `~/.cortex/install`, without admin rights or a package manager. Source installs also need Git, and Bun (which the installer installs when missing).
+The installer needs only `curl`. It uses a Python 3.11+ from your system when one is there (the first of `python3.13`, `python3.12`, `python3.11` and `python3` that has `venv`; set `CORTEX_PYTHON` to choose one); otherwise it downloads `uv` (checksum-verified) and installs a private Python 3.12 under `~/.cortex/install`, without admin rights or a package manager. Source installs also need Git, and Bun (which the installer installs when missing).
 
 ## Recommended Install
 
@@ -41,7 +41,7 @@ This installs Cortex inside WSL and adds a `cortex` command to Windows that runs
 The installer:
 
 1. Detects your system and processor, and picks the matching wheel (each release has one per supported platform, with the TUI built for it)
-2. Uses a system Python 3.11+, or installs a private one with `uv`
+2. Uses a system Python 3.11+ (see above), or installs a private one with `uv`
 3. Creates an isolated runtime under `~/.cortex/install`
 4. Downloads the `cortex-llm` wheel from the GitHub release (the single distribution channel), verifies it against the release's `.sha256` asset, and installs the verified wheel — or installs the source checkout when run from a clone
 5. Builds the OpenTUI sidecar when missing or stale (installing Bun if needed; release wheels already bundle it)
@@ -134,11 +134,11 @@ rm -f ~/.local/bin/cortex
 for link in /opt/homebrew/bin/cortex /usr/local/bin/cortex; do
   if [ "$(readlink "$link")" = "$HOME/.local/bin/cortex" ]; then rm -f "$link"; fi
 done
-
+rmdir ~/.local/bin ~/.local 2>/dev/null  # only if nothing else is in them
 ```
 
-That removes Cortex. To also remove your settings, saved keys, logs and
-conversations:
+That removes the program; your settings, saved keys, logs and conversations
+stay in `~/.cortex`. To remove them too:
 
 ```bash
 rm -rf ~/.cortex
@@ -153,8 +153,19 @@ Keys saved to `~/.cortex/credentials.json` go with `~/.cortex`.
 
 The installer may have put `~/.local/bin` on your `PATH`: a line under
 `# Added by the Cortex installer` in `~/.zshrc`, `~/.bashrc`, `~/.bash_profile`
-or `~/.profile`, or the file `~/.config/fish/conf.d/cortex.fish`. Remove it if
-nothing else of yours lives in `~/.local/bin`.
+or `~/.profile`, or the file `~/.config/fish/conf.d/cortex.fish`. If nothing
+else of yours lives in `~/.local/bin`, remove them (the installer created a
+profile file that did not exist; delete it once it is empty):
+
+```bash
+for f in ~/.zshrc ~/.bashrc ~/.bash_profile ~/.profile; do
+  [ -f "$f" ] && sed -i.bak -e '/# Added by the Cortex installer/{N;d;}' "$f" && rm -f "$f.bak"
+done
+rm -f ~/.config/fish/conf.d/cortex.fish
+```
+
+`/update cortex` in Cortex 2.0.2 and earlier left a pip cache in `~/.cache/pip`;
+`rm -rf ~/.cache/pip` removes it (it is shared with other Python tools).
 
 On Windows, also delete `%LOCALAPPDATA%\Programs\Cortex` and remove it from
 your user `PATH`.

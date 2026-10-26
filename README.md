@@ -19,11 +19,11 @@ Runs on macOS (Apple Silicon or Intel), Linux (x86_64 or arm64), and Windows thr
    cortex
    ```
 
-3. Add a provider key with `/login openai <api_key>` (or `anthropic`), `/login azure <api_key> <endpoint>`, or `/login openai-compatible <api_key> <base_url>` for DeepSeek, OpenRouter, vLLM and other OpenAI-compatible endpoints — or set the provider's environment variable — then pick a model with `/model` (`/model openai-compatible:<model>` names an OpenAI-compatible model).
+3. Add a provider key with `/login openai <api_key>` (or `anthropic`), `/login azure <api_key> <endpoint>`, or `/login openai-compatible <api_key> <base_url>` for DeepSeek, OpenRouter, vLLM and other OpenAI-compatible endpoints — or set the provider's environment variables (for an OpenAI-compatible endpoint, `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL`) — then pick a model with `/model` (`/model openai-compatible:<model>` names an OpenAI-compatible model).
 
 4. Describe what you want done. Cortex reads `AGENTS.md` (or `CLAUDE.md`) from your project, so your conventions travel with the agent.
 
-5. Stay current with `/update` — Cortex checks daily for a new release and tells you when one is available (`/update cortex` installs it; opt out with `auto_update_check: false`).
+5. Stay current with `/update` — Cortex checks daily for a new release and tells you when one is available (`/update cortex` installs it; opt out with `auto_update_check: false` in `~/.cortex/config.yaml`).
 
 ## How it works
 

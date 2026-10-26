@@ -32,13 +32,8 @@ Conversations are composed of `Message` objects:
 
 ## Context Handling
 
-Every turn sends the whole conversation to the model, after the system prompt, including the tool calls each reply made, their results, and the reasoning the model streamed for each step (saved in the message's `parts`). An interrupted reply keeps the tool calls that finished before the interrupt; a turn that fails with an error is not saved, except a reply cut off at the output limit, at `tools_max_iterations`, or at the context window, which keeps what it wrote. Tool calls and results from the current turn and the two before it are sent in full; in older turns each result and each long tool argument keeps only its first and last 750 characters. Reasoning is always sent in full, as DeepSeek requires. When a conversation outgrows the model's context window, its turns fail; `/clear` starts a fresh one. `Conversation.get_context(max_tokens=...)` can also trim history to a token budget via the API.
+Every turn sends the whole conversation to the model, after the system prompt, including the tool calls each reply made, their results, and the reasoning the model streamed for each step (saved in the message's `parts`). An interrupted reply keeps the tool calls that finished before the interrupt; a turn that fails with an error is not saved, except a reply cut off at the output limit, at `tools_max_iterations`, or at the context window, which keeps what it wrote. Tool calls and results from the current turn and the two before it are sent in full; in older turns each result and each long tool argument keeps only its first and last 750 characters. Reasoning is always sent in full, as DeepSeek requires. When a conversation outgrows the model's context window, its turns fail; `/clear` starts a fresh one.
 
-## Branching (Data Model)
+## Export
 
-`Conversation.branch(...)` can create a new conversation from an earlier message, but branching is **not exposed in the UI** yet.
-
-## Export Formats
-
-- `json` (used by `/save`)
-- `markdown` (available via `export_conversation(..., format="markdown")`, not exposed in the UI)
+`/save` writes the conversation as JSON. There is no other export format, and no branching of a conversation, yet.

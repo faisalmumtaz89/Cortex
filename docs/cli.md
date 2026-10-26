@@ -39,9 +39,9 @@ Runs one agent turn through the same worker wiring the TUI uses:
 
 - The assistant reply streams to **stdout**; tool activity and errors go to **stderr**, so stdout stays pipeable.
 - `--model` accepts the same `provider:model` selectors as `/model`.
-- Permission policy: reads (`read_file`, `list_dir`, `search`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt), and the run then ends with a note on stderr saying how many calls were refused. Persisted rules from `~/.cortex/tool_permissions.yaml` still apply.
-- Exit codes: `0` success, `1` turn error, `2` setup error (no model selected, or model selection failed).
-- Without `--model`, the model last selected (in the TUI or by an earlier `--model`) is used; the first run needs `--model`. If that model cannot be used now (most often: its key is not set in this terminal), the run says why and exits `2`, and the model stays selected for the next run. `-p` is also available as `--print`.
+- Permission policy: reads (`read_file`, `list_dir`, `search`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt): the model is told so, stderr shows `[tool] bash refused (needs --full-auto)`, and the run ends with a note saying how many calls were refused. Persisted rules from `~/.cortex/tool_permissions.yaml` still apply, so a command you allowed with "Allow always" in the app runs without `--full-auto` (see `tool_permissions.yaml` in the [Configuration Guide](configuration.md)).
+- Exit codes: `0` success, `1` turn error (the provider refused the request, the reply was cut off, ...), `2` setup error (no model selected, or model selection failed). A turn whose edits or commands were refused still exits `0`; check stderr for the refusal note.
+- Without `--model`, the model last selected (in the TUI or by an earlier `--model`) is used; the first run needs `--model`. If that model cannot be used now (most often: its key is not set in this terminal), the run says why and exits `2`, and the model stays selected for the next run. A `--model` the provider refuses outright (an unknown model name, for example) is not remembered. `-p` is also available as `--print`.
 - `-p` needs a prompt: an empty one, or `--model`/`--full-auto` without `-p`, is a usage error (exit `2`) rather than starting the interactive app.
 - Each run is a new conversation: it does not see earlier `-p` runs, so say everything the task needs in the prompt.
 - Text the model writes after a tool call starts a new paragraph.
@@ -110,7 +110,7 @@ provider. Give its key and base URL with
 model as `/model openai-compatible:<model>`; the model you select is listed in
 the `/model` picker from then on. Outside the app, set `OPENAI_COMPATIBLE_API_KEY`
 and `OPENAI_COMPATIBLE_BASE_URL` instead (or `cloud_openai_compatible_base_url` in
-`~/.cortex/config.yaml`); these take precedence over what `/login` saved. The reasoning such models stream
+`~/.cortex/config.yaml`); these take precedence over what `/login` saved. A base URL in use is also saved in `~/.cortex/state.yaml`, so a later session needs only the key. The reasoning such models stream
 (`reasoning_content` or `reasoning`) is sent back with the reply step it belongs
 to, in the same field, for the rest of the conversation: the model continues
 from it at each tool step, and DeepSeek requires it whenever tools are offered.

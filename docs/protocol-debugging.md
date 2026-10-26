@@ -56,11 +56,11 @@ What `~/.cortex/cortex.log` records:
 
 ## Smoke Checks
 
-1. Handshake only:
+1. Handshake only (for a source checkout, use `.venv/bin/python` instead):
 
 ```bash
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"app.handshake","params":{"protocol_version":"1.0.0"}}' \
-| python -P -m cortex --worker-stdio
+| ~/.cortex/install/venv/bin/python -P -m cortex --worker-stdio
 ```
 
 2. Verify stdout purity:
