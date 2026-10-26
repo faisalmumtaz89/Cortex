@@ -592,6 +592,56 @@ def test_login_picker_shows_each_provider_auth_status(tui_project) -> None:
     assert "not configured" in row("anthropic"), picker
 
 
+def test_openai_compatible_login_takes_the_base_url_and_needs_no_restart(tui_project) -> None:
+    """Picking openai-compatible in the /login picker asks for the key AND the
+    base URL; after that the model can be selected at once, in the same
+    session. "/login " and "/model " with nothing after them open their
+    pickers instead of failing with a usage error."""
+    project, start = tui_project
+    session = start(
+        [[{"text": "IGNORED"}]],
+        extra_env={"PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"},
+    )
+    session.wait_for("Session ready")
+
+    session.send_key("/login ")
+    time.sleep(1)
+    session.send_key("Enter")
+    session.wait_for("Log in to a provider", timeout=10)
+    for _ in range(3):  # openai, anthropic, azure, openai-compatible
+        session.send_key("Down")
+        time.sleep(0.3)
+    session.send_key("Enter")
+    hint = session.wait_until(
+        lambda frame: "/login openai-compatible" in frame and "<base_url>" in frame,
+        description="the key and base URL prompt for openai-compatible",
+        timeout=10,
+    )
+    assert "<api_key>" in hint
+
+    session.send_line("sk-tui-e2e http://127.0.0.1:9/v1")
+    saved = session.wait_for("Using http://127.0.0.1:9/v1.", timeout=15)
+    assert "sk-tui-e2e" not in saved
+    session.send_key("Escape")
+    time.sleep(0.8)
+
+    session.send_line("/model openai-compatible:deepseek/deepseek-v4.1-flash")
+    session.wait_for("openai-compatible:deepseek/deepseek-v4.1-flash — now active.", timeout=15)
+    session.send_key("Escape")
+    time.sleep(0.8)
+
+    session.send_key("/model ")
+    time.sleep(1)
+    session.send_key("Enter")
+    picker = session.wait_until(
+        lambda frame: "Select a model" in frame and "Enter use" in frame,
+        description="the /model picker from '/model ' + Enter",
+        timeout=10,
+    )
+    assert "openai-compatible:deepseek/deepseek-v4.1-flash" in picker
+    assert "/model provider:model" in picker  # how to pick a model the list lacks
+
+
 def test_bare_login_opens_provider_picker_and_prefills_key_prompt(tui_project) -> None:
     project, start = tui_project
     session = start([[{"text": "IGNORED"}]])
@@ -1154,12 +1204,10 @@ def test_update_notice_status_panel_and_live_update_narration(tui_project, tmp_p
         frame = session.wait_for("Cortex 9.9.9 available — update with /update cortex", timeout=30)
         assert frame.count("Cortex 9.9.9 available") == 1
 
-        # /update from the palette: Enter completes into arg-hint mode
-        # ("[cortex]"), a second Enter runs the bare status report.
+        # /update from the palette: its argument is optional, so one Enter
+        # runs the bare status report.
         session.send_key("/update")
         time.sleep(1)
-        session.send_key("Enter")
-        session.wait_for("[cortex]", timeout=10)
         session.send_key("Enter")
         panel = session.wait_for(
             f"Cortex: {installed} installed · 9.9.9 available — /update cortex", timeout=20

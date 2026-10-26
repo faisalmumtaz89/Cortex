@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable, Dict, cast
 
 from cortex.app.command_output import format_auth_status, format_status_summary
+from cortex.app.model_service import LOGIN_URL_ARGUMENT
 from cortex.cloud.types import CloudProvider
 
 _CLOUD_LOGIN_PROVIDERS = {"openai", "anthropic", "azure", "openai-compatible"}
@@ -162,7 +163,10 @@ class CommandService:
             if not args:
                 return {
                     "ok": False,
-                    "message": "Usage: /login openai|anthropic|azure|openai-compatible [api_key]",
+                    "message": (
+                        "Usage: /login openai|anthropic <api_key>, /login azure <api_key> "
+                        "<endpoint>, or /login openai-compatible <api_key> <base_url>"
+                    ),
                 }
             login_parts = args.split(maxsplit=1)
             provider_name = login_parts[0].strip().lower()
@@ -184,9 +188,26 @@ class CommandService:
                     "auth": auth,
                     "message": format_auth_status(provider=provider.value, auth=auth),
                 }
-            result = self.model_service.auth_save_key(provider, login_parts[1])
-            if not str(result.get("message", "")).strip():
-                result["message"] = f"Saved {provider.value} API key."
+            values = login_parts[1].split()
+            url_argument = LOGIN_URL_ARGUMENT.get(provider)
+            usage = f"/login {provider.value} <api_key>"
+            if url_argument:
+                usage = f"{usage} {url_argument}"
+            if len(values) > (2 if url_argument else 1):
+                takes = "an API key and a URL" if url_argument else "only an API key"
+                return {"ok": False, "message": f"/login {provider.value} takes {takes}: {usage}"}
+            if len(values) == 2:
+                url_result = self.model_service.save_endpoint_url(provider, values[1])
+                if not url_result["ok"]:
+                    return cast(Dict[str, object], url_result)
+            result = self.model_service.auth_save_key(provider, values[0])
+            message = str(result.get("message", "")).strip() or f"Saved {provider.value} API key."
+            if result.get("ok") and url_argument:
+                if len(values) == 2:
+                    message = f"{message} {url_result['message']}"
+                elif not self.model_service.endpoint_url(provider):
+                    message = f"{message} {provider.value} also needs its URL: {usage}"
+            result["message"] = message
             return cast(Dict[str, object], result)
 
         return {"ok": False, "message": f"Unknown command: {cmd}"}

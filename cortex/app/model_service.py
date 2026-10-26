@@ -8,6 +8,21 @@ from cortex.cloud import CloudCredentialStore, CloudModelCatalog, CloudRouter
 from cortex.cloud.credentials import ENV_KEY_MAP
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
 
+# Providers whose /login also takes the URL requests go to.
+LOGIN_URL_ARGUMENT = {
+    CloudProvider.AZURE: "<endpoint>",
+    CloudProvider.OPENAI_COMPATIBLE: "<base_url>",
+}
+
+
+# How many models picked by name the /model picker keeps listing.
+_REMEMBERED_MODELS = 5
+
+
+def _login_url_hint(provider: CloudProvider) -> str:
+    argument = LOGIN_URL_ARGUMENT.get(provider)
+    return f" {argument}" if argument else ""
+
 
 class ModelService:
     """Backend model/auth operations used by the worker RPC server."""
@@ -40,6 +55,24 @@ class ModelService:
     def get_active_model_label(self) -> str:
         return self.active_target.label
 
+    def _selected_selectors(self) -> list[str]:
+        saved = self.config.get_state_value("selected_models", [])
+        return [str(item) for item in saved] if isinstance(saved, list) else []
+
+    def _selected_elsewhere(self) -> list[CloudModelRef]:
+        """Models selected by name that the catalog does not list, newest first."""
+        refs = []
+        for selector in self._selected_selectors():
+            provider, _, model_id = selector.partition(":")
+            if not model_id:
+                continue
+            try:
+                refs.append(CloudModelRef(provider=CloudProvider.from_value(provider),
+                                          model_id=model_id))
+            except ValueError:
+                continue
+        return refs
+
     # ---- listing ---------------------------------------------------------
 
     def list_models(self) -> Dict[str, Any]:
@@ -49,8 +82,9 @@ class ModelService:
         }
         refs = self.cloud_catalog.list_models()
         active_ref = self.active_target.cloud_model
-        if active_ref is not None and active_ref not in refs:
-            refs.append(active_ref)
+        for ref in [*self._selected_elsewhere(), active_ref]:
+            if ref is not None and ref not in refs:
+                refs.append(ref)
         cloud = []
         for ref in refs:
             is_auth, source = auth[ref.provider]
@@ -113,8 +147,8 @@ class ModelService:
                 "ok": False,
                 "message": (
                     f"{provider_enum.value} is not authenticated. "
-                    f"Run /login {provider_enum.value} <api_key> or set "
-                    f"{ENV_KEY_MAP[provider_enum]}."
+                    f"Run /login {provider_enum.value} <api_key>{_login_url_hint(provider_enum)} "
+                    f"or set {ENV_KEY_MAP[provider_enum]}."
                 ),
             }
 
@@ -124,8 +158,8 @@ class ModelService:
                 return {
                     "ok": False,
                     "message": (
-                        "Azure OpenAI endpoint not configured. Set AZURE_OPENAI_ENDPOINT or "
-                        "cloud_azure_endpoint in ~/.cortex/config.yaml, then re-select the model."
+                        "Azure OpenAI also needs your resource endpoint: "
+                        "/login azure <api_key> <endpoint>, or set AZURE_OPENAI_ENDPOINT."
                     ),
                 }
             # Persist so later sessions work without the env var.
@@ -137,9 +171,9 @@ class ModelService:
                 return {
                     "ok": False,
                     "message": (
-                        "OpenAI-compatible base URL not configured. Set "
-                        "OPENAI_COMPATIBLE_BASE_URL or cloud_openai_compatible_base_url in "
-                        "~/.cortex/config.yaml, then re-select the model."
+                        "An OpenAI-compatible endpoint also needs its base URL: "
+                        "/login openai-compatible <api_key> <base_url>, "
+                        "or set OPENAI_COMPATIBLE_BASE_URL."
                     ),
                 }
             self.config.set_state_value("openai_compatible_base_url", base_url)
@@ -149,6 +183,11 @@ class ModelService:
 
         self.config.set_state_value("last_used_cloud_provider", provider_enum.value)
         self.config.set_state_value("last_used_cloud_model", ref.model_id)
+        if ref not in self.cloud_catalog.list_models():
+            # Picked by name (an OpenAI-compatible model, an Azure deployment):
+            # the /model picker lists it from now on.
+            recent = [ref.selector, *(s for s in self._selected_selectors() if s != ref.selector)]
+            self.config.set_state_value("selected_models", recent[:_REMEMBERED_MODELS])
         return {
             "ok": True,
             "message": f"{ref.selector} — now active.",
@@ -162,6 +201,39 @@ class ModelService:
     def auth_save_key(self, provider: CloudProvider, api_key: str) -> Dict[str, Any]:
         ok, message = self.credential_store.save_api_key(provider, api_key)
         return {"ok": ok, "message": message}
+
+    def endpoint_url(self, provider: CloudProvider) -> str:
+        """The Azure endpoint or OpenAI-compatible base URL in effect ("" if none)."""
+        if provider == CloudProvider.AZURE:
+            return self.cloud_router._azure_endpoint()
+        if provider == CloudProvider.OPENAI_COMPATIBLE:
+            return self.cloud_router.openai_compatible_base_url()
+        return ""
+
+    def save_endpoint_url(self, provider: CloudProvider, url: str) -> Dict[str, Any]:
+        """Save the Azure endpoint or OpenAI-compatible base URL given to /login.
+        The environment variable and config.yaml still take precedence."""
+        url = url.strip().rstrip("/")
+        if not url.startswith(("https://", "http://")):
+            return {
+                "ok": False,
+                "message": f"The URL must start with https:// or http:// (got {url}).",
+            }
+        is_azure = provider == CloudProvider.AZURE
+        state_key = "azure_endpoint" if is_azure else "openai_compatible_base_url"
+        self.config.set_state_value(state_key, url)
+        in_effect = self.endpoint_url(provider)
+        if in_effect != url:
+            variable = (
+                "AZURE_OPENAI_ENDPOINT" if provider == CloudProvider.AZURE
+                else "OPENAI_COMPATIBLE_BASE_URL"
+            )
+            return {
+                "ok": True,
+                "message": f"Saved {url}, but {in_effect} is in use: {variable} or "
+                "~/.cortex/config.yaml sets it, and takes precedence.",
+            }
+        return {"ok": True, "message": f"Using {url}."}
 
     def auth_delete_key(self, provider: CloudProvider) -> Dict[str, Any]:
         ok, message = self.credential_store.delete_api_key(provider)

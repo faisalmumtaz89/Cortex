@@ -15,7 +15,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "help", description: "List available commands" },
   { name: "status", description: "Show model & session status" },
   { name: "model", description: "Pick a model (or /model <provider:model>)", argHint: "<provider:model>" },
-  { name: "login", description: "Log in to a cloud provider (picker, then paste the key)", argHint: "<provider> <api_key>" },
+  { name: "login", description: "Log in to a cloud provider (picker, then paste the key)", argHint: "<provider> <api_key> [url]" },
   { name: "clear", description: "Clear the conversation" },
   { name: "save", description: "Save the conversation to disk" },
   { name: "update", description: "Check for updates, or update Cortex", argHint: "[cortex]" },
@@ -62,6 +62,37 @@ export function isSkillInput(input: string): boolean {
 
 export function commandTakesArgs(name: string): boolean {
   return Boolean(findCommand(name)?.argHint)
+}
+
+/** Whether the command also runs with no arguments ("/update [cortex]"). */
+export function argsOptional(name: string): boolean {
+  return Boolean(findCommand(name)?.argHint?.startsWith("["))
+}
+
+// Providers whose /login also takes the URL requests go to (mirrors the worker).
+const LOGIN_URL_ARGUMENT: Record<string, { hint: string; example: string }> = {
+  azure: { hint: "<endpoint>", example: "https://<resource>.openai.azure.com" },
+  "openai-compatible": { hint: "<base_url>", example: "https://api.deepseek.com/v1" },
+}
+
+/** The arg hint for an input in ARG-HINT mode; /login's depends on the provider typed. */
+export function argHintFor(command: SlashCommand, input: string): SlashCommand {
+  if (command.name !== "login") {
+    return command
+  }
+  const provider = input.trim().split(/\s+/)[1]?.toLowerCase() ?? ""
+  const url = LOGIN_URL_ARGUMENT[provider]
+  if (url) {
+    return {
+      ...command,
+      argHint: `${provider} <api_key> ${url.hint}`,
+      description: `Paste the key, a space, then the URL, e.g. ${url.example}`,
+    }
+  }
+  if (provider) {
+    return { ...command, argHint: `${provider} <api_key>`, description: "Paste the key and press Enter" }
+  }
+  return command
 }
 
 /** The leading command token of an input like "/model azure:x" → "model". */

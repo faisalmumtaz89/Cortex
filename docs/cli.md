@@ -61,7 +61,7 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 | `/help` | List available commands |
 | `/status` | Active model and the model that answered the last turn |
 | `/model [provider:model]` | Pick a model interactively, or switch by `provider:model` |
-| `/login <provider> [api_key]` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials |
+| `/login <provider> [api_key] [url]` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials (Azure and OpenAI-compatible also take the URL) |
 | `/update [cortex]` | Show installed vs latest version, or update Cortex |
 | `/clear` | Clear conversation history |
 | `/save` | Save the conversation as JSON |
@@ -83,8 +83,8 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 ```bash
 /login openai <api_key>       # store an OpenAI key
 /login anthropic <api_key>    # store an Anthropic key
-/login azure <api_key>        # store an Azure OpenAI key
-/login openai-compatible <api_key>  # store a key for an OpenAI-compatible endpoint
+/login azure <api_key> <endpoint>                # Azure OpenAI key and resource endpoint
+/login openai-compatible <api_key> <base_url>    # key and base URL of an OpenAI-compatible endpoint
 /login openai                 # show auth status for a provider
 ```
 
@@ -95,16 +95,20 @@ you. The
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY` and
 `OPENAI_COMPATIBLE_API_KEY` environment variables take precedence over a saved
 key when they are set. Azure additionally requires the resource
-endpoint via `AZURE_OPENAI_ENDPOINT` (or `cloud_azure_endpoint` in
-`~/.cortex/config.yaml`); Azure model ids are your deployment names, selected as
+endpoint: give it to `/login azure <api_key> <endpoint>`, or set
+`AZURE_OPENAI_ENDPOINT` (or `cloud_azure_endpoint` in `~/.cortex/config.yaml`,
+which take precedence); Azure model ids are your deployment names, selected as
 `/model azure:<deployment>` (e.g. `azure:gpt-5.5`).
 
 Any other endpoint that serves the OpenAI Chat Completions API (DeepSeek,
 OpenRouter, vLLM, and similar) is reached through the `openai-compatible`
-provider. Set its base URL via `OPENAI_COMPATIBLE_BASE_URL` (or
-`cloud_openai_compatible_base_url` in `~/.cortex/config.yaml`), provide the key with
-`/login openai-compatible <api_key>` or `OPENAI_COMPATIBLE_API_KEY`, and select
-the model as `/model openai-compatible:<model>`. The reasoning such models stream
+provider. Give its key and base URL with
+`/login openai-compatible <api_key> <base_url>` (for example
+`/login openai-compatible sk-... https://api.deepseek.com/v1`), and select the
+model as `/model openai-compatible:<model>`; the model you select is listed in
+the `/model` picker from then on. Outside the app, set `OPENAI_COMPATIBLE_API_KEY`
+and `OPENAI_COMPATIBLE_BASE_URL` instead (or `cloud_openai_compatible_base_url` in
+`~/.cortex/config.yaml`); these take precedence over what `/login` saved. The reasoning such models stream
 (`reasoning_content` or `reasoning`) is sent back with the reply step it belongs
 to, in the same field, for the rest of the conversation: the model continues
 from it at each tool step, and DeepSeek requires it whenever tools are offered.

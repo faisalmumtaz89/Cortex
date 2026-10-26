@@ -1725,3 +1725,49 @@ def test_headless_starts_a_new_paragraph_after_tool_calls(
 
     assert process.returncode == 0, process.stderr
     assert process.stdout == "Looking first.\n\nDone.\n"
+
+
+def test_openai_compatible_setup_finishes_inside_the_app(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """An OpenAI-compatible endpoint needs a base URL as well as a key. /login
+    takes both, and the model can be selected at once, in the same session."""
+    env = _worker_env(tmp_path, tmp_path / "x.json")
+    for name in ("OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_BASE_URL"):
+        env.pop(name, None)
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+
+    def run(command: str) -> dict:
+        return harness.wait_response(harness.send(
+            "command.execute", {"session_id": session_id, "command": command}))["result"]
+
+    try:
+        session_id = _start_session(harness)
+        key_only = run("/login openai-compatible sk-compat-e2e")
+        not_yet = run("/model openai-compatible:deepseek/deepseek-v4.1-flash")
+        bad_url = run("/login openai-compatible sk-compat-e2e ftp://example.com")
+        extra = run("/login openai sk-openai-e2e https://example.com")
+        both = run("/login openai-compatible sk-compat-e2e http://127.0.0.1:9/v1/")
+        selected = run("/model openai-compatible:deepseek/deepseek-v4.1-flash")
+        run("/model openai:scripted")
+        listed = harness.wait_response(harness.send("model.list", {}))["result"]
+    finally:
+        harness.close()
+
+    assert key_only["ok"] is True, key_only
+    assert "/login openai-compatible <api_key> <base_url>" in key_only["message"]
+    assert not_yet["ok"] is False
+    assert "/login openai-compatible <api_key> <base_url>" in not_yet["message"]
+    assert bad_url["ok"] is False and "http" in bad_url["message"]
+    assert extra["ok"] is False and "only an API key" in extra["message"]
+    assert both["ok"] is True, both
+    assert "http://127.0.0.1:9/v1" in both["message"]
+    assert selected["ok"] is True, selected
+    for result in (key_only, bad_url, extra, both):
+        assert "sk-compat-e2e" not in str(result) and "sk-openai-e2e" not in str(result)
+    state = (tmp_path / "home" / ".cortex" / "state.yaml").read_text(encoding="utf-8")
+    assert "openai_compatible_base_url: http://127.0.0.1:9/v1" in state
+    # The /model picker keeps listing a model picked by name after a switch.
+    selectors = [row["selector"] for row in listed["cloud"]]
+    assert "openai-compatible:deepseek/deepseek-v4.1-flash" in selectors, selectors

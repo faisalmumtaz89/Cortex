@@ -10,8 +10,11 @@ class _FakeConfig:
     def __init__(self) -> None:
         self.state: dict[str, str] = {}
 
-    def set_state_value(self, key: str, value: str) -> None:
+    def set_state_value(self, key: str, value) -> None:
         self.state[key] = value
+
+    def get_state_value(self, key: str, default=None):
+        return self.state.get(key, default)
 
 
 class _FakeCloudRouter:
@@ -61,4 +64,5 @@ def test_select_cloud_model_sets_active_target_and_state_when_authenticated() ->
     assert config.state == {
         "last_used_cloud_provider": "openai",
         "last_used_cloud_model": "gpt-5.1",
+        "selected_models": ["openai:gpt-5.1"],  # not in the catalog: the picker keeps it
     }

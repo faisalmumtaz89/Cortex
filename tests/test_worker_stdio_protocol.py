@@ -240,7 +240,7 @@ def test_worker_command_matrix_covers_all_core_command_paths(tmp_path: Path) -> 
             ("/model openai:", False, model_usage),
             ("/model gpt-5.1", False, model_usage),
             ("/model openai:gpt-5.1", False, "openai is not authenticated"),
-            ("/login", False, "Usage: /login openai|anthropic|azure|openai-compatible"),
+            ("/login", False, "Usage: /login openai|anthropic <api_key>, /login azure <api_key> <endpoint>"),
             ("/login unknown", False, "Unsupported provider"),
             ("/login openai", True, "Authentication status"),
             ("/update everything", False, "Usage: /update [cortex]"),

@@ -8,6 +8,8 @@ import { SystemMessage } from "../components/messages/system_message"
 import { UserMessage } from "../components/messages/user_message"
 import { UI_PALETTE, colorForSessionStatus } from "../components/ui_palette"
 import {
+  argHintFor,
+  argsOptional,
   commandTakesArgs,
   commandToken,
   findCommand,
@@ -150,7 +152,7 @@ export function SessionRoute(props: {
       return undefined
     }
     const command = findCommand(commandToken(value))
-    return command && commandTakesArgs(command.name) ? command : undefined
+    return command && commandTakesArgs(command.name) ? argHintFor(command, value) : undefined
   })
   const argMode = createMemo(() => Boolean(argCommand()))
   const matches = createMemo(() => (paletteOpen() ? matchCommands(promptValue()) : []))
@@ -373,7 +375,7 @@ export function SessionRoute(props: {
       openLoginPicker()
       return
     }
-    if (commandTakesArgs(command.name) || command.skill) {
+    if ((commandTakesArgs(command.name) && !argsOptional(command.name)) || command.skill) {
       completeSelected(command) // drop into arg-hint mode (a skill: type the request)
     } else {
       runSlashCommand(`/${command.name}`)
@@ -386,12 +388,25 @@ export function SessionRoute(props: {
       return false
     }
     const action = classifySelectionKey(event)
+    if (action === "enter") {
+      // Text typed or pasted just before Enter may not have reached
+      // promptValue yet: act on what the input holds now.
+      syncPromptValue()
+    }
 
     // ARG-HINT mode: usage line only; Enter runs the full command line.
     if (argMode()) {
       if (action === "enter") {
         event.preventDefault()
-        runSlashCommand(promptValue())
+        // "/model " or "/login " with nothing after it: open the picker.
+        const bare = promptValue().trim().toLowerCase()
+        if (bare === "/model") {
+          openModelPicker()
+        } else if (bare === "/login") {
+          openLoginPicker()
+        } else {
+          runSlashCommand(promptValue())
+        }
         return true
       }
       return false
@@ -975,7 +990,13 @@ export function SessionRoute(props: {
             }}
             getTag={(entry) => entry.tag}
             title="Select a model"
-            footer={terminalColumns() < 64 ? "↑↓ · Enter · Esc" : "↑↓ select · Enter use · Esc cancel"}
+            footer={
+              terminalColumns() < 64
+                ? "↑↓ · Enter · Esc"
+                : terminalColumns() < 100
+                  ? "↑↓ select · Enter use · Esc cancel"
+                  : "↑↓ select · Enter use · Esc cancel · other models: /model provider:model"
+            }
             emptyLabel="No models — /login openai|anthropic|azure|openai-compatible."
           />
         </Show>

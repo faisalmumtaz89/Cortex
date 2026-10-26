@@ -93,7 +93,7 @@ If you see "No model loaded" after starting Cortex, add a provider key and pick 
 
 ### Azure or OpenAI-compatible endpoint not configured
 
-Azure needs its resource endpoint (`AZURE_OPENAI_ENDPOINT` or `cloud_azure_endpoint`), and the `openai-compatible` provider needs its base URL (`OPENAI_COMPATIBLE_BASE_URL` or `cloud_openai_compatible_base_url`). Set the value in the environment or `~/.cortex/config.yaml`, then select the model again.
+Azure needs its resource endpoint, and the `openai-compatible` provider needs its base URL. Give it with the key — `/login azure <api_key> <endpoint>` or `/login openai-compatible <api_key> <base_url>` — and select the model again; no restart is needed. You can instead set `AZURE_OPENAI_ENDPOINT` / `OPENAI_COMPATIBLE_BASE_URL` before starting Cortex, or `cloud_azure_endpoint` / `cloud_openai_compatible_base_url` in `~/.cortex/config.yaml` (read when Cortex starts); either takes precedence over the URL saved by `/login`.
 
 ### Model provenance mismatch
 

@@ -13,8 +13,11 @@ class _FakeConfig:
     def __init__(self) -> None:
         self.state: dict[str, str] = {}
 
-    def set_state_value(self, key: str, value: str) -> None:
+    def set_state_value(self, key: str, value) -> None:
         self.state[key] = value
+
+    def get_state_value(self, key: str, default=None):
+        return self.state.get(key, default)
 
 
 class _FakeCloudRouter:

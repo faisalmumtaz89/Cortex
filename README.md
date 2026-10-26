@@ -19,7 +19,7 @@ Runs on macOS (Apple Silicon or Intel), Linux (x86_64 or arm64), and Windows thr
    cortex
    ```
 
-3. Add a provider key with `/login openai <api_key>` (or `anthropic` / `azure` / `openai-compatible`), or set the provider's environment variable, then pick a model with `/model`.
+3. Add a provider key with `/login openai <api_key>` (or `anthropic`), `/login azure <api_key> <endpoint>`, or `/login openai-compatible <api_key> <base_url>` for DeepSeek, OpenRouter, vLLM and other OpenAI-compatible endpoints — or set the provider's environment variable — then pick a model with `/model` (`/model openai-compatible:<model>` names an OpenAI-compatible model).
 
 4. Describe what you want done. Cortex reads `AGENTS.md` (or `CLAUDE.md`) from your project, so your conventions travel with the agent.
 

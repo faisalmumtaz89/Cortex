@@ -64,8 +64,8 @@ class CloudRouter:
             endpoint = self._azure_endpoint()
             if not endpoint:
                 raise RuntimeError(
-                    "Azure OpenAI endpoint not configured. Set AZURE_OPENAI_ENDPOINT "
-                    "or cloud_azure_endpoint in ~/.cortex/config.yaml."
+                    "Azure OpenAI endpoint not configured. Add it with /login azure "
+                    "<api_key> <endpoint>, or set AZURE_OPENAI_ENDPOINT."
                 )
             # Azure's OpenAI-compatible v1 surface accepts Bearer auth, so the
             # standard OpenAI client works with a rebased URL.
@@ -78,8 +78,8 @@ class CloudRouter:
             base_url = self.openai_compatible_base_url()
             if not base_url:
                 raise RuntimeError(
-                    "OpenAI-compatible base URL not configured. Set OPENAI_COMPATIBLE_BASE_URL "
-                    "or cloud_openai_compatible_base_url in ~/.cortex/config.yaml."
+                    "OpenAI-compatible base URL not configured. Add it with /login "
+                    "openai-compatible <api_key> <base_url>, or set OPENAI_COMPATIBLE_BASE_URL."
                 )
             return ChatCompletionsClient(
                 base_url=base_url, api_key=api_key, timeout_seconds=timeout_seconds
