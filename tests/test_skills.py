@@ -73,3 +73,21 @@ def test_files_outside_the_folder_are_not_listed_and_big_files_are_cut(tmp_path,
         tool.execute(arguments={"name": "good", "file": "out"}, context=context)
     output = tool.execute(arguments={"name": "good", "file": "big.md"}, context=context).output
     assert len(output) < 101_000 and output.endswith("[cut at 100000 bytes]")
+
+
+def test_a_skill_names_the_call_that_reads_its_files(tmp_path, home) -> None:
+    """A skill's files live where Cortex is installed, outside the project,
+    so read_file cannot open them: the skill must name the skill-tool call
+    that does, and no absolute path a model would hand to read_file."""
+    folder = _skill(tmp_path, "good", GOOD)
+    (folder / "examples").mkdir()
+    (folder / "examples" / "plan.md").write_text("Example.", encoding="utf-8")
+    skill = load_skills(tmp_path)["good"]
+    tool = SkillTool({"good": skill})
+    context = ToolContext(repo_root=tmp_path, session_id="s", call_id="c")
+
+    output = tool.execute(arguments={"name": "good"}, context=context).output
+
+    assert 'name "good"' in output and "file" in output and "- examples/plan.md" in output
+    assert "read_file" in output
+    assert str(folder) not in output

@@ -88,8 +88,8 @@ def skill_text(skill: Skill) -> str:
         if len(files) > _MAX_FILES:
             listed += f"\n- … and {len(files) - _MAX_FILES} more"
         sections.append(
-            f"Files of this skill, in {skill.root}; read one with the skill tool "
-            f"and its path as file:\n{listed}"
+            f'Files of this skill. Read one with the skill tool, name "{skill.name}" and '
+            "file set to its path below; read_file cannot open them:\n" + listed
         )
     if skill.allowed_tools is not None:
         sections.append(
