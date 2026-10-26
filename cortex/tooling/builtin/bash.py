@@ -240,23 +240,26 @@ def _stop(proc: subprocess.Popen) -> None:
     """SIGTERM the command's process group; SIGKILL the group if anything in
     it, the shell or a child it started, is still running after the grace
     period."""
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    if not _signal_group(proc.pid, signal.SIGTERM):
         return
     deadline = time.monotonic() + _KILL_GRACE_SECONDS
     while time.monotonic() < deadline:
         proc.poll()
-        try:
-            os.killpg(proc.pid, 0)
-        except ProcessLookupError:
+        if not _signal_group(proc.pid, 0):
             return  # the whole group is gone
         time.sleep(0.05)
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    _signal_group(proc.pid, signal.SIGKILL)
     try:
         proc.wait(timeout=_KILL_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         pass
+
+
+def _signal_group(pgid: int, signum: int) -> bool:
+    """Send `signum` to the process group; False when no process in it can
+    get it. macOS answers EPERM rather than ESRCH once only zombies are left."""
+    try:
+        os.killpg(pgid, signum)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True

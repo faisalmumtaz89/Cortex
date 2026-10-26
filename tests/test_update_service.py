@@ -479,7 +479,7 @@ def _assert_group_gone(pgid: int, *, timeout: float = 5.0) -> None:
     while time.time() < deadline:
         try:
             os.killpg(pgid, 0)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):  # macOS: EPERM once only zombies are left
             return
         time.sleep(0.1)
     raise AssertionError(f"process group {pgid} still alive after shutdown")
