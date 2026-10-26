@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from cortex.ui_runtime.platforms import current_target, wheel_asset_name
 from cortex.update_check import installed_cortex_version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -101,11 +102,14 @@ def _update_stub_env(tmp_path: Path, *, probe_base: str) -> dict:
     pip_record = tmp_path / "pip-args.txt"
     stub_pip = tmp_path / "stub-pip"
     stub_pip.write_text(
-        "#!/usr/bin/env bash\n"
-        f'echo "ARGS=$*" > {pip_record}\n'
-        f"shasum -a 256 \"$2\" | awk '{{print \"SHA256=\"$1}}' >> {pip_record}\n"
-        f'echo "STDIN=$(stat -f %HT /dev/fd/0 2>/dev/null || echo unknown)" >> {pip_record}\n'
-        'echo "Successfully installed cortex-llm"\n',
+        f"#!{sys.executable}\n"
+        "import hashlib, os, stat, sys\n"
+        "kind = 'Character Device' if stat.S_ISCHR(os.fstat(0).st_mode) else 'other'\n"
+        f"with open({str(pip_record)!r}, 'w') as out:\n"
+        "    out.write('ARGS=' + ' '.join(sys.argv[1:]) + '\\n')\n"
+        "    out.write('SHA256=' + hashlib.sha256(open(sys.argv[2], 'rb').read()).hexdigest() + '\\n')\n"
+        "    out.write('STDIN=' + kind + '\\n')\n"
+        "print('Successfully installed cortex-llm')\n",
         encoding="utf-8",
     )
     stub_pip.chmod(0o755)
@@ -129,7 +133,7 @@ def _pip_record(tmp_path: Path) -> dict[str, str]:
 
 def _cortex_release_assets(tag: str, wheel_bytes: bytes) -> tuple[str, dict[str, bytes]]:
     """(wheel asset name, asset paths → bytes) for a stub Cortex release."""
-    wheel_name = f"cortex_llm-{tag.lstrip('v')}-py3-none-macosx_13_0_arm64.whl"
+    wheel_name = wheel_asset_name(tag.lstrip("v"), current_target())
     prefix = f"/faisalmumtaz89/Cortex/releases/download/{tag}"
     digest = hashlib.sha256(wheel_bytes).hexdigest()
     return wheel_name, {

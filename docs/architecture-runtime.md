@@ -53,7 +53,7 @@ Worker mode reserves real stdout for JSON-RPC frames and redirects normal `print
 
 ## Scope
 
-- Target platform: `darwin-arm64` only (the bundled TUI sidecar binary).
+- Target platforms: macOS arm64 and x86_64, Linux x86_64 and arm64 (glibc), each with its own wheel and TUI sidecar build (`cortex/ui_runtime/platforms.py`); Windows through WSL.
 - OpenTUI is the only interactive runtime; headless mode is the only non-interactive one.
 
 ## Non-Goals (Current Phase)

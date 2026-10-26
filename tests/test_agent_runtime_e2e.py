@@ -1658,3 +1658,31 @@ def test_headless_default_denies_writes(tmp_path: Path, scratch_repo: Path) -> N
     assert process.returncode == 0, process.stderr
     assert "Tried to create the file." in process.stdout
     assert not (scratch_repo / "created.txt").exists()
+
+
+def test_login_works_without_a_system_keyring(tmp_path: Path, scratch_repo: Path) -> None:
+    """On Linux servers, containers and WSL there is often no keyring service:
+    /login must still save the key, privately, and the next session finds it."""
+    env = _worker_env(tmp_path, tmp_path / "x.json")
+    env.pop("ANTHROPIC_API_KEY", None)
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        saved = harness.wait_response(harness.send("command.execute", {
+            "session_id": session_id, "command": "/login anthropic sk-ant-e2e-key"}))["result"]
+    finally:
+        harness.close()
+    key_file = tmp_path / "home" / ".cortex" / "credentials.json"
+    assert saved["ok"] is True, saved
+    assert key_file.stat().st_mode & 0o777 == 0o600
+    assert "sk-ant-e2e-key" not in str(saved)
+
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        _start_session(harness)
+        status = harness.wait_response(harness.send(
+            "cloud.auth.status", {"provider": "anthropic"}))["result"]
+    finally:
+        harness.close()
+    assert status["active_source"] == "file", status

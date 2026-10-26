@@ -21,6 +21,7 @@ import pytest
 
 import cortex.app.update_service as update_service_module
 from cortex.app.update_service import UpdateService
+from cortex.ui_runtime.platforms import current_target, wheel_asset_name
 from cortex.update_check import UpdateCheckCache, installed_cortex_version
 
 # ---- probe fakes -----------------------------------------------------------
@@ -179,7 +180,7 @@ def test_startup_notice_cortex_source_checkout_points_to_git(
 # FROM this repo — a source checkout, which /update cortex refuses — so tests
 # of the normal wheel path force CORTEX_SELF_INSTALL_KIND=installed.
 
-CORTEX_WHEEL_ASSET = "cortex_llm-9.9.9-py3-none-macosx_13_0_arm64.whl"
+CORTEX_WHEEL_ASSET = wheel_asset_name("9.9.9", current_target())  # this machine's wheel
 CORTEX_ASSET_DIR = "/faisalmumtaz89/Cortex/releases/download/v9.9.9"
 
 

@@ -64,9 +64,13 @@ pick_python() {
     if ! command -v "${candidate}" >/dev/null 2>&1; then
       continue
     fi
+    # Debian/Ubuntu split venv/ensurepip into python3-venv: without them the
+    # runtime venv cannot be created, so such a Python does not count.
     if "${candidate}" - <<'PY' >/dev/null 2>&1
 import sys
-raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+if sys.version_info < (3, 11):
+    raise SystemExit(1)
+import ensurepip, venv  # noqa: F401
 PY
     then
       echo "${candidate}"
@@ -108,9 +112,12 @@ pick_downloader() {
 # CORTEX_ALLOW_INSECURE_BASE=1: the .sha256 shares the wheel's origin, so
 # checksum verification is worthless against a hostile base.
 RELEASE_BASE="${CORTEX_RELEASE_BASE:-https://github.com/faisalmumtaz89/Cortex}"
-# Keep in sync with setup.cfg [bdist_wheel] plat_name (cross-pinned by
-# tests/test_packaging.py — a drift here would 404 every release install).
-WHEEL_PLAT_TAG="macosx_13_0_arm64"
+# One wheel per platform; detect_platform picks this machine's. Keep the table
+# in step with cortex/ui_runtime/platforms.py (tests/test_packaging.py).
+WHEEL_PLAT_TAG=""
+UV_TRIPLE=""
+# uv installs a private Python when the system has no usable Python 3.11+.
+UV_VERSION="0.13.0"
 
 require_trusted_release_base() {
   case "${RELEASE_BASE}" in
@@ -157,6 +164,124 @@ resolve_release_tag() {
   echo "${tag}"
 }
 
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$1" | awk '{print $NF}'
+  else
+    die "No SHA-256 tool found (sha256sum, shasum or openssl) to verify the download."
+  fi
+}
+
+version_at_least() {
+  # $1 >= $2, for dotted numeric versions.
+  [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -t. -k1,1n -k2,2n -k3,3n | head -n1)" == "$2" ]]
+}
+
+detect_platform() {
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "${os}" in
+    Darwin)
+      local macos
+      macos="$(sw_vers -productVersion 2>/dev/null || echo 0)"
+      version_at_least "${macos}" "13.0" \
+        || die "Cortex needs macOS 13 or later (this Mac runs ${macos})."
+      # Under Rosetta uname reports x86_64 on Apple Silicon: use the native build.
+      if [[ "${arch}" == "arm64" ]] || [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
+        WHEEL_PLAT_TAG="macosx_13_0_arm64"; UV_TRIPLE="aarch64-apple-darwin"
+      elif [[ "${arch}" == "x86_64" ]]; then
+        WHEEL_PLAT_TAG="macosx_13_0_x86_64"; UV_TRIPLE="x86_64-apple-darwin"
+      else
+        die "Unsupported Mac architecture: ${arch}."
+      fi
+      ;;
+    Linux)
+      if ldd --version 2>&1 | grep -qi musl; then
+        die "This Linux uses musl libc (for example Alpine). Cortex needs a glibc-based distribution such as Debian, Ubuntu, Fedora or Arch."
+      fi
+      local glibc
+      glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+      if [[ -n "${glibc}" ]] && ! version_at_least "${glibc}" "2.28"; then
+        die "Cortex needs glibc 2.28 or later (Debian 10, Ubuntu 20.04, RHEL 8 or newer); this system has ${glibc}."
+      fi
+      case "${arch}" in
+        x86_64|amd64) WHEEL_PLAT_TAG="manylinux_2_28_x86_64"; UV_TRIPLE="x86_64-unknown-linux-gnu" ;;
+        aarch64|arm64) WHEEL_PLAT_TAG="manylinux_2_28_aarch64"; UV_TRIPLE="aarch64-unknown-linux-gnu" ;;
+        *) die "Unsupported Linux architecture: ${arch}. Cortex runs on x86_64 and arm64." ;;
+      esac
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      die "On Windows, Cortex runs inside WSL. In PowerShell, run:  irm https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.ps1 | iex"
+      ;;
+    *)
+      die "Unsupported system: ${os}. Cortex runs on macOS and Linux (and on Windows through WSL)."
+      ;;
+  esac
+}
+
+install_managed_python() {
+  # Prints the path of a private Python 3.12 that uv installs under INSTALL_ROOT.
+  local uv_dir="${INSTALL_ROOT}/uv"
+  local uv_bin="${uv_dir}/uv"
+  export UV_PYTHON_INSTALL_DIR="${INSTALL_ROOT}/python"
+  if [[ ! -x "${uv_bin}" ]]; then
+    local archive="uv-${UV_TRIPLE}.tar.gz"
+    local url="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${archive}"
+    local tmp=""
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/cortex-uv.XXXXXX")"
+    log "Downloading uv ${UV_VERSION} to install a private Python" >&2
+    curl -fsSL "${url}" -o "${tmp}/${archive}" || die "Download failed: ${url}"
+    curl -fsSL "${url}.sha256" -o "${tmp}/${archive}.sha256" \
+      || die "No checksum at ${url}.sha256 — refusing to run an unverified uv."
+    local want="" got=""
+    want="$(awk '{print $1}' "${tmp}/${archive}.sha256")"
+    got="$(sha256_of "${tmp}/${archive}")"
+    [[ "${want}" =~ ^[0-9a-f]{64}$ ]] && [[ "${want}" == "${got}" ]] \
+      || die "Checksum mismatch for ${archive} — installing nothing."
+    tar -xzf "${tmp}/${archive}" -C "${tmp}"
+    mkdir -p "${uv_dir}"
+    cp "${tmp}/uv-${UV_TRIPLE}/uv" "${uv_bin}"
+    chmod +x "${uv_bin}"
+    rm -rf "${tmp}"
+  fi
+  log "Installing a private Python 3.12 in ${UV_PYTHON_INSTALL_DIR}" >&2
+  "${uv_bin}" python install 3.12 >&2 || die "Could not install Python 3.12 with uv."
+  UV_PYTHON_PREFERENCE=only-managed "${uv_bin}" python find 3.12 \
+    || die "uv installed Python 3.12 but could not find it."
+}
+
+add_to_path() {
+  # Makes BIN_DIR reachable from new terminals; prints what it did.
+  local line="export PATH=\"${BIN_DIR}:\$PATH\""
+  local profiles=()
+  case "$(basename "${SHELL:-sh}")" in
+    zsh) profiles=("${ZDOTDIR:-$HOME}/.zshrc") ;;
+    bash)
+      profiles=("${HOME}/.bashrc")
+      [[ "$(uname -s)" == "Darwin" ]] && profiles+=("${HOME}/.bash_profile")
+      ;;
+    fish)
+      mkdir -p "${HOME}/.config/fish/conf.d"
+      echo "fish_add_path ${BIN_DIR}" > "${HOME}/.config/fish/conf.d/cortex.fish"
+      ok "Added ${BIN_DIR} to PATH in ${HOME}/.config/fish/conf.d/cortex.fish"
+      return 0
+      ;;
+    *) profiles=("${HOME}/.profile") ;;
+  esac
+  local profile
+  for profile in "${profiles[@]}"; do
+    if ! grep -qsF "${BIN_DIR}" "${profile}"; then
+      printf '\n# Added by the Cortex installer\n%s\n' "${line}" >> "${profile}"
+      ok "Added ${BIN_DIR} to PATH in ${profile}"
+    fi
+  done
+}
+
 download_and_verify_wheel() {
   # $1 = release tag (vX.Y.Z), $2 = destination directory.
   # Downloads the wheel under its CANONICAL filename (pip rejects renamed
@@ -181,7 +306,7 @@ download_and_verify_wheel() {
   if [[ ! "${want}" =~ ^[0-9a-f]{64}$ ]]; then
     die "Malformed .sha256 asset for ${wheel_name} — refusing to install."
   fi
-  got="$(shasum -a 256 "${wheel_path}" | awk '{print $1}')"
+  got="$(sha256_of "${wheel_path}")"
   if [[ "${want}" != "${got}" ]]; then
     die "Checksum mismatch for ${wheel_name} (want ${want}, got ${got}) — installing nothing."
   fi
@@ -415,39 +540,24 @@ PY
   ok "OpenTUI sidecar ready: ${sidecar_path}"
 }
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  die "Cortex is currently supported on macOS only."
-fi
-
-shell_arch="$(uname -m)"
-if [[ "${shell_arch}" != "arm64" ]]; then
-  if [[ "${shell_arch}" == "x86_64" ]] && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
-    warn "Terminal is running under Rosetta. Native arm64 terminal is recommended."
-  else
-    die "Unsupported architecture: ${shell_arch}. Cortex requires Apple Silicon."
-  fi
-fi
-
-if ! command -v xcode-select >/dev/null 2>&1 || ! xcode-select -p >/dev/null 2>&1; then
-  die "Xcode Command Line Tools are required. Run: xcode-select --install"
-fi
-
-PYTHON_BIN="$(pick_python || true)"
-if [[ -z "${PYTHON_BIN}" ]]; then
-  die "Python 3.11+ was not found. Install it with: brew install python@3.11"
-fi
-
-PY_ARCH="$("${PYTHON_BIN}" -c 'import platform; print(platform.machine())')"
-if [[ "${PY_ARCH}" != "arm64" ]]; then
-  die "Detected ${PYTHON_BIN} (${PY_ARCH}). Install/use an arm64 Python 3.11+."
-fi
-
+detect_platform
+command -v curl >/dev/null 2>&1 || die "curl is required to install Cortex (for example: sudo apt install curl)."
 INSTALL_ROOT="${CORTEX_INSTALL_ROOT:-$HOME/.cortex/install}"
 VENV_DIR="${INSTALL_ROOT}/venv"
 BIN_DIR="${CORTEX_BIN_DIR:-$HOME/.local/bin}"
 LOCAL_LINK="${BIN_DIR}/cortex"
 
 mkdir -p "${INSTALL_ROOT}" "${BIN_DIR}"
+
+# A system Python 3.11+ with venv support, or else a private one (no admin
+# rights, no package manager). CORTEX_MANAGED_PYTHON=1 always uses the private one.
+PYTHON_BIN=""
+if [[ "${CORTEX_MANAGED_PYTHON:-0}" != "1" ]]; then
+  PYTHON_BIN="$(pick_python || true)"
+fi
+if [[ -z "${PYTHON_BIN}" ]]; then
+  PYTHON_BIN="$(install_managed_python)"
+fi
 
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
   log "Creating isolated runtime at ${VENV_DIR}"
@@ -458,7 +568,7 @@ PIP="${VENV_DIR}/bin/pip"
 RUNTIME_PYTHON="${VENV_DIR}/bin/python"
 
 log "Upgrading installer tooling"
-"${PIP}" install --upgrade pip setuptools wheel >/dev/null
+"${PIP}" install --quiet --disable-pip-version-check --upgrade pip setuptools wheel >/dev/null
 clear_hidden_site_flags "${RUNTIME_PYTHON}"
 
 INSTALL_MODE="release"
@@ -510,7 +620,9 @@ else
   # Local-wheel installs upgrade AND downgrade without extra flags; only the
   # cortex-llm artifact itself comes from the release — new/changed
   # dependencies still resolve from the package index.
-  "${PIP}" install "${WHEEL_PATH}"
+  log "Installing Cortex and its dependencies"
+  "${PIP}" install --quiet --disable-pip-version-check "${WHEEL_PATH}" \
+    || die "pip could not install ${WHEEL_PATH##*/}; see the messages above."
   clear_hidden_site_flags "${RUNTIME_PYTHON}"
 fi
 
@@ -545,17 +657,23 @@ PY
 ok "Installed Cortex ${INSTALLED_VERSION}"
 ok "Launcher: ${ACTIVE_BIN}"
 
-if ! command -v cortex >/dev/null 2>&1; then
-  if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
-    echo
-    warn "cortex is not currently on PATH."
-    echo "Add this to your shell profile:"
-    echo "  export PATH=\"${BIN_DIR}:\$PATH\""
-    echo
+NEW_SHELL_NEEDED="0"
+if [[ "${ACTIVE_BIN}" == "${LOCAL_LINK}" ]] && [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
+  # CORTEX_NO_MODIFY_PATH=1 leaves shell profiles alone.
+  if [[ "${CORTEX_NO_MODIFY_PATH:-0}" == "1" ]]; then
+    warn "${BIN_DIR} is not on PATH. Add it with: export PATH=\"${BIN_DIR}:\$PATH\""
+  else
+    add_to_path
+    NEW_SHELL_NEEDED="1"
   fi
 fi
 
 echo
 echo "${BOLD}Installation complete.${RESET}"
-echo "Run: cortex"
+if [[ "${NEW_SHELL_NEEDED}" == "1" ]]; then
+  echo "Open a new terminal (or run: export PATH=\"${BIN_DIR}:\$PATH\"), then run: cortex"
+else
+  echo "Run: cortex"
+fi
+echo "Then add a key with /login (or set OPENAI_API_KEY, ANTHROPIC_API_KEY, ...) and pick a model with /model."
 echo

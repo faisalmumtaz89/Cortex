@@ -1,22 +1,18 @@
 # Installation Guide
 
-## Prerequisites
+## Supported Systems
 
-**Hardware:**
+| System | Notes |
+|---|---|
+| macOS 13 or later, Apple Silicon or Intel | |
+| Linux x86_64 or arm64 with glibc 2.28 or later | Debian 10, Ubuntu 20.04, RHEL 8, Fedora, Arch, or newer. Not musl distributions such as Alpine. |
+| Windows 10 or 11 | Through WSL (Windows Subsystem for Linux); the PowerShell installer sets it up. |
 
-- Apple Silicon Mac
-- macOS 13.3+
-
-**Software:**
-
-- Python 3.11+ (3.12 recommended)
-- Xcode Command Line Tools
-- Git (source installs)
-- Bun runtime for frontend source builds (global `bun`, or the local runtime provisioned by `npm install` in `frontend/cortex-tui`; the installer handles this)
-
-**Not supported:** Intel Macs, Linux, Windows. Cortex runs on Apple Silicon Macs only.
+The installer needs only `curl`. It uses a Python 3.11+ from your system when one is there; otherwise it downloads `uv` (checksum-verified) and installs a private Python 3.12 under `~/.cortex/install`, without admin rights or a package manager. Source installs also need Git, and Bun (which the installer installs when missing).
 
 ## Recommended Install
+
+**macOS and Linux:**
 
 ```bash
 # One-line installer (latest GitHub release)
@@ -34,17 +30,24 @@ cd Cortex
 cortex
 ```
 
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.ps1 | iex
+```
+
+This installs Cortex inside WSL and adds a `cortex` command to Windows that runs it in the current folder. If WSL or a Linux distribution is missing, it says how to add it (`wsl --install`, then restart and open Ubuntu once) and installs nothing. To pin a version, set `$env:CORTEX_VERSION = "X.Y.Z"` first. Projects in your Linux home (`\\wsl$\...`) are much faster than ones under `C:\`.
+
 The installer:
 
-1. Verifies Apple Silicon and an arm64 Python 3.11+
-2. Creates an isolated runtime under `~/.cortex/install`
-3. Downloads the `cortex-llm` wheel from the GitHub release (the single distribution channel), verifies it against the release's `.sha256` asset, and installs the verified wheel — or installs the source checkout when run from a clone
-4. Builds the OpenTUI sidecar when missing or stale (installing Bun if needed; release wheels already bundle it)
-5. Links the `cortex` launcher into `~/.local/bin`
+1. Detects your system and processor, and picks the matching wheel (each release has one per supported platform, with the TUI built for it)
+2. Uses a system Python 3.11+, or installs a private one with `uv`
+3. Creates an isolated runtime under `~/.cortex/install`
+4. Downloads the `cortex-llm` wheel from the GitHub release (the single distribution channel), verifies it against the release's `.sha256` asset, and installs the verified wheel — or installs the source checkout when run from a clone
+5. Builds the OpenTUI sidecar when missing or stale (installing Bun if needed; release wheels already bundle it)
+6. Links the `cortex` launcher into `~/.local/bin` and, when that folder is not on your `PATH`, adds it in your shell's profile (`~/.zshrc`, `~/.bashrc`, fish's `conf.d`, or `~/.profile`); set `CORTEX_NO_MODIFY_PATH=1` to leave profiles alone
 
 A checksum mismatch or a missing `.sha256` asset aborts the install — nothing is installed. If no release has been published yet, the installer says so and points at the source-checkout install instead. Prerelease versions are not installable via `install.sh` — pins are stable `X.Y.Z` only.
-
-If `~/.local/bin` is not on your `PATH`, the installer prints the line to add to your shell profile.
 
 ## Development Install
 
@@ -64,7 +67,7 @@ For the frontend:
 cd frontend/cortex-tui
 npm install
 npm run typecheck
-npm run build      # bundled darwin-arm64 sidecar binary
+npm run build      # sidecar binary for this machine's platform
 ```
 
 ## Verification
@@ -132,8 +135,12 @@ rm -f ~/.local/bin/cortex
 rm -rf ~/.cortex
 ```
 
-API keys saved with `/login` stay in the macOS Keychain under the service
-`cortex-llm`; delete them in Keychain Access.
+API keys saved with `/login` in the system keyring stay there (service
+`cortex-llm`); delete them with your keyring tool, such as Keychain Access on
+macOS. Keys saved to `~/.cortex/credentials.json` go with `~/.cortex`.
+
+On Windows, also delete `%LOCALAPPDATA%\Programs\Cortex` and remove it from
+your user `PATH`.
 
 If you installed into your own environment instead: `pip uninstall cortex-llm`.
 

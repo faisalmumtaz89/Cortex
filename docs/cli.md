@@ -86,7 +86,10 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 /login openai                 # show auth status for a provider
 ```
 
-`/login` saves the key in the macOS Keychain (service `cortex-llm`). The
+`/login` saves the key in the system keyring (service `cortex-llm`), such as the
+macOS Keychain. Where no keyring works (common on Linux servers, containers and
+WSL), it saves the key in `~/.cortex/credentials.json` instead, readable only by
+you. The
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY` and
 `OPENAI_COMPATIBLE_API_KEY` environment variables take precedence over a saved
 key when they are set. Azure additionally requires the resource

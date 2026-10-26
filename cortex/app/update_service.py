@@ -54,6 +54,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+from cortex.ui_runtime.platforms import current_target, wheel_asset_name
 from cortex.update_check import (
     CORTEX_REPO,
     UpdateCheckCache,
@@ -68,11 +69,6 @@ from cortex.update_check import (
 
 logger = logging.getLogger(__name__)
 
-# The release wheel's asset name is deterministic: the PEP 427-normalized
-# project name (cortex-llm → cortex_llm) plus the platform tag declared in
-# setup.cfg [bdist_wheel] plat_name. Cross-pinned by tests/test_packaging.py:
-# drift against setup.cfg would 404 every /update cortex.
-CORTEX_WHEEL_ASSET_TEMPLATE = "cortex_llm-{version}-py3-none-macosx_13_0_arm64.whl"
 
 # Test-only: replaces `<running python> -m pip` for the self-update wheel
 # install. Monkeypatching cannot cross the worker process boundary, and a
@@ -463,7 +459,14 @@ class UpdateService:
         refusal = _untrusted_asset_base(base)
         if refusal is not None:
             return {"ok": False, "message": f"Cortex update failed: {refusal}."}
-        asset_name = CORTEX_WHEEL_ASSET_TEMPLATE.format(version=target_version)
+        # The release has one wheel per platform (cortex/ui_runtime/platforms.py).
+        target = current_target()
+        if target is None:
+            return {
+                "ok": False,
+                "message": "Cortex update failed: there is no Cortex build for this platform.",
+            }
+        asset_name = wheel_asset_name(target_version, target)
         wheel_url = f"{base}/{CORTEX_REPO}/releases/download/{target_tag}/{asset_name}"
 
         # Wheel + .sha256 live in one tracked temp dir: shutdown() rmtree's it

@@ -2,7 +2,7 @@
 
 Cortex is an agentic coding tool that lives in your terminal. It reads, searches, and edits your code, runs commands, and shows every change as a reviewable diff — powered by models from OpenAI, Anthropic, Azure OpenAI, or any OpenAI-compatible endpoint.
 
-Requires an Apple Silicon Mac, macOS 13.3+, Python 3.11+, and Xcode Command Line Tools.
+Runs on macOS (Apple Silicon or Intel), Linux (x86_64 or arm64), and Windows through WSL. The installer needs only `curl`, and brings its own Python when yours is missing or too old.
 
 ## Get started
 
