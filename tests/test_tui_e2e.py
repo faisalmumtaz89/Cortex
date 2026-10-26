@@ -127,7 +127,11 @@ class TuiSession:
         while time.time() < deadline:
             frame = self.capture()
             if predicate(frame):
-                return frame
+                # A capture can land mid-repaint: look again and keep the
+                # later frame when it still matches.
+                time.sleep(0.15)
+                settled = self.capture()
+                return settled if predicate(settled) else frame
             if self.exited():
                 raise self._failure(f"the TUI exited while waiting for {description}", frame)
             time.sleep(0.3)
@@ -430,7 +434,15 @@ def test_model_picker_lists_models_and_selects_with_wraparound(tui_project) -> N
     session.send_key("/model")
     time.sleep(1)
     session.send_key("Enter")
-    picker = session.wait_for("Select a model", timeout=10)
+    # A capture can land mid-repaint (title drawn, rows not yet): wait for the
+    # whole picker, its rows and its own footer, before asserting on it.
+    picker = session.wait_until(
+        lambda frame: "Select a model" in frame
+        and "Enter use" in frame
+        and all(row in frame for row in rows[:window]),
+        description="the drawn /model picker",
+        timeout=10,
+    )
     for visible_row in rows[:window]:
         assert visible_row in picker, f"windowed row missing: {visible_row}"
     for windowed_out in rows[window:]:
@@ -458,7 +470,11 @@ def test_model_picker_lists_models_and_selects_with_wraparound(tui_project) -> N
     session.send_key("/model")
     time.sleep(1)
     session.send_key("Enter")
-    reopened = session.wait_for("Select a model", timeout=10)
+    reopened = session.wait_until(
+        lambda frame: "Select a model" in frame and "Enter use" in frame and last_row in frame,
+        description="the reopened /model picker on the active row",
+        timeout=10,
+    )
     assert last_row in reopened
     session.send_key("Escape")
     time.sleep(1)
