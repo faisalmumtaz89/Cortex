@@ -169,7 +169,7 @@ def _keep_metadata(fd: int, path: Path, partial: Path, st: os.stat_result) -> bo
     try:
         if (st.st_uid, st.st_gid) != (os.geteuid(), os.getegid()):
             os.fchown(fd, st.st_uid, st.st_gid)
-        if hasattr(os, "listxattr"):  # Linux: ACLs are system.posix_acl_* attributes
+        if sys.platform == "linux":  # ACLs are system.posix_acl_* attributes
             try:
                 names = os.listxattr(path)
             except OSError as exc:

@@ -117,10 +117,12 @@ jobs:
           cat "${wheel}.sha256"
 
       - name: Smoke-test the install on this platform (install.sh, CLI, headless turn, TUI)
+        timeout-minutes: 10
         run: scripts/smoke_install.sh dist
 
       - name: Smoke-test the install with install.sh's private Python
         if: matrix.managed_python == '1'
+        timeout-minutes: 10
         env:
           CORTEX_MANAGED_PYTHON: "1"
         run: scripts/smoke_install.sh dist
@@ -148,6 +150,8 @@ jobs:
           $out = & { . ./install.ps1 } *>&1 | Out-String
           Write-Host $out
           if ($out -notmatch 'wsl --install') { Write-Error 'install.ps1 did not explain how to set up WSL'; exit 1 }
+          # The runner has no distribution, so wsl.exe's own exit code is non-zero; the message is the check.
+          exit 0
 
   release:
     needs: [build, windows-installer]

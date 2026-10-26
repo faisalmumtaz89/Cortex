@@ -47,6 +47,7 @@ class TuiSession:
         python_flags: str = "",
     ):
         self.name = f"cortex-tui-test-{uuid.uuid4().hex[:8]}"
+        self.log_file = home_dir / ".cortex" / "cortex.log"
         env = {
             "HOME": str(home_dir),
             "PYTHONPATH": str(REPO_ROOT),
@@ -66,8 +67,11 @@ class TuiSession:
             f"cd {shlex.quote(str(project_dir))} && "
             f"env {env_prefix} {shlex.quote(sys.executable)} {python_flags} -m cortex"
         )
+        # remain-on-exit keeps a pane whose TUI exited, with its last output
+        # and exit status, so a failing wait can say why instead of showing "".
         subprocess.run(
-            ["tmux", "new-session", "-d", "-s", self.name, "-x", "130", "-y", "40", launch],
+            ["tmux", "new-session", "-d", "-s", self.name, "-x", "130", "-y", "40", launch,
+             ";", "set-option", "-t", self.name, "remain-on-exit", "on"],
             check=True,
         )
 
@@ -85,16 +89,34 @@ class TuiSession:
     def send_key(self, key: str) -> None:
         subprocess.run(["tmux", "send-keys", "-t", self.name, key], check=True)
 
+    def exited(self) -> bool:
+        """True once the launched `python -m cortex` has exited (or the session is gone)."""
+        result = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", self.name, "#{pane_dead}"],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode != 0 or result.stdout.strip() == "1"
+
+    def _failure(self, waiting_for: str, frame: str) -> AssertionError:
+        status = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", self.name, "#{pane_dead} #{pane_dead_status}"],
+            capture_output=True,
+            text=True,
+        )
+        pane = status.stdout.strip() if status.returncode == 0 else f"gone: {status.stderr.strip()}"
+        log = ""
+        if self.log_file.exists():
+            log = self.log_file.read_text(encoding="utf-8", errors="replace")
+        tail = "\n".join(log.splitlines()[-40:])
+        return AssertionError(
+            f"{waiting_for}.\n--- pane (dead, exit status) ---\n{pane}"
+            f"\n--- last frame ---\n{frame}\n--- cortex.log ---\n{tail}"
+        )
+
     def wait_for(self, needle: str, *, timeout: float = 40.0) -> str:
-        deadline = time.time() + timeout
-        frame = ""
-        while time.time() < deadline:
-            frame = self.capture()
-            if needle in frame:
-                return frame
-            time.sleep(0.4)
-        raise AssertionError(
-            f"timed out waiting for {needle!r} in TUI frame.\n--- last frame ---\n{frame}"
+        return self.wait_until(
+            lambda frame: needle in frame, description=f"{needle!r} in TUI frame", timeout=timeout
         )
 
     def wait_until(self, predicate, *, description: str, timeout: float = 20.0) -> str:
@@ -106,8 +128,10 @@ class TuiSession:
             frame = self.capture()
             if predicate(frame):
                 return frame
+            if self.exited():
+                raise self._failure(f"the TUI exited while waiting for {description}", frame)
             time.sleep(0.3)
-        raise AssertionError(f"timed out waiting for {description}.\n--- last frame ---\n{frame}")
+        raise self._failure(f"timed out waiting for {description}", frame)
 
     def process_tree(self) -> set[int]:
         """PIDs of every process started in the pane (launcher, sidecar, worker)."""
@@ -451,13 +475,13 @@ def test_single_ctrl_c_exits_cleanly(tui_project) -> None:
 
     session.send_key("C-c")
 
-    # The launch command IS the pane: when python -m cortex exits, the tmux
-    # session dies and capture() returns "". Old behavior: the pane lingered
-    # indefinitely. Give the teardown a generous-but-bounded window.
+    # The launch command IS the pane: when python -m cortex exits, the pane
+    # is dead. Old behavior: the pane lingered indefinitely. Give the teardown
+    # a generous-but-bounded window.
     deadline = time.time() + 8
     alive = True
     while time.time() < deadline:
-        if session.capture() == "":
+        if session.exited():
             alive = False
             break
         time.sleep(0.25)

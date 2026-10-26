@@ -11,7 +11,8 @@ set -euo pipefail
 
 dist="$(cd "$1" && pwd)"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
-wheel="$(ls "${dist}"/*.whl | head -n1)"
+wheels=("${dist}"/*.whl)
+wheel="${wheels[0]}"
 name="$(basename "${wheel}")"
 version="$(echo "${name}" | cut -d- -f2)"
 python="$(command -v python3)"
@@ -59,7 +60,7 @@ cat "${work}/turn.txt" "${work}/turn.err"
 grep -q "SMOKE_OK" "${work}/turn.txt"
 grep -q "read_file ok" "${work}/turn.err"
 
-step "TUI renders in a terminal"
+step "TUI renders in a terminal and quits on Ctrl+C"
 HOME="${work}/home" "${python}" - "${cortex}" "${work}/proj" <<'PY'
 import os, pty, select, signal, struct, sys, time, fcntl, termios
 
@@ -70,18 +71,63 @@ if pid == 0:
     os.environ["TERM"] = "xterm-256color"
     os.execv(cortex, [cortex])
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
-seen, deadline = b"", time.time() + 60
-while time.time() < deadline and b"Ask anything" not in seen:
-    if select.select([fd], [], [], 1)[0]:
-        try:
-            seen += os.read(fd, 65536)
-        except OSError:
-            break
-os.kill(pid, signal.SIGTERM)
-os.waitpid(pid, 0)
+seen, status = b"", None
+
+
+def read_for(seconds, done):
+    """Read the TUI's output until done() or the time is up. Reading never
+    stops while the TUI runs: a full pty would block its writes for good."""
+    global seen
+    deadline = time.time() + seconds
+    while time.time() < deadline and not done():
+        if select.select([fd], [], [], 0.2)[0]:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:  # Linux: EIO once nothing holds the pty open
+                chunk = b""
+            if not chunk:
+                time.sleep(0.1)
+            seen += chunk
+
+
+def exited():
+    global status
+    if status is None:
+        reaped, code = os.waitpid(pid, os.WNOHANG)
+        if reaped:
+            status = code
+    return status is not None
+
+
+def group_alive():
+    try:
+        os.killpg(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def fail(message):
+    if group_alive():
+        os.killpg(pid, signal.SIGKILL)
+    if not exited():
+        os.waitpid(pid, 0)
+    sys.exit("%s; last output: %r" % (message, seen[-600:]))
+
+
+read_for(60, lambda: b"Ask anything" in seen or exited())
 if b"Ask anything" not in seen:
-    sys.exit("the TUI did not render its prompt; last output: %r" % seen[-400:])
+    fail("the TUI did not render its prompt")
 print("TUI rendered its prompt")
+
+os.write(fd, b"\x03")  # Ctrl+C, the way a user quits
+read_for(15, exited)
+if not exited():
+    fail("the TUI was still running 15s after Ctrl+C")
+read_for(10, lambda: not group_alive())
+if group_alive():
+    fail("Ctrl+C left Cortex processes running")
+print("TUI quit on Ctrl+C and left no processes behind")
 PY
 
 echo "smoke test passed for ${name}"
