@@ -595,6 +595,34 @@ def test_login_picker_shows_each_provider_auth_status(tui_project) -> None:
     assert "not configured" in row("anthropic"), picker
 
 
+def test_the_tui_leaves_no_files_in_the_temp_folder(tui_project, tmp_path) -> None:
+    """The compiled sidecar unpacks a native library into the temp folder at
+    every start; Cortex must remove it when the TUI exits, while commands the
+    agent runs still see the user's own TMPDIR."""
+    project, start = tui_project
+    user_tmp = tmp_path / "user-tmp"
+    user_tmp.mkdir()
+    session = start(
+        [[
+            {"tool_calls": [{"name": "bash", "arguments": {
+                "command": 'printf %s "$TMPDIR" > tmpdir.txt'}}]},
+            {"text": "TMP_DONE"},
+        ]],
+        extra_env={"TMPDIR": str(user_tmp)},
+    )
+    _select_scripted_model(session)
+    session.send_line("record the temp folder")
+    session.wait_for("Permission required")
+    session.send_key("Enter")
+    session.wait_for("TMP_DONE")
+    assert (project / "tmpdir.txt").read_text(encoding="utf-8") == str(user_tmp)
+
+    session.send_key("C-c")
+    session.wait_until(lambda frame: session.exited(), description="the TUI to exit", timeout=10)
+    leftovers = [p.name for p in user_tmp.rglob("*") if p.is_file()]
+    assert leftovers == [], leftovers
+
+
 def test_replies_wrap_between_words_after_non_ascii_text(tui_project) -> None:
     """A line of styled text with a non-ASCII character (an em dash) after its
     first span used to wrap one character off, and every later line with it:

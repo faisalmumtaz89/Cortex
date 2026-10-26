@@ -6,10 +6,11 @@ import argparse
 import logging
 import os
 import sys
+import tempfile
 from io import TextIOBase
 from typing import Any
 
-from cortex.ui_runtime.launcher import launch_tui
+from cortex.ui_runtime.launcher import USER_TMPDIR_VARIABLE, launch_tui
 
 
 def _build_components() -> tuple[Any, Any]:
@@ -25,11 +26,25 @@ def _build_components() -> tuple[Any, Any]:
     return config, conversation_manager
 
 
+def _restore_user_tmpdir() -> None:
+    """The launcher gives the TUI its own temp folder (see launcher.py); the
+    worker, and every command it runs, use the user's TMPDIR."""
+    if USER_TMPDIR_VARIABLE not in os.environ:
+        return
+    user_tmpdir = os.environ.pop(USER_TMPDIR_VARIABLE)
+    if user_tmpdir:
+        os.environ["TMPDIR"] = user_tmpdir
+    else:
+        os.environ.pop("TMPDIR", None)
+    tempfile.tempdir = None  # computed again from the restored environment
+
+
 def _run_worker_stdio() -> None:
     from cortex.app.worker_runtime import WorkerRuntime
     from cortex.runtime_io import bound_redirected_stdio_files
 
     os.environ["CORTEX_WORKER_MODE"] = "1"
+    _restore_user_tmpdir()
     bound_redirected_stdio_files()
 
     # Reserve true stdio for JSON-RPC transport.

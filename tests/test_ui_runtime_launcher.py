@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from cortex.ui_runtime import launcher
@@ -156,3 +157,22 @@ def test_build_worker_env_can_preserve_otui_environment_for_debugging(monkeypatc
     env = launcher._build_worker_env()  # type: ignore[attr-defined]
 
     assert env["OTUI_NO_NATIVE_RENDER"] == "1"
+
+
+def test_sidecar_temp_folders_of_dead_launchers_are_removed(tmp_path, monkeypatch) -> None:
+    """A launcher killed with its terminal cannot remove its sidecar's temp
+    folder; the next launch removes it, and leaves a running launcher's own."""
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    dead = tmp_path / "cortex-tui-999999999-abc"
+    live = tmp_path / f"cortex-tui-{os.getppid()}-def"
+    for folder in (dead, live):
+        folder.mkdir()
+        (folder / ".lib-00000000.so").write_bytes(b"x")
+
+    created = launcher._sidecar_tmpdir()
+
+    assert not dead.exists()
+    assert live.exists()
+    assert created.parent == tmp_path and created.name.startswith(f"cortex-tui-{os.getpid()}-")

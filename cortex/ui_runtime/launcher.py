@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -95,6 +96,33 @@ def _build_worker_env() -> dict:
     return env
 
 
+# The compiled sidecar unpacks its native library into the temp folder at
+# every start and never removes it. It gets a folder of its own, removed when
+# it exits; the worker puts the user's TMPDIR back for the commands it runs.
+_SIDECAR_TMP_PREFIX = "cortex-tui-"
+USER_TMPDIR_VARIABLE = "CORTEX_USER_TMPDIR"
+
+
+def _sidecar_tmpdir() -> Path:
+    base = Path(tempfile.gettempdir())
+    for stale in base.glob(f"{_SIDECAR_TMP_PREFIX}*"):
+        # A folder whose launcher is gone (a crash, a killed terminal).
+        pid = stale.name[len(_SIDECAR_TMP_PREFIX):].split("-", 1)[0]
+        if pid.isdigit() and not _alive(int(pid)):
+            shutil.rmtree(stale, ignore_errors=True)
+    return Path(tempfile.mkdtemp(prefix=f"{_SIDECAR_TMP_PREFIX}{os.getpid()}-", dir=base))
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _candidate_command() -> Optional[list[str]]:
     bundled = _bundled_binary()
     bun = _find_bun()
@@ -126,10 +154,21 @@ def launch_tui() -> int:
     if not command:
         return 127
 
+    env = _build_worker_env()
+    sidecar_tmp = _sidecar_tmpdir()
+    env[USER_TMPDIR_VARIABLE] = os.environ.get("TMPDIR", "")
+    env["TMPDIR"] = str(sidecar_tmp)
+    try:
+        return _run_sidecar(command, env)
+    finally:
+        shutil.rmtree(sidecar_tmp, ignore_errors=True)
+
+
+def _run_sidecar(command: list[str], env: dict) -> int:
     process = subprocess.Popen(
         command,
         cwd=str(_repo_root()),
-        env=_build_worker_env(),
+        env=env,
     )
     try:
         return process.wait()

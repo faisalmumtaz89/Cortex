@@ -67,7 +67,8 @@ grep -q "SMOKE_OK" "${work}/turn.txt"
 grep -q "read_file ok" "${work}/turn.err"
 
 step "TUI renders in a terminal and quits on Ctrl+C"
-HOME="${work}/home" "${python}" - "${cortex}" "${work}/proj" <<'PY'
+mkdir -p "${work}/tmp"
+HOME="${work}/home" TMPDIR="${work}/tmp" "${python}" - "${cortex}" "${work}/proj" <<'PY'
 import os, pty, select, signal, struct, sys, time, fcntl, termios
 
 cortex, project = sys.argv[1], sys.argv[2]
@@ -135,5 +136,12 @@ if group_alive():
     fail("Ctrl+C left Cortex processes running")
 print("TUI quit on Ctrl+C and left no processes behind")
 PY
+# The sidecar unpacks a native library into the temp folder; Cortex removes it.
+leftovers="$(find "${work}/tmp" -type f | head -n 5)"
+if [[ -n "${leftovers}" ]]; then
+  echo "the TUI left files in the temp folder:"
+  echo "${leftovers}"
+  exit 1
+fi
 
 echo "smoke test passed for ${name}"
