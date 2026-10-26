@@ -16,7 +16,7 @@ pip install -e ".[dev]"
 
 - macOS (Apple Silicon or Intel) or Linux (x86_64 or arm64, glibc)
 - Python 3.11 or later
-- Bun runtime for frontend work (global `bun`, or the local runtime provisioned by `npm install` in `frontend/cortex-tui`)
+- Bun for frontend work (`curl -fsSL https://bun.sh/install | bash`; `./install.sh` installs it when missing)
 
 `bun run build` compiles the sidecar for the machine it runs on (OpenTUI's native core comes from the platform package `bun install` fetches); set `CORTEX_TUI_TARGET` to a Bun target to override. The TUI E2E tests need `tmux`.
 
@@ -81,10 +81,10 @@ Frontend source commands:
 
 ```bash
 cd frontend/cortex-tui
-npm install
-npm run typecheck
-npm run dev        # Runs OpenTUI from source
-npm run build      # Builds the sidecar binary for this machine's platform
+bun install
+bun run typecheck
+bun run dev        # Runs OpenTUI from source
+bun run build      # Builds the sidecar binary for this machine's platform
 ```
 
 ## Testing: the Empirical Gate

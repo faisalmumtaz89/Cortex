@@ -27,7 +27,7 @@ Runs on macOS (Apple Silicon or Intel), Linux (x86_64 or arm64), and Windows thr
 
 ## How it works
 
-- Reading, searching, and listing files is free; every edit, write, and shell command asks first.
+- Reading, searching, and listing files is free; every edit, write, and shell command asks first (headless `-p` runs refuse them unless you pass `--full-auto`).
 - Edits render as green/red diffs before they land.
 - Every reply is provenance-verified: it must come from the provider you picked — the model shown is the model that answered.
 - Skills give the model step-by-step instructions for kinds of task. Cortex ships five (`map-and-plan`, `reproduce-and-fix`, `safe-refactor`, `review-changes`, `commit-and-pr`), and you can add your own in `~/.cortex/skills/` or the project's `.cortex/skills/`. The model loads one when a request matches it, or you run one with `/<skill> request`. See [Skills](docs/cli.md#skills).
