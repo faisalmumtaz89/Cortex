@@ -202,16 +202,17 @@ def tui_project(tmp_path: Path):
     for session in sessions:
         session.close()
     # Any error the TUI hit, even one it drew past, fails the test, except
-    # one known in OpenTUI 0.1.107: about one run in 140, Yoga's layout pass
-    # traps measuring a text node ("access to a null reference" under
-    # calculateLayout). The frame is dropped and the next one draws.
+    # one known in OpenTUI 0.1.107: now and then a frame's call into its
+    # WebAssembly layout engine (Yoga) traps with "access to a null
+    # reference". The frame is dropped and the next one draws; OpenTUI 0.5
+    # and later do not use Yoga.
     log = home / ".cortex" / "cortex-tui.log"
     if log.exists():
         text = log.read_text(encoding="utf-8", errors="replace")
         entries = re.split(r"\n(?=\d{4}-\d\d-\d\dT)", text.strip())
         unknown = [
             entry for entry in entries
-            if not ("access to a null reference" in entry and "calculateLayout" in entry)
+            if not ("access to a null reference" in entry and "activateFrame" in entry)
         ]
         assert not unknown, "\n".join(unknown)
 
