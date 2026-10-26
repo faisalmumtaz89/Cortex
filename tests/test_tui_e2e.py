@@ -595,6 +595,34 @@ def test_login_picker_shows_each_provider_auth_status(tui_project) -> None:
     assert "not configured" in row("anthropic"), picker
 
 
+def test_replies_wrap_between_words_after_non_ascii_text(tui_project) -> None:
+    """A line of styled text with a non-ASCII character (an em dash) after its
+    first span used to wrap one character off, and every later line with it:
+    "cannot be see" / "n from here". Rows must break only between words."""
+    project, start = tui_project
+    risks = (
+        "nothing in the repo calls greet, so no call sites break; the only compatibility "
+        "risk is callers outside the repo that pass a second positional argument today "
+        "(unknown — they cannot be seen from here) or that would need greeting to be "
+        "keyword-only. Behaviour for an empty or None greeting is unvalidated, so the "
+        "current code has no validation either. The stale cache needs no migration — "
+        "Python recompiles it because of the version tag."
+    )
+    session = start([[{"text": f"**Risks**: {risks}\n\nWRAP_DONE"}]])
+    _select_scripted_model(session)
+    session.send_line("risks")
+    frame = session.wait_for("WRAP_DONE")
+
+    lines = frame.splitlines()
+    first = next(i for i, line in enumerate(lines) if "Risks:" in line)
+    paragraph = []
+    for line in lines[first:]:
+        if not line.strip() or "WRAP_DONE" in line:
+            break
+        paragraph.append(line.strip())
+    assert " ".join(paragraph) == f"Risks: {risks}", paragraph
+
+
 def test_openai_compatible_login_takes_the_base_url_and_needs_no_restart(tui_project) -> None:
     """Picking openai-compatible in the /login picker asks for the key AND the
     base URL; after that the model can be selected at once, in the same

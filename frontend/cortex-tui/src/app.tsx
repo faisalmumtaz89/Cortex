@@ -16,8 +16,6 @@ function SessionScreen() {
   const store = useStore()
   const renderer = useRenderer()
 
-  renderer.disableStdoutInterception()
-
   // One clean exit path: Ctrl+C (raw-mode key), SIGINT/SIGTERM (e.g. the
   // python launcher terminating us), and /quit all funnel through exitCortex,
   // which restores the terminal and exits — one press, whole tree torn down.

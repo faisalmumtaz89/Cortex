@@ -71,7 +71,7 @@ def test_prompt_panel_contract_is_bottom_anchor_stable() -> None:
 def test_index_startup_uses_full_screen_alt_buffer() -> None:
     source = _read("frontend/cortex-tui/src/index.tsx")
 
-    assert "useAlternateScreen: true" in source
+    assert 'screenMode: "alternate-screen"' in source
     assert "experimental_splitHeight" not in source
     assert "queryCursorRow" not in source
     assert "computeSplitHeight" not in source
@@ -86,10 +86,9 @@ def test_model_hint_copy_uses_ascii_safe_separators() -> None:
 
 
 def test_app_disables_stdout_interception_without_startup_clear_hacks() -> None:
-    source = _read("frontend/cortex-tui/src/app.tsx")
-
-    assert "renderer.disableStdoutInterception()" in source
-    assert "CORTEX_TUI_CLAIM_SCREEN" not in source
+    # Writes to stdout pass through to the terminal instead of into the frame.
+    assert 'externalOutputMode: "passthrough"' in _read("frontend/cortex-tui/src/index.tsx")
+    assert "CORTEX_TUI_CLAIM_SCREEN" not in _read("frontend/cortex-tui/src/app.tsx")
 
 
 def test_launcher_no_longer_disables_alt_screen() -> None:

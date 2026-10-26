@@ -30,7 +30,9 @@ void render(() => <App />, {
   // press. app.tsx owns Ctrl+C/SIGINT/SIGTERM via lib/exit.ts instead.
   exitOnCtrlC: false,
   autoFocus: false,
-  useAlternateScreen: true,
+  screenMode: "alternate-screen",
+  // Writes to stdout go straight to the terminal, never into the frame.
+  externalOutputMode: "passthrough",
   // Mouse ON so the transcript scrollbox scrolls with the wheel (the expected
   // gesture). Movement reporting stays off (it is the noisiest source of stray
   // sequences); any SGR fragment that still leaks into the prompt is stripped
