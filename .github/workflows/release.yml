@@ -148,7 +148,11 @@ jobs:
       - name: Lint install.ps1
         shell: pwsh
         run: |
-          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          # The PowerShell Gallery fails a download now and then: try again.
+          foreach ($attempt in 1..4) {
+            try { Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop; break }
+            catch { if ($attempt -eq 4) { throw }; Start-Sleep -Seconds (10 * $attempt) }
+          }
           $issues = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Error
           if ($issues) { $issues | Format-List; exit 1 }
       - name: install.ps1 explains WSL setup on a machine without a Linux distribution

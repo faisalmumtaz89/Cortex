@@ -1,16 +1,26 @@
+import { appendFileSync, mkdirSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { render } from "@opentui/solid"
 import { App } from "./app"
 import { exitCortex } from "./lib/exit"
 
-process.on("unhandledRejection", (error) => {
-  const message = error instanceof Error ? error.stack ?? error.message : String(error)
-  process.stderr.write(`[frontend] unhandled rejection: ${message}\n`)
-})
+// The screen belongs to the app, so errors go to a log file next to the
+// worker's, where they can be read afterwards.
+const ERROR_LOG = join(homedir(), ".cortex", "cortex-tui.log")
 
-process.on("uncaughtException", (error) => {
+function logError(kind: string, error: unknown): void {
   const message = error instanceof Error ? error.stack ?? error.message : String(error)
-  process.stderr.write(`[frontend] uncaught exception: ${message}\n`)
-})
+  try {
+    mkdirSync(join(homedir(), ".cortex"), { recursive: true })
+    appendFileSync(ERROR_LOG, `${new Date().toISOString()} ${kind}: ${message}\n`)
+  } catch {
+    // Nowhere left to report it.
+  }
+}
+
+process.on("unhandledRejection", (error) => logError("unhandled rejection", error))
+process.on("uncaughtException", (error) => logError("uncaught exception", error))
 
 // stdout and stderr are the terminal. A failed write means it is gone; exit
 // instead of reporting the failure to the same dead terminal.
@@ -39,4 +49,6 @@ void render(() => <App />, {
   // in session.tsx's input handler. PageUp/PageDown also scroll.
   useMouse: true,
   enableMouseMovement: false,
+  // An error stays in the log: OpenTUI's console overlay would cover the app.
+  openConsoleOnError: false,
 })

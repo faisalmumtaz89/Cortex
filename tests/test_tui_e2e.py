@@ -112,9 +112,12 @@ class TuiSession:
         if self.log_file.exists():
             log = self.log_file.read_text(encoding="utf-8", errors="replace")
         tail = "\n".join(log.splitlines()[-40:])
+        tui_log = self.log_file.with_name("cortex-tui.log")
+        errors = tui_log.read_text(encoding="utf-8", errors="replace") if tui_log.exists() else ""
         return AssertionError(
             f"{waiting_for}.\n--- pane (dead, exit status) ---\n{pane}"
             f"\n--- last frame ---\n{frame}\n--- cortex.log ---\n{tail}"
+            f"\n--- cortex-tui.log ---\n{errors}"
         )
 
     def wait_for(self, needle: str, *, timeout: float = 40.0) -> str:
@@ -122,9 +125,13 @@ class TuiSession:
             lambda frame: needle in frame, description=f"{needle!r} in TUI frame", timeout=timeout
         )
 
-    def wait_until(self, predicate, *, description: str, timeout: float = 20.0) -> str:
+    def wait_until(
+        self, predicate, *, description: str, timeout: float = 20.0, interval: float = 0.3
+    ) -> str:
         """Wait until a predicate over the current frame holds (e.g. for a
-        filtered/absent state that wait_for's substring match can't express)."""
+        filtered/absent state that wait_for's substring match can't express).
+        `interval` is the pause between captures; 0 catches a state that shows
+        for under half a second, even on a slow machine."""
         deadline = time.time() + timeout
         frame = ""
         while time.time() < deadline:
@@ -137,7 +144,7 @@ class TuiSession:
                 return settled if predicate(settled) else frame
             if self.exited():
                 raise self._failure(f"the TUI exited while waiting for {description}", frame)
-            time.sleep(0.3)
+            time.sleep(interval)
         raise self._failure(f"timed out waiting for {description}", frame)
 
     def process_tree(self) -> set[int]:
@@ -194,6 +201,19 @@ def tui_project(tmp_path: Path):
 
     for session in sessions:
         session.close()
+    # Any error the TUI hit, even one it drew past, fails the test, except
+    # one known in OpenTUI 0.1.107: about one run in 140, Yoga's layout pass
+    # traps measuring a text node ("access to a null reference" under
+    # calculateLayout). The frame is dropped and the next one draws.
+    log = home / ".cortex" / "cortex-tui.log"
+    if log.exists():
+        text = log.read_text(encoding="utf-8", errors="replace")
+        entries = re.split(r"\n(?=\d{4}-\d\d-\d\dT)", text.strip())
+        unknown = [
+            entry for entry in entries
+            if not ("access to a null reference" in entry and "calculateLayout" in entry)
+        ]
+        assert not unknown, "\n".join(unknown)
 
 
 def _picker_rows() -> list[str]:
@@ -294,6 +314,7 @@ def test_fast_tool_running_state_is_visibly_dwelled(tui_project) -> None:
         ),
         description="dwelled running spinner visible on an instant tool row",
         timeout=10.0,
+        interval=0,  # the dwell lasts 450 ms: two tmux calls and a pause can miss it
     )
 
     # And it settles: the answer can arrive while the row is still dwelling
