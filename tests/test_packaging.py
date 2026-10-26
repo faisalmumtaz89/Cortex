@@ -77,7 +77,16 @@ def test_release_workflow_is_single_channel_and_publishes_last() -> None:
     ):
         assert RELEASE.index(gate) < release_index, f"{gate!r} must precede release creation"
     assert "needs: [build, windows-installer]" in RELEASE
-    assert "if: startsWith(github.ref, 'refs/tags/v')" in RELEASE  # dispatch = dry run
+    # A run by hand publishes only when asked to, and only from main; the tag
+    # it creates is the package version's, on the commit that was tested.
+    assert (
+        "if: startsWith(github.ref, 'refs/tags/v') || "
+        "(inputs.publish && github.ref == 'refs/heads/main')"
+    ) in RELEASE
+    assert "default: false" in RELEASE
+    assert "tag_name: ${{ steps.tag.outputs.tag }}" in RELEASE
+    assert "target_commitish: ${{ github.sha }}" in RELEASE
+    assert RELEASE.index("Resolve the release tag") < release_index
     assert "dist/*.whl" in RELEASE and "dist/*.whl.sha256" in RELEASE
     assert "overwrite_files: true" in RELEASE
     assert "concurrency:" in RELEASE and "cancel-in-progress: false" in RELEASE
