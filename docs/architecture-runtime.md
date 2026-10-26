@@ -24,7 +24,7 @@ They communicate over line-delimited JSON-RPC 2.0 on the worker's stdio, plus st
 ## Agent Turn Flow
 
 1. The frontend submits user input via `session.submit_user_input`.
-2. `SessionService` builds the turn and hands it to the `ToolingOrchestrator`, which assembles the system prompt (identity, working directory, the skills' names and descriptions, and `AGENTS.md`/`CLAUDE.md` project context).
+2. `SessionService` builds the turn and hands it to the `ToolingOrchestrator`, which assembles the system prompt (identity, working directory, the skills' names and descriptions, and `AGENTS.md`/`CLAUDE.md` project context). Only the first of `AGENTS.md`/`CLAUDE.md` in the start directory is used, cut at 16 KB; with tools off, neither it nor the skills are sent.
 3. The model streams text and native tool calls.
 4. Each tool call passes through the `PermissionManager`. Reads are allowed by default rules; `edit`/`bash` permissions trigger a `permission.asked` event, which the frontend answers via the `permission.reply` method (allow once / allow always / reject).
 5. Tool results are fed back to the model until it answers without tool calls, up to `tools_max_iterations`.
@@ -49,7 +49,7 @@ Worker mode reserves real stdout for JSON-RPC frames and redirects normal `print
 
 ## Empirical Validation
 
-`tests/test_agent_runtime_e2e.py` spawns the real worker subprocess in a scratch repository and drives full agent turns over JSON-RPC. Only the model is replaced: setting `CORTEX_SCRIPTED_MODEL` to a JSON script path activates a deterministic scripted client (`cortex/cloud/clients/scripted_client.py`), so the orchestrator, tool registry, permission engine, event stream, and persistence all run for real. Assertions check observable effects — files on disk, event sequences, exit codes.
+`tests/test_agent_runtime_e2e.py` spawns the real worker subprocess in a scratch repository and drives full agent turns over JSON-RPC. Only the model is replaced: setting `CORTEX_SCRIPTED_MODEL` to a JSON script path activates a deterministic scripted client (`cortex/cloud/clients/scripted_client.py`), so the orchestrator, tool registry, permission engine, event stream, and persistence all run for real. Assertions check observable effects — files on disk, event sequences, exit codes. `tests/test_tui_e2e.py` does the same for the real TUI, running the sidecar and worker in tmux and asserting on captured frames.
 
 ## Scope
 

@@ -18,6 +18,8 @@ pip install -e ".[dev]"
 - Python 3.11 or later
 - Bun runtime for frontend work (global `bun`, or the local runtime provisioned by `npm install` in `frontend/cortex-tui`)
 
+The sidecar build always targets darwin-arm64, and the test suite expects macOS tools (BSD `stat`, `shasum`).
+
 ## Project Structure
 
 ```
@@ -50,10 +52,12 @@ Cortex/
 │   │   ├── skills.py               # Skill discovery and SKILL.md parsing
 │   │   └── builtin/                # read_file, list_dir, search, edit_file, write_file, bash, skill
 │   ├── cloud/                      # Model providers
-│   │   ├── router.py               # Provider routing + retries
+│   │   ├── router.py               # Provider routing
+│   │   ├── retry.py                # Request retries and backoff
 │   │   ├── catalog.py              # Model catalog (+ ~/.cortex/cloud_models.json overrides)
 │   │   ├── credentials.py          # Keychain/env credential handling
 │   │   └── clients/                # openai, anthropic, chat_completions, scripted clients
+│   ├── skills/                     # Built-in skills (one folder with SKILL.md each)
 │   ├── protocol/                   # JSON-RPC contracts/server (rpc_server, schema, types, events)
 │   └── ui_runtime/                 # OpenTUI launcher + bundled sidecar binary
 ├── frontend/cortex-tui/            # OpenTUI + Solid frontend source
@@ -85,14 +89,16 @@ npm run build      # Builds the darwin-arm64 bundled sidecar binary
 Behavioral claims must be validated against the real runtime, not inferred from reading code:
 
 1. **E2E suite** — `tests/test_agent_runtime_e2e.py` spawns the real worker subprocess in a scratch repository and drives full agent turns over JSON-RPC. The model is replaced with a deterministic script (`CORTEX_SCRIPTED_MODEL` pointing at a JSON script file); everything else — orchestrator, tool registry, permission engine, event stream, persistence — runs for real. Assertions check observable effects: files on disk, event sequences, exit codes.
-2. **Full suite** — `python -m pytest tests/ -q` must be green before and after any change.
-3. **Manual verification** — `python -P -m cortex -p "prompt" --model ...` exercises a real turn end to end.
+2. **TUI E2E** — `tests/test_tui_e2e.py` runs the real TUI (sidecar + worker) in tmux with the scripted model and asserts on captured frames. It is skipped without tmux or a built sidecar; rebuild first with `cd frontend/cortex-tui && bun run build`.
+3. **Full suite** — `python -m pytest tests/ -q` must be green before and after any change.
+4. **Manual verification** — `python -P -m cortex -p "prompt" --model ...` exercises a real turn end to end.
 
 If a change cannot be observed through one of these, add the scenario to the E2E suite first, then make the change.
 
 ```bash
 python -m pytest tests/ -q                          # everything
-python -m pytest tests/test_agent_runtime_e2e.py -q # just the E2E gate
+python -m pytest tests/test_agent_runtime_e2e.py -q # just the worker E2E gate
+python -m pytest tests/test_tui_e2e.py -q           # just the TUI E2E gate
 ```
 
 ## Code Style

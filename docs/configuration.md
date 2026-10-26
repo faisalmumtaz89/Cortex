@@ -12,7 +12,7 @@ Files Cortex writes outside the project:
 
 - `~/.cortex/state.yaml` — runtime state such as the last-used model, kept separate from `config.yaml` so Cortex never rewrites your configuration.
 - `~/.cortex/tool_permissions.yaml` — persisted tool permission rules. "Allow always" adds a rule for one exact command or one file, in the directory Cortex was started in (`repo:`). A command run in another directory is saved with it, as `cd ./<dir> || exit 1` (the directory quoted when its name needs it) and the command on the next line. File patterns are paths relative to the start directory, such as `src/app.py`. Saved patterns escape wildcard characters, so `ls *.py` is saved as `ls [*].py` and matches only itself. A call with no command or file to name is never saved. Changes to the file apply at once, also in running sessions; while the file cannot be parsed, sessions keep the rules they last read. A rule you write without `repo:` applies everywhere; `repo:` takes an absolute path (or one starting with `~`). When several rules match, the last one in the file wins. "Allow always" answers this session could not save still apply until it ends. Its `pattern` may use the wildcards `*`, `?` and `[...]`, but a wildcard in a `bash` pattern matches anything, including further commands: `git *` also allows `git log; rm -rf ~`. Files with `version: 1` were written by older Cortex versions, whose "Allow always" covered every command or file in every repository: their allow rules for `bash` and edits are ignored and removed at the next save, so those tools ask again.
-- `~/.cortex/cloud_models.json` — optional additions to the cloud model catalog.
+- `~/.cortex/cloud_models.json` — optional models to add to the `/model` picker, by provider, such as `{"openai-compatible": ["deepseek/deepseek-v4.1-flash"], "azure": ["my-deployment"]}`. `openai-compatible` has no built-in models, so this file is how its models appear in the picker.
 
 ## Template
 
@@ -45,24 +45,23 @@ log_file: ~/.cortex/cortex.log
 - `tools_enabled` (default: `true`) — master toggle for tool execution.
 - `tools_profile` (default: `full`) — which tools the model may call:
   - `off`: none
-  - `read_only`: `read_file`, `list_dir`, `search`
+  - `read_only`: `read_file`, `list_dir`, `search` (and `skill` when skills exist)
   - `edit`: read-only + `edit_file`, `write_file` (the legacy value `patch` is accepted as an alias)
   - `full`: edit + `bash`
 - `tools_max_iterations` (default: `100`, at most `1000`) — model requests one turn may make while it uses tools. A turn that reaches the limit stops with a message naming it; its tool calls and results stay in the conversation, so a new message lets the model continue.
-- `tools_continue_on_reject` (default: `false`) — reserved toggle for reject handling.
+- `tools_continue_on_reject` (default: `false`) — not read.
 
 ### Inference
 
-- `temperature` (default: `0.7`)
-- `top_p` (default: `0.95`)
+- `temperature` (default: `0.7`, 0 to 2)
+- `top_p` (default: `0.95`, 0 to 1)
 - `max_tokens` (default: `32768`) — output budget per model request, including reasoning tokens. A reply that reaches it fails the turn with a message naming the limit.
 
 ### Cloud
 
 - `cloud_timeout_seconds` (default: `60`, at most `600`) — seconds a model request may wait for data before it fails (and is sent again, see `cloud_max_retries`). A permission prompt has no timeout: it waits for your answer, and interrupting the turn rejects it.
-- `cloud_max_retries` (default: `2`) — how many times a model request is sent again after a connection error, a timeout, a stream cut off before its end, a rate limit (429), a request timeout or conflict (408, 409), or a server error (5xx, or an overloaded or server error reported inside the stream). Cortex waits as the server asks (`Retry-After` or `retry-after-ms`, at most 60 seconds), otherwise 1, 2, 4, ... seconds (at most 30). Other errors, such as an invalid request (400) or a rejected key (401), fail the turn at once. A request whose reply has started to appear is not sent again.
-- `cloud_default_openai_model` (default: `gpt-5.5`)
-- `cloud_default_anthropic_model` (default: `claude-fable-5`)
+- `cloud_max_retries` (default: `2`, at most `10`) — how many times a model request is sent again after a connection error, a timeout, a stream cut off before its end, a rate limit (429), a request timeout or conflict (408, 409), or a server error (5xx, or an overloaded or server error reported inside the stream). Cortex waits as the server asks (`Retry-After` or `retry-after-ms`, at most 60 seconds), otherwise 1, 2, 4, ... seconds (at most 30). Other errors, such as an invalid request (400) or a rejected key (401), fail the turn at once. A request whose reply has started to appear is not sent again.
+- `cloud_default_openai_model` (default: `gpt-5.5`), `cloud_default_anthropic_model` (default: `claude-fable-5`) — the model Cortex selects at startup when no saved model can be restored and that provider has a key.
 - `cloud_azure_endpoint` (default: empty) — Azure OpenAI resource endpoint; `AZURE_OPENAI_ENDPOINT` env var takes precedence. Azure model ids are deployment names (`azure:<deployment>`).
 - `cloud_openai_compatible_base_url` (default: empty) — base URL of an endpoint that serves the OpenAI Chat Completions API, used by `openai-compatible:<model>`; `OPENAI_COMPATIBLE_BASE_URL` env var takes precedence.
 
@@ -70,7 +69,8 @@ log_file: ~/.cortex/cortex.log
 
 - `auto_save` (default: `true`) — persist conversations to `~/.cortex/conversations/conversations.db`.
 - `save_directory` (default: `~/.cortex/conversations`)
-- `save_format` (default: `json`), `max_conversation_history` (default: `100`), `enable_branching` (default: `true`).
+- `max_conversation_history` (default: `100`).
+- `save_format` (default: `json`) and `enable_branching` (default: `true`) — not read.
 
 ### Logging
 
@@ -84,7 +84,9 @@ log_file: ~/.cortex/cortex.log
 
 ### UI / System / Developer / Paths
 
-Accepted for compatibility; mostly advisory in the OpenTUI runtime: `ui_theme`, `markdown_rendering`, `syntax_highlighting`, `show_*` toggles, `shutdown_timeout`, `crash_recovery`, `debug_mode`, `templates_dir`, `plugins_dir`.
+Accepted but not read: `ui_theme`, `markdown_rendering`, `syntax_highlighting`, `show_performance_metrics`, `auto_scroll`, `copy_on_select`, `mouse_support`, `shutdown_timeout`, `crash_recovery`, `templates_dir`, `plugins_dir`.
+
+`debug_mode: true` also writes the log to stderr.
 
 ## Notes
 

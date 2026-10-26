@@ -84,7 +84,7 @@ Add a key for a provider, then pick a model:
 
 ```bash
 /login openai <api_key>        # or anthropic / azure / openai-compatible
-/model openai:gpt-5.1
+/model openai:gpt-5.5
 ```
 
 Provider keys can also come from environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`); see the [CLI Documentation](cli.md#login--credentials) for Azure and OpenAI-compatible endpoints. Cortex remembers the last selected model across restarts (`~/.cortex/state.yaml`).
@@ -116,7 +116,7 @@ Running from a source checkout (`git clone` + `./install.sh`)? `/update cortex` 
 
 ```bash
 sudo chown -R $(whoami) ~/.cortex
-chmod -R 755 ~/.cortex
+chmod -R u+rwX ~/.cortex
 ```
 
 For everything else, see `docs/troubleshooting.md`.
@@ -131,6 +131,9 @@ rm -f ~/.local/bin/cortex
 # Remove configuration, caches, and conversations
 rm -rf ~/.cortex
 ```
+
+API keys saved with `/login` stay in the macOS Keychain under the service
+`cortex-llm`; delete them in Keychain Access.
 
 If you installed into your own environment instead: `pip uninstall cortex-llm`.
 

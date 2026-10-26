@@ -31,6 +31,13 @@ Every event includes:
 
 The frontend should drop stale/replayed events with `seq <= last_seq`.
 
+## Methods
+
+`app.handshake`, `session.create_or_resume`, `session.submit_user_input`,
+`session.interrupt`, `permission.reply`, `command.execute`, `model.list`,
+`model.select`, `skill.list`, `cloud.auth.status`, `cloud.auth.save_key`,
+`cloud.auth.delete_key`.
+
 ## Failure Taxonomy
 
 - Parse errors: JSON-RPC `-32700`
@@ -42,10 +49,10 @@ The frontend should drop stale/replayed events with `seq <= last_seq`.
 
 ## Logs
 
-Key log dimensions in `~/.cortex/cortex.log`:
+What `~/.cortex/cortex.log` records:
 
-- `request_id`, `provider`, `model`, `attempt` (cloud routing)
-- `session_id`, `seq`, `event_type` (worker event emission)
+- Model request failures: `Cloud generation failed for <provider:model>: <error>`
+- With `log_level: DEBUG`: `event emitted session_id=… seq=… event_type=…` for each worker event
 
 ## Smoke Checks
 

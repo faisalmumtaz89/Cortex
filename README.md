@@ -39,7 +39,7 @@ Requires an Apple Silicon Mac, macOS 13.3+, Python 3.11+, and Xcode Command Line
 
 ## Documentation
 
-[Installation](docs/installation.md) · [CLI & tools](docs/cli.md) · [Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md) · [Architecture](docs/architecture-runtime.md) · [Development](docs/development.md)
+[Installation](docs/installation.md) · [CLI & tools](docs/cli.md) · [Configuration](docs/configuration.md) · [Conversations](docs/conversation-management.md) · [Troubleshooting](docs/troubleshooting.md) · [Architecture](docs/architecture-runtime.md) · [Protocol debugging](docs/protocol-debugging.md) · [Development](docs/development.md)
 
 ## Development
 

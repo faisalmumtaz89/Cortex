@@ -2,7 +2,8 @@
 
 Cortex is a terminal AI coding agent: OpenAI, Anthropic, Azure OpenAI, and
 OpenAI-compatible models drive a small permissioned tool set (read_file,
-list_dir, search, edit_file, write_file, bash) inside the user's repository.
+list_dir, search, edit_file, write_file, bash, skill) inside the user's
+repository.
 
 ## Architecture (two processes)
 
@@ -15,7 +16,8 @@ list_dir, search, edit_file, write_file, bash) inside the user's repository.
 
 Key packages: `cortex/app/` (services), `cortex/tooling/` (agent loop, tools,
 permissions, system prompt), `cortex/cloud/` (providers + router),
-`cortex/protocol/` (RPC schema/events), `cortex/ui_runtime/` (sidecar launcher).
+`cortex/protocol/` (RPC schema/events), `cortex/ui_runtime/` (sidecar launcher),
+`cortex/skills/` (built-in skills).
 
 ## The prime rule: runtime evidence over reasoning
 
@@ -41,7 +43,8 @@ E2E suite first, then make the change.
 
 ## Conventions
 
-- Python ≥ 3.11, line length 100, `ruff` + `mypy` clean (`./scripts/typecheck.sh`).
+- Python ≥ 3.11, line length 100, `ruff check cortex/ tests/` and
+  `./scripts/typecheck.sh` (mypy) clean.
 - Never print to stdout in worker code — stdout is the JSON-RPC channel.
   Diagnostics go to stderr or the log file.
 - Tools must stay sandboxed to the repo root (`resolve_repo_path`) and every

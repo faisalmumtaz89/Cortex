@@ -83,7 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.
 If you see "No model loaded" after starting Cortex, add a provider key and pick a model:
 
 1. `/login openai <api_key>` (or `anthropic` / `azure` / `openai-compatible`), or set the provider's environment variable.
-2. `/model` to open the picker, or `/model openai:gpt-5.1` to select directly.
+2. `/model` to open the picker, or `/model openai:gpt-5.5` to select directly.
 
 ### Model not authenticated
 
@@ -153,7 +153,7 @@ If Cortex cannot read or write its state files:
 
 ```bash
 sudo chown -R $(whoami) ~/.cortex/
-chmod -R 755 ~/.cortex/
+chmod -R u+rwX ~/.cortex/
 ```
 
 ---

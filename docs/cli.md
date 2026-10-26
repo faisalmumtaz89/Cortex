@@ -23,6 +23,10 @@ Type a message to run an agent turn with the active model, or a slash command to
 | `Enter` | Submit input |
 | `Shift+Enter` | Insert newline |
 | `↑` / `↓`, `Enter` / `Esc` | Choose an answer to a pending permission prompt / reject it |
+| `↑` / `↓` (empty input) | Recall earlier prompts |
+| `Esc` | Close the palette or result panel; otherwise interrupt the running turn |
+| `Ctrl+O` | Show or hide tool details |
+| `PageUp` / `PageDown` | Scroll the transcript |
 | `Ctrl+C` | Exit Cortex |
 
 ## Headless Mode
@@ -37,13 +41,15 @@ Runs one agent turn through the same worker wiring the TUI uses:
 - `--model` accepts the same `provider:model` selectors as `/model`.
 - Permission policy: reads (`read_file`, `list_dir`, `search`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt). Persisted rules from `~/.cortex/tool_permissions.yaml` still apply.
 - Exit codes: `0` success, `1` turn error, `2` setup error (e.g. model selection failed).
+- Without `--model`, the model restored at startup is used. `-p` is also available as `--print`.
+- Slash commands are not run in headless mode, except `/<skill> request`: anything else is sent to the model as written.
 
 Examples:
 
 ```bash
 cortex -p "summarize what cortex/app/headless.py does"
 cortex -p "rename the helper in src/utils.py and update callers" --full-auto
-cortex -p "review this diff for bugs" --model openai:gpt-5.1
+cortex -p "review this diff for bugs" --model openai:gpt-5.5
 ```
 
 ## Slash Commands
@@ -64,10 +70,10 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 
 ```bash
 /model                                  # open the interactive picker (↑↓ + Enter, Esc cancels)
-/model openai:gpt-5.1
-/model anthropic:claude-sonnet-4-5
+/model openai:gpt-5.5
+/model anthropic:claude-sonnet-5
 /model openai-compatible:deepseek/deepseek-v4.1-flash
-/model list                             # plain text list (headless/worker fallback)
+/model list                             # plain text list
 ```
 
 ### `/login` — credentials
@@ -80,8 +86,10 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.1
 /login openai                 # show auth status for a provider
 ```
 
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `AZURE_OPENAI_API_KEY` environment
-variables are used as fallbacks. Azure additionally requires the resource
+`/login` saves the key in the macOS Keychain (service `cortex-llm`). The
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY` and
+`OPENAI_COMPATIBLE_API_KEY` environment variables take precedence over a saved
+key when they are set. Azure additionally requires the resource
 endpoint via `AZURE_OPENAI_ENDPOINT` (or `cloud_azure_endpoint` in
 `~/.cortex/config.yaml`); Azure model ids are your deployment names, selected as
 `/model azure:<deployment>` (e.g. `azure:gpt-5.5`).
@@ -101,6 +109,7 @@ from it at each tool step, and DeepSeek requires it whenever tools are offered.
 
 With tools enabled (the default: `tools_enabled: true`, `tools_profile: full`), the model can call:
 
+- `skill` — read-only, auto-allowed; loads a skill's instructions or one of its files (present when any skill exists; see [Skills](#skills)).
 - `read_file`, `list_dir`, `search` — read-only, auto-allowed. `read_file` shows each line as `<number>: <text>`, at most 2000 lines and 100 KB per call, with lines longer than 2000 characters cut; when lines are left out, it ends with a note saying how to read on.
 - `edit_file` (exact string replacement), `write_file` — prompt for permission. `edit_file` matches text as `read_file` shows it and changes only the text it replaces: the rest of the file keeps its line breaks (`\r\n`, `\n` or `\r`), and its UTF-8 byte order mark. Content `write_file` writes without `\r` gets the line break the old file used most; to change a file's line breaks, use `bash`. A changed file keeps its mode, owner, group, extended attributes and ACLs, and is replaced in one step, so it never holds part of a write. Where that cannot be done keeping all of these (a file with hard links, one owned by another user, one whose attributes cannot be copied, a file mounted on its own, or one in a directory that does not allow new files), the file is written in place instead, which can leave it cut short if the disk fills or the machine stops mid-write. Read-only files are refused, unless Cortex runs as root.
 - `bash` — prompts for permission. A command runs with no input (it cannot read from the terminal), with stderr merged into stdout (programs that buffer their output when it is not a terminal may still print out of order), and in your environment minus the provider API keys Cortex uses (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`) and all `CORTEX_*` variables. That keeps those keys out of commands' output; it is not a sandbox, and a project whose own tests need one of those keys has to get it another way. The call returns when the command exits; a background process it started keeps running while Cortex does, and its later output is discarded. At its timeout (2 minutes by default, at most 10), or when you press `Esc`, the command and everything in its process group get SIGTERM, then SIGKILL 3 seconds later; `Esc` also ends the turn. Of long output, the first 20 KB and the last 230 KB are kept, with a note of how many bytes were left out; carriage returns become line breaks.
@@ -141,8 +150,8 @@ Cortex ships five skills:
 | `map-and-plan` | Map the code a question or change touches, with `path:line` references, and write a step-by-step plan before any edit | read-only: `read_file`, `list_dir`, `search` |
 | `reproduce-and-fix` | Find the first real error in a bug report, failing test or CI log, reproduce it with a failing test, fix the code (never the test) and run the full suite | all |
 | `safe-refactor` | Restructure code or upgrade dependencies from a passing suite, in small steps, keeping behaviour and public APIs | all |
-| `review-changes` | Review a diff for bugs and security flaws, prove each finding by running it, and rank them; it never fixes them | no `edit_file`; `write_file` only for a review file you ask for |
-| `commit-and-pr` | Check a diff for secrets and debug leftovers, write the commit message and PR description, and run git without force pushes or history rewrites | no `edit_file`; `write_file` only for a message or PR description file you ask for |
+| `review-changes` | Review a diff for bugs and security flaws, prove each finding by running it, and rank them; it never fixes them | no `edit_file`; `write_file` and `bash` allowed (its instructions use `write_file` only for a review file you ask for) |
+| `commit-and-pr` | Check a diff for secrets and debug leftovers, write the commit message and PR description, and run git without force pushes or history rewrites | no `edit_file`; `write_file` and `bash` allowed (its instructions use `write_file` only for a message or PR description file you ask for) |
 
 Cortex finds skills in three places, and a skill in a later one replaces one of
 the same name in an earlier one:
@@ -158,13 +167,14 @@ The model sees only each skill's name and description. When a request matches
 one, it loads the skill with the `skill` tool, which also reads the skill's
 other files (only files inside the skill's folder). To run a skill yourself,
 type `/<name>` followed by your request, such as `/map-and-plan add a --json
-flag to the export command`; skills are listed in the `/` palette and in
+flag to the export command`; skills are listed in the TUI's `/` palette and
 `/help`, and a built-in command of the same name wins. In headless mode,
 `cortex -p "/<name> request"` does the same.
 
 Once a skill with `allowed-tools` is loaded, the other tools are refused for
-the rest of the turn, so a read-only skill cannot change files even if the
-model tries. Loading another skill in the same turn can narrow that set but
+the rest of the turn, so a read-only skill such as `map-and-plan` cannot change
+files even if the model tries. A skill that keeps `bash` or `write_file` is
+held to the rest by its instructions only. Loading another skill in the same turn can narrow that set but
 never widen it; the next message starts without a limit. With tools off
 (`tools_profile: off`), skills are neither listed nor run.
 
