@@ -360,6 +360,9 @@ def test_slash_palette_opens_filters_executes_without_polluting_transcript(tui_p
     assert "Esc to dismiss" in result
     assert "/quit (/exit)" in result  # alias surfaced
     assert "[1]" not in result and "[2]" not in result  # no numbered rows
+    # Every name, the longest skill's included, keeps a gap before its text.
+    for name in ("/reproduce-and-fix", "/review-changes", "/quit (/exit)"):
+        assert re.search(re.escape(name) + r" {2,}\S", result), (name, result)
 
     # Esc dismisses the result panel; nothing command-related remains — this is
     # the no-pollution guarantee (the output never entered the scroll history).

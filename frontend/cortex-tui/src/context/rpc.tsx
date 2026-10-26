@@ -6,13 +6,17 @@ import { useStore } from "./store"
 
 /** /help is rendered client-side from the command registry so its content and
  * order can never drift from the palette. */
-function buildHelpText(): string {
-  const rows = SLASH_COMMANDS.map((command) => {
-    const name = command.name === "quit" ? "/quit (/exit)" : `/${command.name}`
-    return `${name.padEnd(16)}${command.description}`
-  })
-  const skillRows = skills().map((skill) => `/${skill.name.padEnd(15)}${skill.description}`)
-  return skillRows.length ? [...rows, "", "Skills:", ...skillRows].join("\n") : rows.join("\n")
+export function buildHelpText(): string {
+  const commands = SLASH_COMMANDS.map((command) => ({
+    name: command.name === "quit" ? "/quit (/exit)" : `/${command.name}`,
+    description: command.description,
+  }))
+  const skillList = skills().map((skill) => ({ name: `/${skill.name}`, description: skill.description }))
+  // One column for every name, two spaces wider than the longest.
+  const width = Math.max(...[...commands, ...skillList].map((row) => row.name.length)) + 2
+  const format = (row: { name: string; description: string }) => `${row.name.padEnd(width)}${row.description}`
+  const rows = commands.map(format)
+  return skillList.length ? [...rows, "", "Skills:", ...skillList.map(format)].join("\n") : rows.join("\n")
 }
 
 type RpcContextValue = {
