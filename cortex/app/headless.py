@@ -14,25 +14,54 @@ from typing import Optional
 from cortex.tooling.types import PermissionAction, PermissionRule
 
 
-def _print_event(*, session_id: str, event_type: str, payload: dict) -> None:
-    if event_type == "message.part.updated":
-        part = payload.get("part") or {}
-        if part.get("type") == "text":
-            sys.stdout.write(str(part.get("delta", "")))
-            sys.stdout.flush()
-        elif part.get("type") == "tool":
-            state = str(part.get("state", ""))
-            tool = str(part.get("tool", ""))
-            if state == "running":
-                print(f"[tool] {tool} {part.get('input', {})}", file=sys.stderr)
-            elif state == "error" or part.get("ok") is False:
-                print(f"[tool] {tool} failed: {part.get('error', '')}", file=sys.stderr)
-            elif state == "completed":
-                output = str(part.get("output", "") or "")
-                print(f"[tool] {tool} ok ({len(output)} chars)", file=sys.stderr)
-        return
-    if event_type == "session.error":
-        print(f"error: {payload.get('error', '')}", file=sys.stderr)
+class _Printer:
+    """Assistant text to stdout, tool activity to stderr. Text that follows a
+    tool call starts a new paragraph, and a tool line never starts partway
+    through a line of text when both streams share a terminal."""
+
+    def __init__(self) -> None:
+        self.wrote_text = False
+        self.line_open = False
+        self.after_tool = False
+
+    def _write(self, text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        self.line_open = not text.endswith("\n")
+
+    def end_line(self) -> None:
+        if self.line_open and not sys.stdout.closed:
+            self._write("\n")
+
+    def event(self, *, session_id: str, event_type: str, payload: dict) -> None:
+        if event_type == "message.part.updated":
+            part = payload.get("part") or {}
+            if part.get("type") == "text":
+                delta = str(part.get("delta", ""))
+                if not delta:
+                    return
+                if self.after_tool and self.wrote_text:
+                    self.end_line()
+                    self._write("\n")
+                self.after_tool = False
+                self.wrote_text = True
+                self._write(delta)
+            elif part.get("type") == "tool":
+                self.end_line()
+                self.after_tool = True
+                state = str(part.get("state", ""))
+                tool = str(part.get("tool", ""))
+                if state == "running":
+                    print(f"[tool] {tool} {part.get('input', {})}", file=sys.stderr)
+                elif state == "error" or part.get("ok") is False:
+                    print(f"[tool] {tool} failed: {part.get('error', '')}", file=sys.stderr)
+                elif state == "completed":
+                    output = str(part.get("output", "") or "")
+                    print(f"[tool] {tool} ok ({len(output)} chars)", file=sys.stderr)
+            return
+        if event_type == "session.error":
+            self.end_line()
+            print(f"error: {payload.get('error', '')}", file=sys.stderr)
 
 
 def run_headless(
@@ -87,17 +116,23 @@ def run_headless(
             print(f"model selection failed: {selection.get('message', model)}", file=sys.stderr)
             return 2
 
+    elif getattr(runtime.model_service.active_target, "cloud_model", None) is None:
+        print(
+            "error: no model selected. Pass one with --model provider:model, "
+            "for example --model openai:gpt-5.5 (see cortex --help).",
+            file=sys.stderr,
+        )
+        return 2
+
+    printer = _Printer()
     runtime.session_service.create_or_resume(session_id=session_id)
     result = runtime.session_service.submit_user_input(
         session_id=session_id,
         user_input=prompt,
         active_target_input=None,
         stop_sequences=None,
-        emit_event=_print_event,
+        emit_event=printer.event,
     )
-
-    if not sys.stdout.closed:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+    printer.end_line()
 
     return 0 if bool(result.get("ok", True)) else 1

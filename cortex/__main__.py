@@ -76,7 +76,17 @@ def _package_version() -> str:
 
 def main() -> None:
     try:
-        parser = argparse.ArgumentParser(prog="cortex")
+        parser = argparse.ArgumentParser(
+            prog="cortex",
+            description="Terminal AI coding agent. Run `cortex` in a repository for the "
+            "interactive app, or `cortex -p PROMPT --model PROVIDER:MODEL` for one turn.",
+            epilog="Providers read their keys from OPENAI_API_KEY, ANTHROPIC_API_KEY, "
+            "AZURE_OPENAI_API_KEY (with AZURE_OPENAI_ENDPOINT) or OPENAI_COMPATIBLE_API_KEY "
+            "(with OPENAI_COMPATIBLE_BASE_URL), or from /login in the interactive app. "
+            "Models are written provider:model, for example openai:gpt-5.5 or "
+            "openai-compatible:deepseek/deepseek-v4.1-flash. Each -p run is a new "
+            "conversation.",
+        )
         parser.add_argument(
             "--version",
             action="version",
@@ -93,7 +103,8 @@ def main() -> None:
         )
         parser.add_argument(
             "--model",
-            help="Model selector for headless mode (same syntax as /model).",
+            help="Model for headless mode, as provider:model (same syntax as /model). "
+            "Remembered for later runs.",
         )
         parser.add_argument(
             "--full-auto",

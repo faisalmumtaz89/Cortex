@@ -1686,3 +1686,42 @@ def test_login_works_without_a_system_keyring(tmp_path: Path, scratch_repo: Path
     finally:
         harness.close()
     assert status["active_source"] == "file", status
+
+
+def test_headless_without_a_model_says_to_pass_one(tmp_path: Path, scratch_repo: Path) -> None:
+    """A first headless run has no model yet; slash commands do not run
+    headless, so the error must name --model, and it is a setup error."""
+    env = _worker_env(tmp_path, _write_script(tmp_path / "script.json", [[{"text": "x"}]]))
+    # Only an OpenAI-compatible endpoint is set up: nothing picks a default model.
+    env.pop("OPENAI_API_KEY")
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-test-compatible"
+    env["OPENAI_COMPATIBLE_BASE_URL"] = "http://127.0.0.1:9/v1"
+    process = subprocess.run(
+        [sys.executable, "-m", "cortex", "-p", "say hi"],
+        cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+    )
+
+    assert process.returncode == 2, process.stderr
+    assert "--model" in process.stderr and "/model" not in process.stderr
+    assert process.stdout.strip() == ""
+
+
+def test_headless_starts_a_new_paragraph_after_tool_calls(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """Text the model writes after a tool call is a new message: it must not
+    run on from the text before the call."""
+    script = _write_script(
+        tmp_path / "script.json",
+        [[
+            {"text": "Looking first.",
+             "tool_calls": [{"name": "read_file", "arguments": {"path": "README.md"}}]},
+            {"text": "Done."},
+        ]],
+    )
+    process = _run_headless(
+        cwd=scratch_repo, env=_worker_env(tmp_path, script), prompt="look", extra_args=[]
+    )
+
+    assert process.returncode == 0, process.stderr
+    assert process.stdout == "Looking first.\n\nDone.\n"

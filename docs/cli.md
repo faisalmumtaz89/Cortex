@@ -40,8 +40,10 @@ Runs one agent turn through the same worker wiring the TUI uses:
 - The assistant reply streams to **stdout**; tool activity and errors go to **stderr**, so stdout stays pipeable.
 - `--model` accepts the same `provider:model` selectors as `/model`.
 - Permission policy: reads (`read_file`, `list_dir`, `search`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt). Persisted rules from `~/.cortex/tool_permissions.yaml` still apply.
-- Exit codes: `0` success, `1` turn error, `2` setup error (e.g. model selection failed).
-- Without `--model`, the model restored at startup is used. `-p` is also available as `--print`.
+- Exit codes: `0` success, `1` turn error, `2` setup error (no model selected, or model selection failed).
+- Without `--model`, the model last selected (in the TUI or by an earlier `--model`) is used; the first run needs `--model`. `-p` is also available as `--print`.
+- Each run is a new conversation: it does not see earlier `-p` runs, so say everything the task needs in the prompt.
+- Text the model writes after a tool call starts a new paragraph.
 - Slash commands are not run in headless mode, except `/<skill> request`: anything else is sent to the model as written.
 
 Examples:
