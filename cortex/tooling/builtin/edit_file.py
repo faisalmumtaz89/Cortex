@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
@@ -34,7 +37,11 @@ class EditFileTool(BaseTool[EditFileArgs]):
     permission = "edit"
     args_model = EditFileArgs
 
-    def run(self, parsed_args: EditFileArgs, context: ToolContext) -> ToolResult:
+    def _plan(
+        self, parsed_args: EditFileArgs, context: ToolContext
+    ) -> tuple[Path, LineView, str, int]:
+        """The file, its text as read, its text after the edit, and the number of
+        replacements; ToolExecutionError when the edit cannot be made."""
         try:
             target = resolve_repo_path(root=context.repo_root, relative_path=parsed_args.path)
         except ValueError as exc:
@@ -96,20 +103,19 @@ class EditFileTool(BaseTool[EditFileArgs]):
                 "this edit would join a \\r and a \\n line break into one; keep some text "
                 "between them, or make the change with bash"
             )
+        return target, lines, updated, replaced
+
+    def preview(self, parsed_args: EditFileArgs, context: ToolContext) -> Optional[dict]:
+        target, lines, updated, _replaced = self._plan(parsed_args, context)
+        return _diff(target, lines, updated, context)
+
+    def run(self, parsed_args: EditFileArgs, context: ToolContext) -> ToolResult:
+        target, lines, updated, replaced = self._plan(parsed_args, context)
         write_text_atomic(target, updated)
 
         rel_path = str(target.relative_to(context.repo_root))
         metadata: dict = {"path": rel_path, "replacements": replaced}
-        # Structured diff for the TUI's green/red renderer. Diffing the FULL
-        # old vs new content (not just old_text/new_text) keeps line numbers
-        # absolute and handles replace_all correctly.
-        diff = build_line_diff(
-            lines.view,
-            view_of(updated),
-            path=rel_path,
-            op="edit",
-            language=target.suffix.lstrip(".").lower() or None,
-        )
+        diff = _diff(target, lines, updated, context)
         if diff:
             metadata["diff"] = diff
 
@@ -121,6 +127,19 @@ class EditFileTool(BaseTool[EditFileArgs]):
             output=f"edited {rel_path} ({replaced} replacement(s))",
             metadata=metadata,
         )
+
+
+def _diff(target: Path, lines: LineView, updated: str, context: ToolContext) -> Optional[dict]:
+    """Structured diff for the TUI's green/red renderer. Diffing the FULL old
+    vs new content (not just old_text/new_text) keeps line numbers absolute and
+    handles replace_all correctly."""
+    return build_line_diff(
+        lines.view,
+        view_of(updated),
+        path=str(target.relative_to(context.repo_root)),
+        op="edit",
+        language=target.suffix.lstrip(".").lower() or None,
+    )
 
 
 def _replace(

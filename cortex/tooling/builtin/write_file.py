@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
@@ -32,7 +35,11 @@ class WriteFileTool(BaseTool[WriteFileArgs]):
     permission = "edit"
     args_model = WriteFileArgs
 
-    def run(self, parsed_args: WriteFileArgs, context: ToolContext) -> ToolResult:
+    def _plan(
+        self, parsed_args: WriteFileArgs, context: ToolContext
+    ) -> tuple[Path, bool, str, str, bytes]:
+        """The file, whether it exists, its text now, the text to write and its
+        bytes; ToolExecutionError when it cannot be written."""
         try:
             target = resolve_repo_path(root=context.repo_root, relative_path=parsed_args.path)
         except ValueError as exc:
@@ -67,6 +74,14 @@ class WriteFileTool(BaseTool[WriteFileArgs]):
                 f"content too large ({len(payload)} bytes > {_MAX_WRITE_BYTES})"
             )
 
+        return target, existed, old_content, content, payload
+
+    def preview(self, parsed_args: WriteFileArgs, context: ToolContext) -> Optional[dict]:
+        target, existed, old_content, content, _payload = self._plan(parsed_args, context)
+        return _diff(target, existed, old_content, content, context)
+
+    def run(self, parsed_args: WriteFileArgs, context: ToolContext) -> ToolResult:
+        target, existed, old_content, content, payload = self._plan(parsed_args, context)
         target.parent.mkdir(parents=True, exist_ok=True)
         write_text_atomic(target, content)
 
@@ -74,13 +89,7 @@ class WriteFileTool(BaseTool[WriteFileArgs]):
         rel = target.relative_to(context.repo_root)
         rel_str = str(rel)
         metadata: dict = {"path": rel_str, "bytes": len(payload), "created": not existed}
-        diff = build_line_diff(
-            view_of(old_content),
-            view_of(content),
-            path=rel_str,
-            op="create" if not existed else "overwrite",
-            language=target.suffix.lstrip(".").lower() or None,
-        )
+        diff = _diff(target, existed, old_content, content, context)
         if diff:
             metadata["diff"] = diff
 
@@ -92,3 +101,15 @@ class WriteFileTool(BaseTool[WriteFileArgs]):
             output=f"{action} {rel} ({len(payload)} bytes)",
             metadata=metadata,
         )
+
+
+def _diff(
+    target: Path, existed: bool, old_content: str, content: str, context: ToolContext
+) -> Optional[dict]:
+    return build_line_diff(
+        view_of(old_content),
+        view_of(content),
+        path=str(target.relative_to(context.repo_root)),
+        op="create" if not existed else "overwrite",
+        language=target.suffix.lstrip(".").lower() or None,
+    )

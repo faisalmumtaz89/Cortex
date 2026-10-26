@@ -735,6 +735,16 @@ def test_edit_file_renders_green_red_diff(tui_project) -> None:
 
     modal = session.wait_for("Permission required")
     assert "Edit file: calc.py" in modal
+    # The prompt shows the change before it is approved: the line it removes,
+    # the lines it adds, and their line numbers, while the file is untouched.
+    prompt = session.wait_until(
+        lambda frame: "- " in frame and "# subtract instead" in frame,
+        description="the edit's diff in the permission prompt",
+        timeout=10,
+    )
+    assert "2 -     return a + b" in prompt
+    assert "2 +     # subtract instead" in prompt and "3 +     return a - b" in prompt
+    assert "return a + b" in (project / "calc.py").read_text(encoding="utf-8")
     session.send_key("Enter")  # Allow once
 
     # The diff summary line only appears once the edit completes (the "Update"

@@ -277,8 +277,11 @@ class PermissionManager:
         patterns: Sequence[str],
         metadata: Optional[Dict[str, object]] = None,
         prompt_callback: Optional[Callable[[PermissionRequest], PermissionDecision]] = None,
+        preview: Optional[Callable[[], Optional[Dict[str, object]]]] = None,
     ) -> None:
-        """Resolve permission request or raise PermissionDeniedError."""
+        """Resolve permission request or raise PermissionDeniedError. `preview`
+        gives the change the call would make; it runs only when a prompt is
+        shown, and its diff goes in the prompt's metadata."""
         # Patterns are matched exactly as given: stripping could make a command
         # that runs differently match an approved one.
         normalized_patterns = [str(pattern) or "*" for pattern in patterns] or ["*"]
@@ -297,10 +300,14 @@ class PermissionManager:
                 f"Permission requires approval but no prompt callback is configured: {permission}"
             )
 
+        prompt_metadata = dict(metadata or {})
+        diff = preview() if preview is not None else None
+        if diff:
+            prompt_metadata["diff"] = diff
         prompt = PermissionRequest(
             permission=permission,
             patterns=normalized_patterns,
-            metadata=metadata or {},
+            metadata=prompt_metadata,
         )
         user_decision = prompt_callback(prompt)
 

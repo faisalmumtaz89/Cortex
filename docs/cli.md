@@ -129,6 +129,8 @@ File tools work only inside the directory Cortex was started in, and `bash` runs
 - **Allow always** — allows this exact command, run in the same directory (for `bash`), or this file (for edits) from now on, only in the directory Cortex was started in; saved in `~/.cortex/tool_permissions.yaml`. A call with no command or file to name is allowed this once only.
 - **Reject** (or `Esc`) — the model continues without the tool result
 
+An edit's prompt shows the change it would make, as a diff with line numbers, before anything is written (as many rows as fit the screen, then a count of the rest).
+
 The prompt shows a command on one line: backslashes, line breaks, tabs and invisible or blank-looking characters appear as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count. A command too long to show in full keeps its start and end, with a count of the characters not shown, and the prompt then starts on **Reject**.
 
 Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds `edit_file`/`write_file`), `full` (adds `bash`). See `docs/configuration.md` for the `tools_*` keys.

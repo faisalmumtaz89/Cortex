@@ -320,6 +320,7 @@ class ToolingOrchestrator:
                 patterns=patterns,
                 metadata={"tool": call.name, "arguments": call.arguments},
                 prompt_callback=self._prompt_permission,
+                preview=lambda: registry.preview(call=call, session_id=session_id),
             )
         except PermissionDeniedError as exc:
             return ToolResult(

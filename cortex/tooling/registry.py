@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
 from cortex.tooling.builtin import (
@@ -116,3 +116,15 @@ class ToolRegistry:
             )
 
         return result
+
+    def preview(self, *, call: ToolCall, session_id: str) -> Optional[Dict[str, Any]]:
+        """The diff `call` would make, for its permission prompt (None when the
+        tool has none, or the call would fail: it then fails when it runs)."""
+        tool = self._tools.get(call.name)
+        if tool is None:
+            return None
+        context = ToolContext(repo_root=self.repo_root, session_id=session_id, call_id=call.id)
+        try:
+            return tool.preview(tool.validate_args(call.arguments), context)
+        except Exception:
+            return None

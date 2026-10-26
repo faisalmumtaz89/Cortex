@@ -1771,3 +1771,40 @@ def test_openai_compatible_setup_finishes_inside_the_app(
     # The /model picker keeps listing a model picked by name after a switch.
     selectors = [row["selector"] for row in listed["cloud"]]
     assert "openai-compatible:deepseek/deepseek-v4.1-flash" in selectors, selectors
+
+
+def test_edit_prompts_show_the_change_before_it_is_made(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The permission prompt for an edit carries the diff the edit would make,
+    computed without writing; an edit that cannot apply still asks, without
+    a diff, and then fails as before."""
+    script = _write_script(
+        tmp_path / "script.json",
+        [[
+            {"tool_calls": [{"name": "edit_file", "arguments": {
+                "path": "src/app.py", "old_text": "    return 1", "new_text": "    return 2"}}]},
+            {"tool_calls": [{"name": "write_file", "arguments": {
+                "path": "src/new.py", "content": "VALUE = 1\n"}}]},
+            {"tool_calls": [{"name": "edit_file", "arguments": {
+                "path": "src/app.py", "old_text": "not in the file", "new_text": "x"}}]},
+            {"text": "done"},
+        ]],
+    )
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    try:
+        session_id = _start_session(harness)
+        asked = _turn_answering_prompts(harness, session_id, "edit", "reject")
+    finally:
+        harness.close()
+
+    edit, write, cannot_apply = (prompt["metadata"] for prompt in asked)
+    rows = [(row["kind"], row["text"]) for hunk in edit["diff"]["hunks"] for row in hunk["rows"]]
+    assert ("del", "    return 1") in rows and ("add", "    return 2") in rows
+    assert edit["diff"]["path"] == "src/app.py"
+    assert [row["text"] for row in write["diff"]["hunks"][0]["rows"]] == ["VALUE = 1"]
+    assert write["diff"]["op"] == "create"
+    assert "diff" not in cannot_apply
+    # Every prompt was rejected: nothing was written.
+    assert (scratch_repo / "src" / "app.py").read_text(encoding="utf-8") == "def main():\n    return 1\n"
+    assert not (scratch_repo / "src" / "new.py").exists()

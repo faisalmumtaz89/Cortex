@@ -23,7 +23,9 @@ import { spinnerFrame } from "../lib/spinner"
 import { permissionLines } from "../lib/permission_prompt"
 import { visibleText } from "../lib/visible_text"
 import { turnRunning } from "../protocol"
-import { terminalColumns } from "../lib/terminal_size"
+import { terminalColumns, terminalRows } from "../lib/terminal_size"
+import { parseDiff } from "../context/session_store"
+import { DiffView } from "../components/diff_view"
 
 class CustomSpeedScroll implements ScrollAcceleration {
   constructor(private speed: number) {}
@@ -590,6 +592,12 @@ export function SessionRoute(props: {
     const pending = store.state.pendingPermission
     return pending ? permissionLines(pending).map(visibleText) : []
   }
+  // The change an edit would make, shown before it is approved.
+  const permissionDiff = createMemo(() => parseDiff(store.state.pendingPermission?.metadata))
+  // Diff rows that fit: the rest of the screen keeps its header, input and
+  // status rows, and the prompt its title, lines, options and footer.
+  const permissionDiffRows = () =>
+    Math.max(3, terminalRows() - 24 - store.state.queuedInputs.length)
 
 
   const submitFromPrompt = async () => {
@@ -958,6 +966,9 @@ export function SessionRoute(props: {
             <text fg={UI_PALETTE.text}>{permissionText()[0] ?? ""}</text>
             <Show when={permissionText()[1]}>
               <text fg={UI_PALETTE.textMuted}>{permissionText()[1]}</text>
+            </Show>
+            <Show when={permissionDiff()}>
+              {(diff) => <DiffView diff={diff()} expanded={false} maxRows={permissionDiffRows()} />}
             </Show>
             {/* Blank row above the options and above the footer (menu rhythm). */}
             <box flexShrink={0} marginTop={1}>

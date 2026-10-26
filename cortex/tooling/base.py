@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Generic, Type, TypeVar
+from typing import Any, Dict, Generic, Optional, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -59,3 +59,8 @@ class BaseTool(Generic[ToolArgsT]):
     def run(self, parsed_args: ToolArgsT, context: ToolContext) -> ToolResult:
         """Implement in subclasses."""
         raise NotImplementedError
+
+    def preview(self, parsed_args: ToolArgsT, context: ToolContext) -> Optional[Dict[str, Any]]:
+        """The diff this call would make, computed without changing anything,
+        for its permission prompt; None when there is none to show."""
+        return None

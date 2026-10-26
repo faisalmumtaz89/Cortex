@@ -18,7 +18,7 @@ function plural(count: number): string {
 
 /** Green/red file-edit diff (GitHub/Claude-Code style): a "⎿ Added N, removed
  * M" connector then per-row colored bands with a single line-number gutter. */
-export function DiffView(props: { diff: DiffData; expanded: boolean }) {
+export function DiffView(props: { diff: DiffData; expanded: boolean; maxRows?: number }) {
   const diff = createMemo(() => props.diff)
 
   const gutterWidth = createMemo(() => {
@@ -42,7 +42,7 @@ export function DiffView(props: { diff: DiffData; expanded: boolean }) {
   })
 
   const visibleRows = createMemo<DisplayRow[]>(() =>
-    props.expanded ? flatRows() : flatRows().slice(0, COLLAPSED_ROWS),
+    props.expanded ? flatRows() : flatRows().slice(0, props.maxRows ?? COLLAPSED_ROWS),
   )
   const hiddenRows = createMemo(() => Math.max(0, flatRows().length - visibleRows().length))
 
@@ -121,7 +121,10 @@ export function DiffView(props: { diff: DiffData; expanded: boolean }) {
         </For>
 
         <Show when={hiddenRows() > 0}>
-          <text fg={UI_PALETTE.textMuted}>{`  … +${hiddenRows()} more line${plural(hiddenRows())} (ctrl+o)`}</text>
+          {/* With maxRows (a permission prompt) Ctrl+O does not expand it. */}
+          <text fg={UI_PALETTE.textMuted}>
+            {`  … +${hiddenRows()} more line${plural(hiddenRows())}${props.maxRows === undefined ? " (ctrl+o)" : ""}`}
+          </text>
         </Show>
         <Show when={props.expanded && diff().truncated}>
           <text fg={UI_PALETTE.textMuted}>{`  … +${diff().truncatedRows} more — open ${diff().path} to view`}</text>
