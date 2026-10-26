@@ -2,7 +2,7 @@
 
 ## Worker Transport
 
-- Worker mode: `python -P -m cortex --worker-stdio`
+- Worker mode: `python -P -m cortex --worker-stdio`, where `python` is the one Cortex is installed in: `~/.cortex/install/venv/bin/python` for an installed Cortex, `.venv/bin/python` in a source checkout
 - Transport: line-delimited JSON-RPC 2.0 frames over stdio
 - Events are emitted as JSON-RPC notifications (`method: "event"`).
 

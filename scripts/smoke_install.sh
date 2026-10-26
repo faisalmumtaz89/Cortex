@@ -35,11 +35,17 @@ step "install.sh ${version} (${name})"
   cd "${work}"
   HOME="${work}/home" SHELL=/bin/bash \
     CORTEX_RELEASE_BASE="http://127.0.0.1:${port}/faisalmumtaz89/Cortex" \
-    CORTEX_ALLOW_INSECURE_BASE=1 CORTEX_SYSTEM_SYMLINK=0 \
+    CORTEX_ALLOW_INSECURE_BASE=1 \
     bash "${repo}/install.sh" "${version}"
 )
 cortex="${work}/home/.local/bin/cortex"
 grep -qsF ".local/bin" "${work}/home/.bashrc" || { echo "install.sh did not add ~/.local/bin to PATH"; exit 1; }
+for system_dir in /usr/local/bin /opt/homebrew/bin; do
+  if [[ "$(readlink "${system_dir}/cortex" 2>/dev/null)" == "${work}"* ]]; then
+    echo "install.sh linked ${system_dir}/cortex: it must write only under HOME"
+    exit 1
+  fi
+done
 
 step "cortex --version"
 HOME="${work}/home" "${cortex}" --version | tee "${work}/version.txt"

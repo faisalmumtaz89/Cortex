@@ -31,7 +31,7 @@
     }
 
     $version = if ($env:CORTEX_VERSION) { $env:CORTEX_VERSION } else { 'latest' }
-    if ($version -notmatch '^(latest|stable|\d+\.\d+\.\d+)$') {
+    if ($version -notmatch '^(latest|stable|v?\d+\.\d+\.\d+)$') {
         Stop-With "CORTEX_VERSION must be X.Y.Z (got: $version)."
         return
     }

@@ -103,6 +103,13 @@ def test_release_workflow_pins_the_frontend_toolchain() -> None:
         assert f'bun-version: "{declared}"' in workflow
 
 
+def test_install_sh_writes_only_under_home() -> None:
+    """The launcher goes in ~/.local/bin, never a system folder: a link there
+    (root, or Homebrew's user-writable bin) points every user at one person's
+    install and survives the documented uninstall."""
+    assert "/usr/local/bin" not in INSTALL_SH and "/opt/homebrew/bin" not in INSTALL_SH
+
+
 def test_install_sh_verifies_wheel_checksum_before_pip() -> None:
     """install.sh's release mode must die on a checksum mismatch or a missing
     .sha256 asset BEFORE pip ever sees the wheel, and must refuse non-GitHub

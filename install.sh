@@ -3,6 +3,7 @@
 set -euo pipefail
 
 TARGET="${1:-latest}"
+TARGET="${TARGET#v}" # v2.0.0 and 2.0.0 name the same release
 if [[ -n "${BASH_SOURCE[0]-}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 else
@@ -14,8 +15,9 @@ fi
 # URL, and the wheel filename below, and PEP 440 normalizes prerelease
 # suffixes out of wheel filenames (1.2.3-rc1 → 1.2.3rc1) — prereleases are
 # not installable through this script.
-if [[ -n "${1:-}" ]] && [[ ! "$1" =~ ^(stable|latest|[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-  echo "Usage: $0 [stable|latest|X.Y.Z]" >&2
+if [[ ! "${TARGET}" =~ ^(stable|latest|[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+  echo "Unknown version '${1}'. Give a release version such as 2.0.0, or nothing for the latest:" >&2
+  echo "  curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash -s -- 2.0.0" >&2
   exit 1
 fi
 
@@ -558,6 +560,7 @@ fi
 if [[ -z "${PYTHON_BIN}" ]]; then
   PYTHON_BIN="$(install_managed_python)"
 fi
+log "Using Python $("${PYTHON_BIN}" -c 'import platform, sys; print(platform.python_version(), "at", sys.executable)')"
 
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
   log "Creating isolated runtime at ${VENV_DIR}"
@@ -565,6 +568,8 @@ if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
 fi
 
 PIP="${VENV_DIR}/bin/pip"
+# Downloads go straight into the runtime: no pip cache left in ~/.cache.
+export PIP_NO_CACHE_DIR=1
 RUNTIME_PYTHON="${VENV_DIR}/bin/python"
 
 log "Upgrading installer tooling"
@@ -635,19 +640,6 @@ verify_sidecar_runtime
 ln -sfn "${VENV_DIR}/bin/cortex" "${LOCAL_LINK}"
 chmod +x "${VENV_DIR}/bin/cortex"
 
-ACTIVE_BIN="${LOCAL_LINK}"
-# CORTEX_SYSTEM_SYMLINK=0 is a TEST seam: hermetic installer runs must never
-# write /opt/homebrew/bin or /usr/local/bin on the host.
-if [[ "${CORTEX_SYSTEM_SYMLINK:-1}" == "1" ]]; then
-  for system_dir in "/opt/homebrew/bin" "/usr/local/bin"; do
-    if [[ -d "${system_dir}" ]] && [[ -w "${system_dir}" ]]; then
-      ln -sfn "${LOCAL_LINK}" "${system_dir}/cortex"
-      ACTIVE_BIN="${system_dir}/cortex"
-      break
-    fi
-  done
-fi
-
 INSTALLED_VERSION="$("${RUNTIME_PYTHON}" - <<'PY'
 from importlib.metadata import version
 print(version("cortex-llm"))
@@ -655,10 +647,10 @@ PY
 )"
 
 ok "Installed Cortex ${INSTALLED_VERSION}"
-ok "Launcher: ${ACTIVE_BIN}"
+ok "Launcher: ${LOCAL_LINK}"
 
 NEW_SHELL_NEEDED="0"
-if [[ "${ACTIVE_BIN}" == "${LOCAL_LINK}" ]] && [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
+if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
   # CORTEX_NO_MODIFY_PATH=1 leaves shell profiles alone.
   if [[ "${CORTEX_NO_MODIFY_PATH:-0}" == "1" ]]; then
     warn "${BIN_DIR} is not on PATH. Add it with: export PATH=\"${BIN_DIR}:\$PATH\""

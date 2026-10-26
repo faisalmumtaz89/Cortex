@@ -65,9 +65,9 @@ For the frontend:
 
 ```bash
 cd frontend/cortex-tui
-npm install
-npm run typecheck
-npm run build      # sidecar binary for this machine's platform
+bun install
+bun run typecheck
+bun run build      # sidecar binary for this machine's platform
 ```
 
 ## Verification
@@ -113,7 +113,7 @@ Running from a source checkout (`git clone` + `./install.sh`)? `/update cortex` 
 
 ## Common Installation Issues
 
-**OpenTUI sidecar missing (source checkout)** — run `./install.sh` at the repository root, or `npm install` in `frontend/cortex-tui`.
+**OpenTUI sidecar missing (source checkout)** — run `./install.sh` at the repository root, or `bun install && bun run build` in `frontend/cortex-tui`.
 
 **Permission denied on `~/.cortex`**
 
@@ -130,14 +130,31 @@ For everything else, see `docs/troubleshooting.md`.
 # Remove the isolated runtime and launcher
 rm -rf ~/.cortex/install
 rm -f ~/.local/bin/cortex
+# Cortex 1.x also linked the launcher into a system folder; remove that link if it is there
+for link in /opt/homebrew/bin/cortex /usr/local/bin/cortex; do
+  [ "$(readlink "$link")" = "$HOME/.local/bin/cortex" ] && rm -f "$link"
+done
 
-# Remove configuration, caches, and conversations
+```
+
+That removes Cortex. To also remove your settings, saved keys, logs and
+conversations:
+
+```bash
 rm -rf ~/.cortex
 ```
 
 API keys saved with `/login` in the system keyring stay there (service
-`cortex-llm`); delete them with your keyring tool, such as Keychain Access on
-macOS. Keys saved to `~/.cortex/credentials.json` go with `~/.cortex`.
+`cortex-llm`); delete them with your keyring tool: Keychain Access on macOS,
+or on Linux Passwords and Keys (Seahorse) or
+`secret-tool clear service cortex-llm username openai_api_key` (likewise
+`anthropic_api_key`, `azure_openai_api_key`, `openai_compatible_api_key`).
+Keys saved to `~/.cortex/credentials.json` go with `~/.cortex`.
+
+The installer may have put `~/.local/bin` on your `PATH`: a line under
+`# Added by the Cortex installer` in `~/.zshrc`, `~/.bashrc`, `~/.bash_profile`
+or `~/.profile`, or the file `~/.config/fish/conf.d/cortex.fish`. Remove it if
+nothing else of yours lives in `~/.local/bin`.
 
 On Windows, also delete `%LOCALAPPDATA%\Programs\Cortex` and remove it from
 your user `PATH`.

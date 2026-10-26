@@ -31,18 +31,20 @@ If the sidecar frontend binary (or Bun dev runtime) is missing, Cortex exits wit
 
 Options:
 
-1. Run `./install.sh` at the repository root to build and install the sidecar.
-2. For source development, install Bun and frontend deps:
+1. Re-run the installer (`curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash`); release wheels include the sidecar. From a source checkout, run `./install.sh` at the repository root.
+2. For source development, install Bun and build the sidecar:
 
 ```bash
 cd frontend/cortex-tui
-npm install
+bun install
+bun run build
 ```
 
-3. Verify the worker path manually:
+3. Start the worker on its own to see whether it comes up (it waits for JSON-RPC on stdin; Ctrl+C ends it):
 
 ```bash
-python -P -m cortex --worker-stdio
+~/.cortex/install/venv/bin/python -P -m cortex --worker-stdio   # installed Cortex
+.venv/bin/python -P -m cortex --worker-stdio                     # source checkout
 ```
 
 If the worker handshake fails, check protocol version compatibility between frontend and backend (`1.0.0`). See `docs/protocol-debugging.md`.
@@ -147,7 +149,7 @@ When a tool call needs approval, the TUI shows an arrow menu: **Allow once** / *
 
 ## Configuration Issues
 
-Cortex reads `~/.cortex/config.yaml`; defaults live in `cortex/config.py`. The file is flat (e.g. `temperature`, `max_tokens`) — no nested sections. Edit it with a text editor and restart Cortex; there is no CLI subcommand for configuration.
+Cortex reads `~/.cortex/config.yaml`; every key is optional (see the [Configuration Guide](configuration.md)). The file is flat (e.g. `temperature`, `max_tokens`) — no nested sections. Edit it with a text editor and restart Cortex; there is no CLI subcommand for configuration.
 
 If Cortex cannot read or write its state files:
 
@@ -178,8 +180,8 @@ From the terminal:
 
 ```bash
 cortex --version
-python --version
-sw_vers
+~/.cortex/install/venv/bin/python --version   # the Python Cortex runs on
+uname -a                                      # and sw_vers on macOS
 ```
 
 Logs are written to `~/.cortex/cortex.log`.
@@ -190,4 +192,4 @@ Logs are written to `~/.cortex/cortex.log`.
 
 - **Inside Cortex:** `/help` lists all commands.
 - **GitHub Issues:** report bugs at the project's GitHub Issues page.
-- **Source code:** the entry point is `cortex/__main__.py`; the worker runtime is `cortex/app/worker_runtime.py`.
+- **Source code:** in the repository, the entry point is `cortex/__main__.py` and the worker runtime is `cortex/app/worker_runtime.py`.
