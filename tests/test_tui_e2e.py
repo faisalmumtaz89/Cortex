@@ -60,6 +60,9 @@ class TuiSession:
             # The update e2e test opts back in with a local stub probe server.
             "CORTEX_AUTO_UPDATE_CHECK": "false",
             "TERM": os.environ.get("TERM", "xterm-256color"),
+            # A truecolor terminal, as the color assertions expect: without it
+            # OpenTUI falls back to 256 colors under TERM=xterm-256color.
+            "COLORTERM": "truecolor",
         }
         env.update(extra_env or {})
         env_prefix = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
@@ -504,7 +507,16 @@ def test_single_ctrl_c_exits_cleanly(tui_project) -> None:
             alive = False
             break
         time.sleep(0.25)
-    assert not alive, "TUI still running 8s after a single Ctrl+C"
+    if alive:
+        tree = session.process_tree()
+        states = subprocess.run(
+            ["ps", "-o", "pid=,stat=,args=", "-p", ",".join(map(str, tree))],
+            capture_output=True,
+            text=True,
+        ).stdout
+        raise session._failure(
+            f"TUI still running 8s after a single Ctrl+C; processes:\n{states}", session.capture()
+        )
 
 
 def test_closing_the_terminal_ends_the_tui_and_its_worker(tui_project) -> None:
