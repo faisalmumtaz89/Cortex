@@ -17,6 +17,12 @@ from cortex.tooling.types import PermissionAction, PermissionRule
 _APP_COMMANDS = frozenset(
     {"/help", "/status", "/model", "/login", "/update", "/clear", "/save", "/quit", "/exit"}
 )
+# What the model is told when a call is refused, so it can say what to do.
+_REFUSED = (
+    "Not allowed: this headless run (cortex -p) allows edits and shell commands only "
+    "with --full-auto."
+)
+_MODEL_STATE_KEYS = ("last_used_cloud_provider", "last_used_cloud_model", "selected_models")
 
 
 def _saved_model(config) -> str:
@@ -71,9 +77,11 @@ class _Printer:
                     print(f"[tool] {tool} {part.get('input', {})}", file=sys.stderr)
                 elif state == "error" or part.get("ok") is False:
                     error = str(part.get("error", ""))
-                    if error.startswith("Permission denied by rule"):
+                    if error == _REFUSED:
                         self.denied += 1
-                    print(f"[tool] {tool} failed: {error}", file=sys.stderr)
+                        print(f"[tool] {tool} refused (needs --full-auto)", file=sys.stderr)
+                    else:
+                        print(f"[tool] {tool} failed: {error}", file=sys.stderr)
                 elif state == "completed":
                     output = str(part.get("output", "") or "")
                     print(f"[tool] {tool} ok ({len(output)} chars)", file=sys.stderr)
@@ -118,7 +126,10 @@ def run_headless(
         )
     else:
         manager.base_rules.insert(
-            0, PermissionRule(permission="*", pattern="*", action=PermissionAction.DENY)
+            0,
+            PermissionRule(
+                permission="*", pattern="*", action=PermissionAction.DENY, reason=_REFUSED
+            ),
         )
         manager.base_rules.extend(
             PermissionRule(permission=name, pattern="*", action=PermissionAction.ALLOW)
@@ -137,6 +148,9 @@ def run_headless(
         )
         return 2
 
+    # The state a --model run would overwrite, put back if the provider
+    # refuses the model: a mistyped name must not become the saved choice.
+    saved_state = {key: config.get_state_value(key) for key in _MODEL_STATE_KEYS}
     if model:
         selection = runtime.command_service.execute(
             session_id=session_id, command=f"/model {model}"
@@ -173,6 +187,10 @@ def run_headless(
         emit_event=printer.event,
     )
     printer.end_line()
+    ok = bool(result.get("ok", True))
+    if model and not ok and not (printer.wrote_text or printer.after_tool):
+        for key, value in saved_state.items():
+            config.set_state_value(key, value)
     if printer.denied and not full_auto:
         print(
             f"note: {printer.denied} edit or command call(s) were not allowed; "
@@ -180,4 +198,4 @@ def run_headless(
             file=sys.stderr,
         )
 
-    return 0 if bool(result.get("ok", True)) else 1
+    return 0 if ok else 1

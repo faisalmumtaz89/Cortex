@@ -55,6 +55,14 @@ class CommandService:
         lines.append("Open the picker with /model, or select directly with /model provider:model.")
         return {"ok": True, "message": "\n".join(lines), "models": models}
 
+    def _remembered_model(self, provider: CloudProvider) -> str:
+        """The model selected last, when it is one of this provider's."""
+        config = getattr(self.model_service, "config", None)
+        get = getattr(config, "get_state_value", None)
+        if not callable(get) or get("last_used_cloud_provider", "") != provider.value:
+            return ""
+        return str(get("last_used_cloud_model", "") or "").strip()
+
     @staticmethod
     def _cloud_selector(item: Dict[str, object]) -> str:
         selector = str(item.get("selector", "")).strip()
@@ -208,6 +216,15 @@ class CommandService:
                 elif not self.model_service.endpoint_url(provider):
                     message = f"{message} {provider.value} also needs its URL: {usage}"
             active = self.model_service.active_target.cloud_model
+            remembered = self._remembered_model(provider)
+            if result.get("ok") and active is None and remembered:
+                # The model chosen last could not start without this key.
+                selected = self.model_service.select_cloud_model(
+                    provider=provider.value, model_id=remembered
+                )
+                if selected.get("ok"):
+                    result["message"] = f"{message} Using {provider.value}:{remembered} again."
+                    return cast(Dict[str, object], result)
             if result.get("ok") and (active is None or active.provider != provider):
                 # Name the next step: these models are named by the user, so
                 # the /model picker has none of them yet.

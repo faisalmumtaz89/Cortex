@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from http import HTTPStatus
 from typing import Dict, Iterable, Optional, Tuple
 
 from cortex.cloud.clients import AnthropicClient, ChatCompletionsClient, OpenAIClient
@@ -157,8 +158,30 @@ class CloudRouter:
         except Exception as exc:
             if interrupt is not None and interrupt.is_set():
                 raise TurnInterruptedError() from exc
-            source_label = f" (using {source})" if source else ""
+            # Which key was sent: an old variable can shadow the key /login saved.
+            key_label = {
+                "env": f" (key from {ENV_KEY_MAP[model_ref.provider]})",
+                "keychain": " (key saved with /login)",
+                "file": " (key saved with /login)",
+            }.get(str(source), "")
             logger.error("Cloud generation failed for %s: %s", model_ref.selector, exc)
             raise RuntimeError(
-                f"Cloud generation failed for {model_ref.selector}{source_label}: {exc}"
+                f"Cloud generation failed for {model_ref.selector}{key_label}: "
+                f"{_describe_failure(exc)}"
             ) from exc
+
+
+def _describe_failure(exc: Exception) -> str:
+    """The error, with the reason the server gave in its status line when the
+    message lacks it (a gateway that answers "403 model not allowed: ..."
+    with no body)."""
+    text = str(exc)
+    response = getattr(exc, "response", None)
+    reason = str(getattr(response, "reason_phrase", "") or "").strip()
+    try:
+        standard = HTTPStatus(int(getattr(response, "status_code", 0))).phrase
+    except ValueError:
+        standard = ""
+    if reason and reason != standard and reason.lower() not in text.lower():
+        text = f"{text} ({reason})"
+    return text

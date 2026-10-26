@@ -178,6 +178,10 @@ def _parse_rules(payload: Dict[str, object]) -> List[PermissionRule]:
     return rules
 
 
+def _kind(permission: str) -> str:
+    return {"bash": "command", "edit": "edit"}.get(permission, f"{permission} call")
+
+
 def default_rules() -> List[PermissionRule]:
     """Default policy: read-only tools run silently; edits and bash prompt."""
     return [
@@ -229,13 +233,18 @@ class PermissionManager:
             and fnmatchcase(pattern, rule.pattern)
         )
 
-    def _evaluate_one(self, *, permission: str, pattern: str) -> PermissionAction:
-        decision: PermissionAction = PermissionAction.ASK
+    def _deciding_rule(self, *, permission: str, pattern: str) -> Optional[PermissionRule]:
+        """The rule that decides this call: the last one that matches."""
+        decision: Optional[PermissionRule] = None
         self._reload_if_changed()
         for rule in [*self.base_rules, *self.persisted_rules]:
             if self._matches(rule, permission, pattern):
-                decision = rule.action
+                decision = rule
         return decision
+
+    def _evaluate_one(self, *, permission: str, pattern: str) -> PermissionAction:
+        rule = self._deciding_rule(permission=permission, pattern=pattern)
+        return rule.action if rule is not None else PermissionAction.ASK
 
     def evaluate(self, *, permission: str, patterns: Sequence[str]) -> PermissionAction:
         """Evaluate aggregate decision across requested patterns."""
@@ -291,8 +300,17 @@ class PermissionManager:
             return
 
         if decision == PermissionAction.DENY:
+            reasons = [
+                rule.reason
+                for pattern in normalized_patterns
+                if (rule := self._deciding_rule(permission=permission, pattern=pattern))
+                and rule.action == PermissionAction.DENY
+                and rule.reason
+            ]
             raise PermissionDeniedError(
-                f"Permission denied by rule: permission={permission} patterns={normalized_patterns}"
+                reasons[0]
+                if reasons
+                else f"Not allowed: a rule in {self.store.path} denies this {_kind(permission)}."
             )
 
         if prompt_callback is None:
@@ -319,5 +337,5 @@ class PermissionManager:
             return
 
         raise PermissionDeniedError(
-            f"Permission rejected by user: permission={permission} patterns={normalized_patterns}"
+            f"Rejected at the permission prompt: the {_kind(permission)} was not carried out."
         )

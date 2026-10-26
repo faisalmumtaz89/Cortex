@@ -1662,6 +1662,96 @@ def test_headless_default_denies_writes(tmp_path: Path, scratch_repo: Path) -> N
     assert "--full-auto" in process.stderr.splitlines()[-1], process.stderr
 
 
+def test_headless_runs_a_command_a_saved_rule_allows(tmp_path: Path, scratch_repo: Path) -> None:
+    """The documented way to allow some commands without --full-auto."""
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": "echo done > made.txt"}}]},
+          {"text": "Made it."}]],
+    )
+    env = _worker_env(tmp_path, script)
+    rules = tmp_path / "home" / ".cortex" / "tool_permissions.yaml"
+    rules.parent.mkdir(parents=True)
+    rules.write_text(
+        "version: 2\nrules:\n  - permission: bash\n    pattern: echo done > made.txt\n"
+        f"    action: allow\n    repo: {scratch_repo}\n",
+        encoding="utf-8",
+    )
+    process = _run_headless(cwd=scratch_repo, env=env, prompt="make it", extra_args=[])
+
+    assert process.returncode == 0, process.stderr
+    assert (scratch_repo / "made.txt").read_text(encoding="utf-8").strip() == "done"
+    assert "refused" not in process.stderr, process.stderr
+
+
+def test_headless_refusal_tells_the_model_and_the_user_about_full_auto(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    process, server = _run_against_gateway(
+        tmp_path,
+        scratch_repo,
+        [
+            {"tool_calls": [{"name": "bash", "arguments": {"command": "git diff"}}]},
+            {"text": "Could not run it."},
+        ],
+    )
+
+    assert process.returncode == 0, process.stderr
+    tool_messages = [m for m in server.requests[1]["messages"] if m["role"] == "tool"]
+    assert "--full-auto" in str(tool_messages[0]["content"]), tool_messages
+    assert "patterns=" not in process.stderr, process.stderr
+    assert "[tool] bash refused" in process.stderr, process.stderr
+
+
+def test_headless_shows_why_the_provider_refused_and_keeps_the_saved_model(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    server = ChatCompletionsServer(
+        [{"status": 403, "reason": "model not allowed: 'typo-model'"}, {"text": "fine"}]
+    )
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env.pop("OPENAI_API_KEY")  # else a run without --model would pick an OpenAI default
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-P", "-m", "cortex", "-p", "hi", *args],
+            cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+        )
+
+    try:
+        refused = run("--model", "openai-compatible:typo-model")
+        later = run()
+    finally:
+        server.close()
+
+    assert refused.returncode == 1, refused.stderr
+    assert "model not allowed: 'typo-model'" in refused.stderr, refused.stderr
+    assert "(key from OPENAI_COMPATIBLE_API_KEY)" in refused.stderr, refused.stderr
+    # A model the provider refused is not remembered for the next run.
+    assert later.returncode == 2, later.stderr
+    assert "no model selected" in later.stderr, later.stderr
+    assert len(server.requests) == 1
+
+
+def test_headless_names_every_setting_a_provider_still_needs(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    for name in ("OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_BASE_URL"):
+        env.pop(name, None)
+    process = subprocess.run(
+        [sys.executable, "-P", "-m", "cortex", "-p", "hi", "--model", "openai-compatible:m"],
+        cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+    )
+
+    assert process.returncode == 2, process.stderr
+    assert "OPENAI_COMPATIBLE_API_KEY" in process.stderr, process.stderr
+    assert "OPENAI_COMPATIBLE_BASE_URL" in process.stderr, process.stderr
+
+
 def test_login_works_without_a_system_keyring(tmp_path: Path, scratch_repo: Path) -> None:
     """On Linux servers, containers and WSL there is often no keyring service:
     /login must still save the key, privately, and the next session finds it."""
@@ -1688,6 +1778,40 @@ def test_login_works_without_a_system_keyring(tmp_path: Path, scratch_repo: Path
     finally:
         harness.close()
     assert status["active_source"] == "file", status
+
+
+def test_login_brings_back_the_remembered_model_of_that_provider(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The model chosen last could not start for want of a key; once /login
+    adds the key, that model is the active one again."""
+    env = _worker_env(tmp_path, tmp_path / "x.json")
+    for name in ("CORTEX_SCRIPTED_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+                 "OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_BASE_URL"):
+        env.pop(name, None)
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+    state = tmp_path / "home" / ".cortex" / "state.yaml"
+    state.parent.mkdir(parents=True)
+    state.write_text(
+        "last_used_cloud_provider: openai-compatible\n"
+        "last_used_cloud_model: org/remembered\n"
+        "openai_compatible_base_url: http://127.0.0.1:9/v1\n",
+        encoding="utf-8",
+    )
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        saved = harness.wait_response(harness.send("command.execute", {
+            "session_id": session_id, "command": "/login openai-compatible sk-e2e"}))["result"]
+        listing = harness.wait_response(harness.send("model.list", {}))["result"]
+    finally:
+        harness.close()
+
+    assert saved["ok"] is True, saved
+    assert "openai-compatible:org/remembered" in saved["message"], saved
+    assert "Next:" not in saved["message"], saved
+    active = [row["selector"] for row in listing["cloud"] if row["active"]]
+    assert active == ["openai-compatible:org/remembered"], listing
 
 
 def test_headless_without_a_model_says_to_pass_one(tmp_path: Path, scratch_repo: Path) -> None:

@@ -36,6 +36,8 @@ class PermissionRule:
     pattern: str
     action: PermissionAction
     repo: str = ""
+    # Why a deny rule refuses, told to the model and the user; never saved.
+    reason: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True)

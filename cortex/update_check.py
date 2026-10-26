@@ -397,6 +397,15 @@ def check_for_updates(
     )
 
 
+def running_cortex_version() -> Optional[str]:
+    """The version of the code this process runs. It differs from
+    installed_cortex_version() once /update cortex installed another version,
+    until Cortex restarts."""
+    import cortex
+
+    return getattr(cortex, "__version__", None)
+
+
 def installed_cortex_version() -> Optional[str]:
     """The running Cortex version (installed distribution, else the source
     tree's ``__version__``) — the same source ``cortex --version`` reports."""

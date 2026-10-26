@@ -581,8 +581,9 @@ if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
 fi
 
 PIP="${VENV_DIR}/bin/pip"
-# Downloads go straight into the runtime: no pip cache left in ~/.cache.
-export PIP_NO_CACHE_DIR=1
+# Downloads go straight into the runtime: no pip cache left in ~/.cache, and
+# no package-index call for pip's own version.
+export PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUNTIME_PYTHON="${VENV_DIR}/bin/python"
 
 log "Upgrading installer tooling"
@@ -638,7 +639,7 @@ else
   # Local-wheel installs upgrade AND downgrade without extra flags; only the
   # cortex-llm artifact itself comes from the release — new/changed
   # dependencies still resolve from the package index.
-  log "Installing Cortex and its dependencies"
+  log "Installing Cortex and its dependencies (a first install takes a minute or two)"
   "${PIP}" install --quiet --disable-pip-version-check "${WHEEL_PATH}" \
     || die "pip could not install ${WHEEL_PATH##*/}; see the messages above."
   clear_hidden_site_flags "${RUNTIME_PYTHON}"

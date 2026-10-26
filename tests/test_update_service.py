@@ -101,6 +101,20 @@ def test_status_report_up_to_date_and_not_installed(
     assert service.status_report()["message"] == "Cortex: not installed"
 
 
+def test_status_report_after_an_update_says_to_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/update cortex installed a newer version, but this session still runs
+    the old code: "up to date" would hide that a restart is needed."""
+    monkeypatch.setattr(update_service_module, "installed_cortex_version", lambda: "9999.0.0")
+    monkeypatch.setattr(update_service_module, "running_cortex_version", lambda: "1.0.0")
+    report = _service(tmp_path, cortex_tag="v9999.0.0").status_report()
+    assert report["message"] == (
+        "Cortex: 9999.0.0 installed · up to date — restart Cortex to use it "
+        "(this session runs 1.0.0)"
+    )
+
+
 def test_status_report_falls_back_to_cache_when_probe_fails(tmp_path: Path) -> None:
     cache = UpdateCheckCache(tmp_path / "update-check.json")
     cache.store(cortex_latest="v9999.0.0")
@@ -241,6 +255,7 @@ def _stub_pip(tmp_path: Path, *, exit_code: int = 0) -> Path:
         "#!/usr/bin/env bash\n"
         f'echo "ARGS=$*" > {record}\n'
         f"shasum -a 256 \"$2\" | awk '{{print \"SHA256=\"$1}}' >> {record}\n"
+        f'echo "CACHE=$PIP_NO_CACHE_DIR VERSION_CHECK=$PIP_DISABLE_PIP_VERSION_CHECK" >> {record}\n'
         'echo "Successfully installed cortex-llm"\n'
         f"exit {exit_code}\n",
         encoding="utf-8",
@@ -328,6 +343,9 @@ def test_update_cortex_downloads_verifies_and_installs_release_wheel(
     assert not wheel_path.parent.exists()
     assert f"downloading {CORTEX_WHEEL_ASSET}" in phases
     assert "verifying checksum" in phases
+    # Nothing left in ~/.cache/pip, and no call to the package index for
+    # pip's own version.
+    assert record["CACHE"] == "1 VERSION_CHECK=1"
 
 
 def test_update_cortex_rejects_checksum_mismatch(

@@ -87,7 +87,9 @@ def test_failure_names_the_model_and_key_source():
     with pytest.raises(RuntimeError) as exc:
         _events(router)
 
-    assert str(exc.value) == "Cloud generation failed for openai:gpt-5.5 (using keychain): boom"
+    assert str(exc.value) == (
+        "Cloud generation failed for openai:gpt-5.5 (key saved with /login): boom"
+    )
 
 
 def test_failure_after_an_interrupt_reports_the_interrupt():

@@ -19,9 +19,21 @@ LOGIN_URL_ARGUMENT = {
 _REMEMBERED_MODELS = 5
 
 
+URL_ENV_VARIABLE = {
+    CloudProvider.AZURE: "AZURE_OPENAI_ENDPOINT",
+    CloudProvider.OPENAI_COMPATIBLE: "OPENAI_COMPATIBLE_BASE_URL",
+}
+
+
 def _login_url_hint(provider: CloudProvider) -> str:
     argument = LOGIN_URL_ARGUMENT.get(provider)
     return f" {argument}" if argument else ""
+
+
+def _setup_variables(provider: CloudProvider) -> str:
+    """The environment variables that set a provider up, for messages."""
+    names = [ENV_KEY_MAP[provider], *filter(None, [URL_ENV_VARIABLE.get(provider)])]
+    return " and ".join(names)
 
 
 class ModelService:
@@ -148,7 +160,7 @@ class ModelService:
                 "message": (
                     f"{provider_enum.value} is not authenticated. "
                     f"Run /login {provider_enum.value} <api_key>{_login_url_hint(provider_enum)} "
-                    f"or set {ENV_KEY_MAP[provider_enum]}."
+                    f"in cortex, or set {_setup_variables(provider_enum)}."
                 ),
             }
 
@@ -224,10 +236,7 @@ class ModelService:
         self.config.set_state_value(state_key, url)
         in_effect = self.endpoint_url(provider)
         if in_effect != url:
-            variable = (
-                "AZURE_OPENAI_ENDPOINT" if provider == CloudProvider.AZURE
-                else "OPENAI_COMPATIBLE_BASE_URL"
-            )
+            variable = URL_ENV_VARIABLE[provider]
             return {
                 "ok": True,
                 "message": f"Saved {url}, but {in_effect} is in use: {variable} or "

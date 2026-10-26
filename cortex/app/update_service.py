@@ -65,6 +65,7 @@ from cortex.update_check import (
     is_newer,
     normalize_version,
     probe_base_url,
+    running_cortex_version,
 )
 
 logger = logging.getLogger(__name__)
@@ -350,11 +351,16 @@ class UpdateService:
         result = self._fresh_or_cached_result()
         cortex_latest = result.cortex_latest
         cortex_installed = installed_cortex_version()
+        message = self._status_line(
+            "cortex", cortex_installed, cortex_latest, resolved=result.cortex_resolved
+        )
+        running = running_cortex_version()
+        if cortex_installed and running and running != cortex_installed:
+            # /update cortex installed it; this process still runs the old code.
+            message = f"{message} — restart Cortex to use it (this session runs {running})"
         return {
             "ok": True,
-            "message": self._status_line(
-                "cortex", cortex_installed, cortex_latest, resolved=result.cortex_resolved
-            ),
+            "message": message,
             "update_status": {
                 "cortex_installed": cortex_installed,
                 "cortex_latest": normalize_version(cortex_latest) if cortex_latest else None,
@@ -510,10 +516,11 @@ class UpdateService:
                 return {"ok": False, "message": f"Cortex update failed: {verification_error}."}
 
             emit(f"installing {asset_name} into the running environment")
+            # No pip cache left in ~/.cache, and no package-index call for
+            # pip's own version: like install.sh.
+            env = {**os.environ, "PIP_NO_CACHE_DIR": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"}
             ok, detail = self._run_installer(
-                self._pip_install_command(wheel_path),
-                env=dict(os.environ),
-                on_line=emit,
+                self._pip_install_command(wheel_path), env=env, on_line=emit
             )
             if not ok:
                 return {"ok": False, "message": f"Cortex update failed: {detail}"}

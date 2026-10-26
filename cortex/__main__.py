@@ -89,6 +89,10 @@ def _package_version() -> str:
         return "dev"
 
 
+def _has_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def main() -> None:
     try:
         parser = argparse.ArgumentParser(
@@ -150,6 +154,12 @@ def main() -> None:
         if args.model or args.full_auto:
             # They apply to one headless turn; the interactive app has /model.
             parser.error("--model and --full-auto go with -p PROMPT (headless mode)")
+        if not _has_terminal():
+            sys.stderr.write(
+                "cortex: the interactive app needs a terminal. Without one, run a single "
+                'prompt: cortex -p "..." --model provider:model\n'
+            )
+            sys.exit(2)
 
         exit_code = launch_tui()
         if exit_code == 0:
