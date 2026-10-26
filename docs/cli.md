@@ -39,9 +39,10 @@ Runs one agent turn through the same worker wiring the TUI uses:
 
 - The assistant reply streams to **stdout**; tool activity and errors go to **stderr**, so stdout stays pipeable.
 - `--model` accepts the same `provider:model` selectors as `/model`.
-- Permission policy: reads (`read_file`, `list_dir`, `search`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt). Persisted rules from `~/.cortex/tool_permissions.yaml` still apply.
+- Permission policy: reads (`read_file`, `list_dir`, `search`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt), and the run then ends with a note on stderr saying how many calls were refused. Persisted rules from `~/.cortex/tool_permissions.yaml` still apply.
 - Exit codes: `0` success, `1` turn error, `2` setup error (no model selected, or model selection failed).
-- Without `--model`, the model last selected (in the TUI or by an earlier `--model`) is used; the first run needs `--model`. `-p` is also available as `--print`.
+- Without `--model`, the model last selected (in the TUI or by an earlier `--model`) is used; the first run needs `--model`. If that model cannot be used now (most often: its key is not set in this terminal), the run says why and exits `2`, and the model stays selected for the next run. `-p` is also available as `--print`.
+- `-p` needs a prompt: an empty one, or `--model`/`--full-auto` without `-p`, is a usage error (exit `2`) rather than starting the interactive app.
 - Each run is a new conversation: it does not see earlier `-p` runs, so say everything the task needs in the prompt.
 - Text the model writes after a tool call starts a new paragraph.
 - Slash commands are not run in headless mode, except `/<skill> request`. A prompt that starts with a command of the interactive app (`/model`, `/login`, `/update`, ...) is refused with exit code `2` and not sent to the model; any other text, `/` or not, is sent to the model as written.
@@ -49,7 +50,7 @@ Runs one agent turn through the same worker wiring the TUI uses:
 Examples:
 
 ```bash
-cortex -p "summarize what cortex/app/headless.py does"
+cortex -p "summarize what src/main.py does" --model openai:gpt-5.5   # the first run picks the model
 cortex -p "rename the helper in src/utils.py and update callers" --full-auto
 cortex -p "review this diff for bugs" --model openai:gpt-5.5
 ```

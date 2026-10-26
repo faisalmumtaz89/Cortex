@@ -255,9 +255,9 @@ class WorkerRuntime:
                     )
                 )
 
+        # The saved choice stays: a missing key (a new terminal without the
+        # variable) must not make Cortex forget the model.
         self.model_service.active_target = ActiveModelTarget()
-        self._set_runtime_state_if_supported("last_used_cloud_provider", "")
-        self._set_runtime_state_if_supported("last_used_cloud_model", "")
         notices.append("No model loaded. Pick one with /model, or add a key with /login.")
         return notices
 

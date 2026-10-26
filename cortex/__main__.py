@@ -78,14 +78,24 @@ def main() -> None:
     try:
         parser = argparse.ArgumentParser(
             prog="cortex",
-            description="Terminal AI coding agent. Run `cortex` in a repository for the "
-            "interactive app, or `cortex -p PROMPT --model PROVIDER:MODEL` for one turn.",
-            epilog="Providers read their keys from OPENAI_API_KEY, ANTHROPIC_API_KEY, "
-            "AZURE_OPENAI_API_KEY (with AZURE_OPENAI_ENDPOINT) or OPENAI_COMPATIBLE_API_KEY "
-            "(with OPENAI_COMPATIBLE_BASE_URL), or from /login in the interactive app. "
-            "Models are written provider:model, for example openai:gpt-5.5 or "
-            "openai-compatible:deepseek/deepseek-v4.1-flash. Each -p run is a new "
-            "conversation.",
+            description=(
+                "Terminal AI coding agent. Run `cortex` in a repository for the\n"
+                "interactive app, or `cortex -p PROMPT --model PROVIDER:MODEL` for one turn."
+            ),
+            # Written out line by line so a model id is never split across lines.
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog=(
+                "Provider keys come from /login in the interactive app, or from\n"
+                "OPENAI_API_KEY, ANTHROPIC_API_KEY, AZURE_OPENAI_API_KEY (with\n"
+                "AZURE_OPENAI_ENDPOINT) or OPENAI_COMPATIBLE_API_KEY (with\n"
+                "OPENAI_COMPATIBLE_BASE_URL).\n"
+                "\n"
+                "Models are written provider:model, for example:\n"
+                "  openai:gpt-5.5\n"
+                "  openai-compatible:deepseek/deepseek-v4.1-flash\n"
+                "\n"
+                "Each -p run is a new conversation."
+            ),
         )
         parser.add_argument(
             "--version",
@@ -93,7 +103,7 @@ def main() -> None:
             version=f"cortex {_package_version()}",
         )
         parser.add_argument(
-            "--worker-stdio", action="store_true", help="Run backend worker over JSON-RPC stdio."
+            "--worker-stdio", action="store_true", help=argparse.SUPPRESS  # the TUI's backend
         )
         parser.add_argument(
             "-p",
@@ -117,9 +127,14 @@ def main() -> None:
             _run_worker_stdio()
             return
 
-        if args.print:
+        if args.print is not None:
+            if not args.print.strip():
+                parser.error("-p needs a prompt, for example: cortex -p \"fix the failing test\"")
             _run_headless(args)
             return
+        if args.model or args.full_auto:
+            # They apply to one headless turn; the interactive app has /model.
+            parser.error("--model and --full-auto go with -p PROMPT (headless mode)")
 
         exit_code = launch_tui()
         if exit_code == 0:

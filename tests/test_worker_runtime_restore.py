@@ -208,9 +208,11 @@ def test_restore_startup_target_uses_authenticated_cloud_default_when_no_state(
     assert notices == ["Restored openai:gpt-5.1"]
 
 
-def test_restore_startup_target_clears_stale_cloud_state_when_nothing_restores(
+def test_restore_startup_target_keeps_the_saved_choice_when_nothing_restores(
     runtime_factory,
 ) -> None:
+    """A model that cannot be restored now (its key is not set in this
+    terminal) stays saved, so it is used again once the key is back."""
     fake_runtime = runtime_factory(
         state={
             "last_used_cloud_provider": "anthropic",
@@ -224,8 +226,8 @@ def test_restore_startup_target_clears_stale_cloud_state_when_nothing_restores(
     notices = fake_runtime._restore_startup_target()
     assert notices == ["cloud restore failed", NO_MODEL_NOTICE]
     assert fake_runtime.model_service.active_target.cloud_model is None
-    assert fake_runtime.config._state.get("last_used_cloud_provider") == ""
-    assert fake_runtime.config._state.get("last_used_cloud_model") == ""
+    assert fake_runtime.config._state.get("last_used_cloud_provider") == "anthropic"
+    assert fake_runtime.config._state.get("last_used_cloud_model") == "claude-haiku-4-5"
 
 
 # ---- /update cortex background narration ------------------------------------

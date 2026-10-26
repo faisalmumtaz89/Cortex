@@ -1658,6 +1658,8 @@ def test_headless_default_denies_writes(tmp_path: Path, scratch_repo: Path) -> N
     assert process.returncode == 0, process.stderr
     assert "Tried to create the file." in process.stdout
     assert not (scratch_repo / "created.txt").exists()
+    # The run says how to allow what it refused.
+    assert "--full-auto" in process.stderr.splitlines()[-1], process.stderr
 
 
 def test_login_works_without_a_system_keyring(tmp_path: Path, scratch_repo: Path) -> None:
@@ -1827,3 +1829,73 @@ def test_headless_says_where_an_app_command_runs(
     if command.startswith("/model"):
         assert "--model" in process.stderr
     assert "sk-x" not in process.stderr
+
+
+def test_a_run_without_the_key_keeps_the_remembered_model(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """Forgetting the key in a new terminal must not erase the model chosen
+    earlier: that run says the key is missing, and the next run with the key
+    uses the remembered model again."""
+    script = _write_script(tmp_path / "script.json", [[{"text": "PONG"}]] * 3)
+    env = _worker_env(tmp_path, script)
+    env.pop("OPENAI_API_KEY")
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compat-e2e"
+    env["OPENAI_COMPATIBLE_BASE_URL"] = "http://127.0.0.1:9/v1"
+    model = "openai-compatible:deepseek/deepseek-v4.1-flash"
+
+    def run(environ: dict, *extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "cortex", "-p", "ping", *extra],
+            cwd=scratch_repo, env=environ, capture_output=True, text=True, timeout=120,
+        )
+
+    first = run(env, "--model", model)
+    no_key = run({k: v for k, v in env.items() if k != "OPENAI_COMPATIBLE_API_KEY"})
+    again = run(env)
+
+    assert first.returncode == 0 and "PONG" in first.stdout, first.stderr
+    assert no_key.returncode == 2
+    assert model in no_key.stderr and "OPENAI_COMPATIBLE_API_KEY" in no_key.stderr, no_key.stderr
+    assert again.returncode == 0 and "PONG" in again.stdout, again.stderr
+
+
+@pytest.mark.parametrize(
+    "args", [["-p", ""], ["-p", "   "], ["--full-auto"], ["--model", "openai:gpt-5.5"]]
+)
+def test_headless_flags_without_a_prompt_are_refused(
+    tmp_path: Path, scratch_repo: Path, args: list[str]
+) -> None:
+    """An empty prompt, or a headless-only flag with no -p, must not start
+    the interactive app (a script would hang on it): it is a usage error."""
+    env = _worker_env(tmp_path, _write_script(tmp_path / "script.json", [[{"text": "x"}]]))
+    process = subprocess.run(
+        [sys.executable, "-m", "cortex", *args],
+        cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=30,
+        stdin=subprocess.DEVNULL,
+    )
+
+    assert process.returncode == 2, (process.stdout[-300:], process.stderr[-300:])
+    assert "-p" in process.stderr
+
+
+def test_help_shows_model_ids_whole_and_hides_the_worker_flag() -> None:
+    process = subprocess.run(
+        [sys.executable, "-m", "cortex", "--help"], capture_output=True, text=True, timeout=30,
+        env={**os.environ, "COLUMNS": "80"},
+    )
+    assert process.returncode == 0
+    assert "openai-compatible:deepseek/deepseek-v4.1-flash" in process.stdout
+    assert "--worker-stdio" not in process.stdout
+
+
+def test_headless_model_without_its_provider_names_the_flag(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    env = _worker_env(tmp_path, _write_script(tmp_path / "script.json", [[{"text": "x"}]]))
+    process = subprocess.run(
+        [sys.executable, "-m", "cortex", "-p", "hi", "--model", "deepseek-v4.1-flash"],
+        cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert process.returncode == 2
+    assert "--model provider:model" in process.stderr and "/model" not in process.stderr.replace("--model", "")

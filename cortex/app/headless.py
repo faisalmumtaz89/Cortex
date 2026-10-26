@@ -19,6 +19,16 @@ _APP_COMMANDS = frozenset(
 )
 
 
+def _saved_model(config) -> str:
+    """The provider:model selected last, from state.yaml ("" if none)."""
+    get = getattr(config, "get_state_value", None)
+    if not callable(get):
+        return ""
+    provider = str(get("last_used_cloud_provider", "") or "").strip()
+    model_id = str(get("last_used_cloud_model", "") or "").strip()
+    return f"{provider}:{model_id}" if provider and model_id else ""
+
+
 class _Printer:
     """Assistant text to stdout, tool activity to stderr. Text that follows a
     tool call starts a new paragraph, and a tool line never starts partway
@@ -28,6 +38,7 @@ class _Printer:
         self.wrote_text = False
         self.line_open = False
         self.after_tool = False
+        self.denied = 0  # tool calls the headless permission policy refused
 
     def _write(self, text: str) -> None:
         sys.stdout.write(text)
@@ -59,7 +70,10 @@ class _Printer:
                 if state == "running":
                     print(f"[tool] {tool} {part.get('input', {})}", file=sys.stderr)
                 elif state == "error" or part.get("ok") is False:
-                    print(f"[tool] {tool} failed: {part.get('error', '')}", file=sys.stderr)
+                    error = str(part.get("error", ""))
+                    if error.startswith("Permission denied by rule"):
+                        self.denied += 1
+                    print(f"[tool] {tool} failed: {error}", file=sys.stderr)
                 elif state == "completed":
                     output = str(part.get("output", "") or "")
                     print(f"[tool] {tool} ok ({len(output)} chars)", file=sys.stderr)
@@ -128,10 +142,20 @@ def run_headless(
             session_id=session_id, command=f"/model {model}"
         )
         if not bool(selection.get("ok")):
-            print(f"model selection failed: {selection.get('message', model)}", file=sys.stderr)
+            message = str(selection.get("message", model))
+            if message.startswith("Usage: /model"):
+                message = "pass --model provider:model, for example --model openai:gpt-5.5"
+            print(f"model selection failed: {message}", file=sys.stderr)
             return 2
 
     elif getattr(runtime.model_service.active_target, "cloud_model", None) is None:
+        saved = _saved_model(config)
+        if saved:
+            # Remembered, but not usable now (most often: its key is not set here).
+            provider, _, model_id = saved.partition(":")
+            reason = runtime.model_service.select_cloud_model(provider=provider, model_id=model_id)
+            print(f"error: {saved} cannot be used: {reason.get('message', '')}", file=sys.stderr)
+            return 2
         print(
             "error: no model selected. Pass one with --model provider:model, "
             "for example --model openai:gpt-5.5 (see cortex --help).",
@@ -149,5 +173,11 @@ def run_headless(
         emit_event=printer.event,
     )
     printer.end_line()
+    if printer.denied and not full_auto:
+        print(
+            f"note: {printer.denied} edit or command call(s) were not allowed; "
+            "pass --full-auto to allow edits and shell commands",
+            file=sys.stderr,
+        )
 
     return 0 if bool(result.get("ok", True)) else 1
