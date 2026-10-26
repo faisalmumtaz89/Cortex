@@ -13,7 +13,7 @@ export interface SlashCommand {
 // Canonical order (help first); the palette shows this order for an empty query.
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "help", description: "List available commands" },
-  { name: "status", description: "Show model & session status" },
+  { name: "status", description: "Show the active model and the one that answered last" },
   { name: "model", description: "Pick a model (or /model <provider:model>)", argHint: "<provider:model>" },
   { name: "login", description: "Log in to a cloud provider (picker, then paste the key)", argHint: "<provider> <api_key> [url]" },
   { name: "clear", description: "Clear the conversation" },

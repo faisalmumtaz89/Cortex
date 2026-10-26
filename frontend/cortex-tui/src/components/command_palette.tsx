@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js"
 import type { SlashCommand } from "../commands"
-import { terminalColumns } from "../lib/terminal_size"
+import { terminalColumns, terminalRows } from "../lib/terminal_size"
 import { SelectionRows, padPrimary } from "./selection_list"
 import { UI_PALETTE } from "./ui_palette"
 
@@ -85,12 +85,30 @@ export function CommandPalette(props: {
   )
 }
 
-const RESULT_MAX_ROWS = 16
+const RESULT_MAX_ROWS = 24
+// Rows the rest of the screen keeps while a result shows: header, a few
+// transcript rows, the prompt and its footer.
+const RESULT_RESERVED_ROWS = 14
 
 export function CommandResultPanel(props: { command: string; ok: boolean; text: string }) {
-  const lines = () => props.text.split("\n")
-  const shown = () => lines().slice(0, RESULT_MAX_ROWS)
-  const overflow = () => Math.max(0, lines().length - RESULT_MAX_ROWS)
+  // Budgeted in screen rows, wrapped lines counted as the rows they take: a
+  // taller panel pushes the prompt off screen and squeezes the transcript.
+  const visible = () => {
+    const lines = props.text.split("\n")
+    const width = Math.max(10, terminalColumns() - 8) // margin, spine, padding
+    let budget = Math.max(3, Math.min(RESULT_MAX_ROWS, terminalRows() - RESULT_RESERVED_ROWS))
+    const shown: string[] = []
+    for (const line of lines) {
+      const rows = Math.max(1, Math.ceil(line.length / width))
+      if (rows > budget) break
+      shown.push(line)
+      budget -= rows
+    }
+    if (shown.length < lines.length && shown.length > 0 && budget === 0) shown.pop()
+    return { shown, overflow: lines.length - shown.length }
+  }
+  const shown = () => visible().shown
+  const overflow = () => visible().overflow
 
   return (
     <box

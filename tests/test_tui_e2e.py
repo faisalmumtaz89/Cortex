@@ -197,14 +197,16 @@ def tui_project(tmp_path: Path):
 
 
 def _picker_rows() -> list[str]:
-    """The /model picker's rows exactly as the worker builds them: every catalog
-    entry in catalog order (the harness's isolated HOME has no override file).
-    Deriving rows from the real catalog keeps the picker test decoupled from
-    catalog cardinality — a routine model-list edit cannot silently break it."""
+    """The /model picker's rows exactly as the TUI builds them: the row that
+    starts naming an Azure deployment (azure is logged in through the
+    harness's env), then every catalog entry in catalog order (the harness's
+    isolated HOME has no override file). Deriving rows from the real catalog
+    keeps the picker test decoupled from catalog cardinality — a routine
+    model-list edit cannot silently break it."""
     from cortex.cloud.catalog import CloudModelCatalog
 
     catalog = CloudModelCatalog(override_path=Path("/nonexistent-cloud-override.json"))
-    return [ref.selector for ref in catalog.list_models()]
+    return ["azure:… type a deployment name", *(ref.selector for ref in catalog.list_models())]
 
 
 def _selection_window_size() -> int:
@@ -350,10 +352,10 @@ def test_slash_palette_opens_filters_executes_without_polluting_transcript(tui_p
     # command names like "/model" also appear in the welcome banner).
     session.send_key("he")  # "/he" → filters to /help; no retype/clear races
     filtered = session.wait_until(
-        lambda f: "List available commands" in f and "Show model & session status" not in f,
+        lambda f: "List available commands" in f and "Show the active model" not in f,
         description="palette filtered to /help only",
     )
-    assert "Show model & session status" not in filtered  # /status filtered out
+    assert "Show the active model" not in filtered  # /status filtered out
 
     # Enter executes the highlighted no-arg /help, rendered from the registry
     # into the ephemeral panel (one "name — description" row per command).
@@ -717,7 +719,18 @@ def test_openai_compatible_login_takes_the_base_url_and_needs_no_restart(tui_pro
     session.send_key("Escape")
     time.sleep(0.8)
 
-    session.send_line("/model openai-compatible:deepseek/deepseek-v4.1-flash")
+    # The picker has a row for the provider just logged in, though its
+    # models are named by the user: Enter starts the /model command.
+    session.send_line("/model")
+    picker = session.wait_for("Select a model", timeout=10)
+    assert "❯ openai-compatible:… type a model name" in picker, picker
+    session.send_key("Enter")
+    session.wait_until(
+        lambda frame: "Select a model" not in frame and "/model openai-compatible:" in frame,
+        description="the prompt prefilled with /model openai-compatible:",
+        timeout=10,
+    )
+    session.send_line("deepseek/deepseek-v4.1-flash")
     session.wait_for("openai-compatible:deepseek/deepseek-v4.1-flash — now active.", timeout=15)
     session.send_key("Escape")
     time.sleep(0.8)
@@ -1368,3 +1381,39 @@ def test_working_spinner_and_queued_input_dispatch(tui_project) -> None:
     final = session.wait_for("SECOND_TURN_MARKER")
     assert "SLOW_TURN_DONE" in final
     assert "↳ queued" not in final
+
+
+def test_help_with_a_long_transcript_keeps_the_prompt_and_every_row_readable(
+    tui_project,
+) -> None:
+    """A rejected call's line reads as a sentence, and /help's panel never
+    pushes the prompt off screen or squeezes transcript rows into each other."""
+    project, start = tui_project
+    session = start(
+        [
+            [
+                {"tool_calls": [{"name": "bash", "arguments": {"command": "python3 -c 'print(1)'"}}]},
+                {"text": "The command was rejected, so I did not run it."},
+            ]
+        ]
+    )
+    _select_scripted_model(session)
+    session.send_line("run a check")
+    session.wait_for("Permission required")
+    session.send_key("Escape")  # Esc rejects
+    frame = session.wait_for("so I did not run it.")
+    assert "Rejected at the permission prompt: the command was not carried out." in frame
+    assert "patterns=" not in frame
+
+    subprocess.run(["tmux", "resize-window", "-t", session.name, "-x", "120", "-y", "40"],
+                   check=True)
+    session.send_line("/help")
+    session.wait_for("Esc to dismiss", timeout=15)
+    time.sleep(1.5)  # let the panel settle; the bug was a steady state
+    frame = session.capture()
+    assert "Ctrl+C quit" in frame, frame  # the footer under the prompt
+    assert "Ask Cortex" in frame, frame
+    # No transcript row drawn over another (a tool line and its result).
+    assert not [line for line in frame.splitlines() if "◆" in line and "⎿" in line], frame
+    # A skill shows one sentence, not the paragraph written for the model.
+    assert "Not for only explaining an error" not in frame, frame

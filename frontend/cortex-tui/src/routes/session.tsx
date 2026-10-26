@@ -239,12 +239,29 @@ export function SessionRoute(props: {
     primary: string
     tag?: SelectionTag
     active: boolean
+    prefill?: string // instead of selecting: put this in the prompt to finish
   }
   const [modelPickerOpen, setModelPickerOpen] = createSignal(false)
   const [modelPickerIndex, setModelPickerIndex] = createSignal(0)
 
+  const NAMED_MODEL_PROVIDERS = ["openai-compatible", "azure"] as const
   const modelPickerEntries = createMemo<ModelEntry[]>(() => {
     const entries: ModelEntry[] = []
+    // Providers whose models the user names: once logged in, a row that
+    // starts the /model command, so the picker never hides them.
+    for (const provider of NAMED_MODEL_PROVIDERS) {
+      const row = store.state.models.providers.find(
+        (item) => String(item.provider ?? "").trim() === provider,
+      )
+      if (!row?.authenticated) continue
+      entries.push({
+        selector: "",
+        primary: `${provider}:… type a ${provider === "azure" ? "deployment" : "model"} name`,
+        active: false,
+        prefill: `/model ${provider}:`,
+        tag: { text: "ready", color: UI_PALETTE.statusIdle },
+      })
+    }
     for (const item of store.state.models.cloud) {
       const selector = String(item.selector ?? "").trim()
       if (!selector) continue
@@ -459,7 +476,11 @@ export function SessionRoute(props: {
         return true
       }
       closeModelPicker()
-      runSlashCommand(`/model ${entry.selector}`)
+      if (entry.prefill) {
+        setInputText(entry.prefill)
+      } else {
+        runSlashCommand(`/model ${entry.selector}`)
+      }
     } else if (action === "cancel") {
       closeModelPicker()
     }

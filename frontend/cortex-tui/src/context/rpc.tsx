@@ -11,7 +11,11 @@ export function buildHelpText(): string {
     name: command.name === "quit" ? "/quit (/exit)" : `/${command.name}`,
     description: command.description,
   }))
-  const skillList = skills().map((skill) => ({ name: `/${skill.name}`, description: skill.description }))
+  // A skill's first sentence: its full description is written for the model.
+  const skillList = skills().map((skill) => ({
+    name: `/${skill.name}`,
+    description: skill.description.split(/(?<=\.)\s/)[0],
+  }))
   // One column for every name, two spaces wider than the longest.
   const width = Math.max(...[...commands, ...skillList].map((row) => row.name.length)) + 2
   const format = (row: { name: string; description: string }) => `${row.name.padEnd(width)}${row.description}`
