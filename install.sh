@@ -259,13 +259,26 @@ install_managed_python() {
 
 add_to_path() {
   # Makes BIN_DIR reachable from new terminals; prints what it did.
-  local line="export PATH=\"${BIN_DIR}:\$PATH\""
+  # Guarded, so a profile that also sources another one adds it only once.
+  local line="case \":\$PATH:\" in *\":${BIN_DIR}:\"*) ;; *) export PATH=\"${BIN_DIR}:\$PATH\" ;; esac"
   local profiles=()
   case "$(basename "${SHELL:-sh}")" in
     zsh) profiles=("${ZDOTDIR:-$HOME}/.zshrc") ;;
     bash)
+      # Interactive shells read ~/.bashrc; login shells (macOS Terminal, SSH,
+      # tmux by default) read only the first of these that exists.
       profiles=("${HOME}/.bashrc")
-      [[ "$(uname -s)" == "Darwin" ]] && profiles+=("${HOME}/.bash_profile")
+      local login="" candidate
+      for candidate in .bash_profile .bash_login .profile; do
+        if [[ -f "${HOME}/${candidate}" ]]; then
+          login="${HOME}/${candidate}"
+          break
+        fi
+      done
+      if [[ -z "${login}" ]]; then
+        if [[ "$(uname -s)" == "Darwin" ]]; then login="${HOME}/.bash_profile"; else login="${HOME}/.profile"; fi
+      fi
+      profiles+=("${login}")
       ;;
     fish)
       mkdir -p "${HOME}/.config/fish/conf.d"

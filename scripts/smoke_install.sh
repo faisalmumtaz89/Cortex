@@ -40,6 +40,13 @@ step "install.sh ${version} (${name})"
 )
 cortex="${work}/home/.local/bin/cortex"
 grep -qsF ".local/bin" "${work}/home/.bashrc" || { echo "install.sh did not add ~/.local/bin to PATH"; exit 1; }
+# A new terminal finds cortex, whether it starts a login shell or not.
+for flags in -lc -ic; do
+  if ! env -i HOME="${work}/home" PATH=/usr/bin:/bin bash "${flags}" 'command -v cortex' >/dev/null 2>&1; then
+    echo "a new bash ${flags} shell does not find cortex"
+    exit 1
+  fi
+done
 for system_dir in /usr/local/bin /opt/homebrew/bin; do
   if [[ "$(readlink "${system_dir}/cortex" 2>/dev/null)" == "${work}"* ]]; then
     echo "install.sh linked ${system_dir}/cortex: it must write only under HOME"

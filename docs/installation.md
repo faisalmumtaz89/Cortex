@@ -45,9 +45,9 @@ The installer:
 3. Creates an isolated runtime under `~/.cortex/install`
 4. Downloads the `cortex-llm` wheel from the GitHub release (the single distribution channel), verifies it against the release's `.sha256` asset, and installs the verified wheel — or installs the source checkout when run from a clone
 5. Builds the OpenTUI sidecar when missing or stale (installing Bun if needed; release wheels already bundle it)
-6. Links the `cortex` launcher into `~/.local/bin` and, when that folder is not on your `PATH`, adds it in your shell's profile (`~/.zshrc`, `~/.bashrc`, fish's `conf.d`, or `~/.profile`); set `CORTEX_NO_MODIFY_PATH=1` to leave profiles alone
+6. Links the `cortex` launcher into `~/.local/bin` and, when that folder is not on your `PATH`, adds it in your shell's profile (`~/.zshrc`; for bash both `~/.bashrc` and the login profile, `~/.bash_profile` or `~/.profile`; fish's `conf.d`; otherwise `~/.profile`); set `CORTEX_NO_MODIFY_PATH=1` to leave profiles alone
 
-A checksum mismatch or a missing `.sha256` asset aborts the install — nothing is installed. If no release has been published yet, the installer says so and points at the source-checkout install instead. Prerelease versions are not installable via `install.sh` — pins are stable `X.Y.Z` only.
+A checksum mismatch or a missing `.sha256` asset aborts the install — nothing is installed. If no release has been published yet, the installer says so and points at the source-checkout install instead. Prerelease versions are not installable via `install.sh` — pins are stable `X.Y.Z` only (`vX.Y.Z` works too).
 
 ## Development Install
 
@@ -132,7 +132,7 @@ rm -rf ~/.cortex/install
 rm -f ~/.local/bin/cortex
 # Cortex 1.x also linked the launcher into a system folder; remove that link if it is there
 for link in /opt/homebrew/bin/cortex /usr/local/bin/cortex; do
-  [ "$(readlink "$link")" = "$HOME/.local/bin/cortex" ] && rm -f "$link"
+  if [ "$(readlink "$link")" = "$HOME/.local/bin/cortex" ]; then rm -f "$link"; fi
 done
 
 ```
