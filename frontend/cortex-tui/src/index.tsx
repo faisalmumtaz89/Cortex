@@ -28,8 +28,11 @@ process.stdout.on("error", () => process.exit(1))
 process.stderr.on("error", () => process.exit(1))
 
 // The terminal closed. Registered before render() so it runs ahead of
-// OpenTUI's own SIGHUP handler, which only destroys the renderer.
+// OpenTUI's own SIGHUP handler, which only destroys the renderer. A read
+// that fails (EIO on macOS, where the hangup can come after it) means the
+// same.
 process.on("SIGHUP", () => exitCortex(129))
+process.stdin.on("error", () => exitCortex(129))
 
 void render(() => <App />, {
   targetFps: 60,
