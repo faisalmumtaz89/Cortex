@@ -624,6 +624,20 @@ export function SessionRoute(props: {
     }
     historyIndex = -1
     historyDraft = ""
+    // Bare /login or /model typed with Enter in one burst (fast typing, a
+    // paste) arrives before the palette opens: open the picker, as the
+    // palette does.
+    const bare = fingerprint.toLowerCase()
+    if (bare === "/login" || bare === "/model") {
+      input.clear()
+      setPromptValue("")
+      if (bare === "/login") {
+        openLoginPicker()
+      } else {
+        openModelPicker()
+      }
+      return
+    }
     // Commands never queue: run now (ephemeral) or report we're still connecting.
     if (commandLike) {
       if (!store.state.sessionID) {

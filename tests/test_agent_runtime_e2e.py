@@ -1765,6 +1765,7 @@ def test_openai_compatible_setup_finishes_inside_the_app(
     assert extra["ok"] is False and "only an API key" in extra["message"]
     assert both["ok"] is True, both
     assert "http://127.0.0.1:9/v1" in both["message"]
+    assert "/model openai-compatible:<model>" in both["message"]  # the next step
     assert selected["ok"] is True, selected
     for result in (key_only, bad_url, extra, both):
         assert "sk-compat-e2e" not in str(result) and "sk-openai-e2e" not in str(result)

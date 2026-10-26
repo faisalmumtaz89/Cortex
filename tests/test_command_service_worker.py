@@ -121,7 +121,8 @@ def test_login_provider_key_save_sets_default_success_message() -> None:
     service, _ = _build()
     result = service.execute(session_id="s1", command="/login openai sk-test")
     assert result["ok"] is True
-    assert result["message"] == "Saved openai API key."
+    # The default message, then the next step (no openai model is active).
+    assert result["message"] == "Saved openai API key. Next: pick a model with /model."
 
 
 def test_login_status_includes_formatted_message() -> None:

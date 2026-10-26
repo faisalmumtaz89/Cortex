@@ -82,6 +82,7 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 ### `/login` — credentials
 
 ```bash
+/login                        # pick a provider; Cortex then asks for its key (and URL)
 /login openai <api_key>       # store an OpenAI key
 /login anthropic <api_key>    # store an Anthropic key
 /login azure <api_key> <endpoint>                # Azure OpenAI key and resource endpoint

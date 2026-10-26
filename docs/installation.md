@@ -79,7 +79,7 @@ cortex
 Then inside Cortex:
 
 - `/status` — the active model and the model that answered the last turn
-- `/login` — which providers have a key configured
+- `/login` — the provider picker, which shows which providers have a key configured
 
 ## Getting a Model
 

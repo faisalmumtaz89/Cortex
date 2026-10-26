@@ -651,6 +651,27 @@ def test_replies_wrap_between_words_after_non_ascii_text(tui_project) -> None:
     assert " ".join(paragraph) == f"Risks: {risks}", paragraph
 
 
+def test_login_and_model_typed_fast_open_their_pickers(tui_project) -> None:
+    """"/login" and Enter arriving together (fast typing, a paste) must open
+    the provider picker, as a slower Enter does, not fail with usage text."""
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]])
+    session.wait_for("Session ready")
+
+    session.send_line("/login")
+    picker = session.wait_for("Log in to a provider", timeout=10)
+    assert "Usage:" not in picker
+    session.send_key("Escape")
+    time.sleep(0.8)
+
+    session.send_line("/model")
+    session.wait_until(
+        lambda frame: "Select a model" in frame and "Enter use" in frame,
+        description="the /model picker from a fast '/model' + Enter",
+        timeout=10,
+    )
+
+
 def test_openai_compatible_login_takes_the_base_url_and_needs_no_restart(tui_project) -> None:
     """Picking openai-compatible in the /login picker asks for the key AND the
     base URL; after that the model can be selected at once, in the same

@@ -207,6 +207,15 @@ class CommandService:
                     message = f"{message} {url_result['message']}"
                 elif not self.model_service.endpoint_url(provider):
                     message = f"{message} {provider.value} also needs its URL: {usage}"
+            active = self.model_service.active_target.cloud_model
+            if result.get("ok") and (active is None or active.provider != provider):
+                # Name the next step: these models are named by the user, so
+                # the /model picker has none of them yet.
+                if url_argument:
+                    model_hint = "<deployment>" if provider == CloudProvider.AZURE else "<model>"
+                    message = f"{message} Next: /model {provider.value}:{model_hint}"
+                else:
+                    message = f"{message} Next: pick a model with /model."
             result["message"] = message
             return cast(Dict[str, object], result)
 
