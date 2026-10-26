@@ -134,7 +134,7 @@ Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml` (one release at a ti
 2. Builds the OpenTUI sidecar for the runner's platform with a **pinned Bun version** (kept in sync with `frontend/cortex-tui/package.json`), then the wheel with `python -m build --wheel`; `setup.py` tags it for that platform.
 3. **Hard gates:** the job fails unless the wheel contains `cortex/ui_runtime/bin/cortex-tui` (the sidecar is gitignored, so a wheel built without the bun step would silently ship a TUI-less package) AND carries that platform's tag (the wheel bundles a native binary and must never be `any`).
 4. Generates the wheel's `.sha256` sibling (`<hex>  <filename>`) — installers refuse a wheel without it.
-5. Runs `scripts/smoke_install.sh`: `install.sh` installs the wheel from a local copy laid out like the release, then `cortex --version`, a headless agent turn with the scripted model, and the TUI's first screen must work. On one macOS and one Linux runner it runs again with `install.sh`'s private Python.
+5. Runs `scripts/smoke_install.sh`: `install.sh` installs the wheel from a local copy laid out like the release, then `cortex --version`, a headless agent turn with the scripted model, and the TUI's first screen must work, and Ctrl+C must quit it without leaving processes behind. On one macOS and one Linux runner it runs again with `install.sh`'s private Python.
 6. A Windows job lints `install.ps1` and checks that it explains the WSL setup on a machine without a Linux distribution.
 7. **Last**, once every platform passed, creates the GitHub release with the four wheels and their `.sha256` files attached.
 
