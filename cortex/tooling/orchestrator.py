@@ -517,7 +517,7 @@ class ToolingOrchestrator:
             raise ReplyCutOffError(
                 "The model reached the output limit "
                 f"(max_tokens={self.cli.config.inference.max_tokens}) before finishing its "
-                "reply. Raise max_tokens in ~/.cortex/config.yaml.",
+                "reply. Raise max_tokens in ~/.cortex/config.yaml (or CORTEX_MAX_TOKENS).",
                 result.parts,
             )
         if finish_reason == "tool_limit":

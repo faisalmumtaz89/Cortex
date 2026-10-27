@@ -235,7 +235,7 @@ def run_headless(
             message = str(selection.get("message", model))
             if message.startswith("Usage: /model"):
                 message = f"pass --model provider:model, for example {_example_model(runtime)}"
-            print(f"model selection failed: {message}", file=sys.stderr)
+            print(f"error: {message}", file=sys.stderr)
             return 2
 
     elif getattr(runtime.model_service.active_target, "cloud_model", None) is None:
@@ -263,6 +263,10 @@ def run_headless(
         emit_event=printer.event,
     )
     printer.finish()
+    served = runtime.model_service.last_turn_provenance
+    if served:
+        check = "verified" if served.get("verified") else "unverified"
+        print(f"answered by {served.get('label')} ({check})", file=sys.stderr)
     ok = bool(result.get("ok", True))
     if model and not ok and not (printer.wrote_text or printer.after_tool):
         for key, value in saved_state.items():

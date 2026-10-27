@@ -1870,6 +1870,26 @@ def test_headless_tells_the_model_it_is_a_one_shot_run_and_what_it_may_do(
     assert "--full-auto" not in system, system
 
 
+def test_headless_names_the_model_that_answered(tmp_path: Path, scratch_repo: Path) -> None:
+    """A CI log says which model the reply came from, as the app's /status does."""
+    script = _write_script(tmp_path / "script.json", [[{"text": "Hello."}]])
+    process = _run_headless(cwd=scratch_repo, env=_worker_env(tmp_path, script),
+                            prompt="hi", extra_args=[])
+    assert process.returncode == 0, process.stderr
+    assert process.stdout == "Hello.\n"
+    assert "answered by openai:scripted" in process.stderr.splitlines()[-1], process.stderr
+
+
+def test_headless_setup_errors_share_one_prefix(tmp_path: Path, scratch_repo: Path) -> None:
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    process = subprocess.run(
+        [sys.executable, "-P", "-m", "cortex", "-p", "hi", "--model", "nosuchprovider:m"],
+        cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert process.returncode == 2, process.stderr
+    assert process.stderr.startswith("error: "), process.stderr
+
+
 def test_headless_reads_what_is_piped_to_it(tmp_path: Path, scratch_repo: Path) -> None:
     """`git diff | cortex -p "summarize this"` sends the diff with the prompt."""
     piped = "diff --git a/src/app.py b/src/app.py\n-    return 1\n+    return 2\n"
