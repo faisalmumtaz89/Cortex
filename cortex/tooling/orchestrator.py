@@ -148,6 +148,12 @@ _API_NAME = re.compile(r"[^a-zA-Z0-9_-]")
 _SKILL_COMMAND = re.compile(r"/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)")
 
 
+def skill_command_name(text: str) -> Optional[str]:
+    """The name in a message that starts like a skill's /<name>, if it does."""
+    match = _SKILL_COMMAND.match(text)
+    return match.group(1) if match else None
+
+
 def expand_skill_commands(
     messages: List[Dict[str, object]], skills: Dict[str, Skill]
 ) -> Optional[Skill]:
@@ -159,8 +165,8 @@ def expand_skill_commands(
         if message.get("role") != "user":
             continue
         content = message.get("content")
-        match = _SKILL_COMMAND.match(content) if isinstance(content, str) else None
-        skill = skills.get(match.group(1)) if match else None
+        name = skill_command_name(content) if isinstance(content, str) else None
+        skill = skills.get(name) if name else None
         invoked = skill
         if skill is None:
             continue

@@ -48,7 +48,7 @@ Runs one agent turn through the same worker wiring the TUI uses:
 - stdout gets the answer: when it goes to a pipe or a file, what the model writes before its tool calls ("I'll read the file first.") goes to stderr instead, so a script reads only the final reply. In a terminal everything streams as it is written.
 - Input piped to the run is sent after the prompt, so `git diff | cortex -p "summarize this diff"` works (up to 512 KB), and stderr says how much was sent. `cortex -p -` reads the whole prompt from stdin. A stdin left open with nothing in it is ignored after 3 seconds, with a note on stderr; run with `< /dev/null` to skip that wait. In a loop that reads its own input, give each run `< /dev/null`, or the first run takes the rest of the loop's input: `ls src/*.js | while read -r f; do cortex -p "what does $f do" < /dev/null; done`.
 - Text the model writes after a tool call starts a new paragraph.
-- Slash commands are not run in headless mode, except `/<skill> request`. A prompt that starts with a command of the interactive app (`/model`, `/login`, `/update`, ...) is refused with exit code `2` and not sent to the model; any other text, `/` or not, is sent to the model as written.
+- Slash commands are not run in headless mode, except `/<skill> request`. A prompt that starts with a command of the interactive app (`/model`, `/login`, `/update`, ...) is refused with exit code `2` and not sent to the model (for `/login`, the error names `cortex login`); any other text, `/` or not, is sent to the model as written. A `/name` that is no skill (`/review` for `/review-changes`) is sent too, with a note on stderr that lists the skills.
 
 In CI, pass `--model` on every run: a fresh runner has no remembered model. Exit `0` means the turn finished, not that the task succeeded, so check the result yourself (re-run the tests, look at `git diff`); with `--full-auto` the model may change any file in the repository.
 
@@ -68,8 +68,10 @@ Exit codes say whether the run worked, not what the model found, so a check that
 ```bash
 #!/bin/sh
 # .git/hooks/pre-commit — block a commit the review finds a real bug in.
+# --model names the model on every run, as on a fresh CI runner, which remembers none.
 reply=$(git diff --cached | cortex -p "Review this staged diff for real bugs only (not style).
-End with one last line, exactly VERDICT: BUG or VERDICT: OK." 2>>.git/cortex-review.log)
+End with one last line, exactly VERDICT: BUG or VERDICT: OK." --model openai:gpt-5.5 \
+  2>>.git/cortex-review.log)
 status=$?
 if [ "$status" -ne 0 ]; then
   echo "pre-commit: the review did not run (exit $status); see .git/cortex-review.log" >&2
@@ -97,7 +99,7 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 | Command | Description |
 |---|---|
 | `/help` | List available commands |
-| `/status` | Active model and the model that answered the last turn |
+| `/status` | The Cortex version, the directory it works in, the active model and the model that answered the last turn |
 | `/model [provider:model]` | Pick a model interactively, or switch by `provider:model` |
 | `/login <provider> [api_key] [url]` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials (Azure and OpenAI-compatible also take the URL) |
 | `/update [cortex]` | Show the installed version and any newer one, or update Cortex |
@@ -202,7 +204,7 @@ Cortex ships five skills:
 | `map-and-plan` | Map the code a question or change touches, with `path:line` references, and write a step-by-step plan before any edit | read-only: `read_file`, `list_dir`, `search`, `git` |
 | `reproduce-and-fix` | Find the first real error in a bug report, failing test or CI log, reproduce it with a failing test, fix the code (never the test) and run the full suite | all |
 | `safe-refactor` | Restructure code or upgrade dependencies from a passing suite, in small steps, keeping behaviour and public APIs | all |
-| `review-changes` | Review a diff for bugs and security flaws, prove each finding by running it, and rank them; it never fixes them | no `edit_file`; `write_file` and `bash` allowed (its instructions use `write_file` only for a review file you ask for) |
+| `review-changes` | Review a diff for bugs and security flaws, prove each finding by running it, and rank them; it never fixes them. Its reproductions go in a temporary folder it makes outside the project, under `/tmp` (with `mktemp -d`). In `cortex -p` without `--full-auto` it can run nothing, so it lists its findings as **Unverified** | no `edit_file`; `write_file` and `bash` allowed (its instructions use `write_file` only for a review file you ask for) |
 | `commit-and-pr` | Check a diff for secrets and debug leftovers, write the commit message and PR description, and run git without force pushes or history rewrites | no `edit_file`; `write_file` and `bash` allowed (its instructions use `write_file` only for a message or PR description file you ask for) |
 
 Cortex finds skills in three places, and a skill in a later one replaces one of

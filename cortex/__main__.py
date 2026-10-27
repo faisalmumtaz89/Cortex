@@ -173,6 +173,11 @@ def main() -> None:
     try:
         parser = argparse.ArgumentParser(
             prog="cortex",
+            usage=(
+                "cortex [-p PROMPT [--model PROVIDER:MODEL] [--full-auto]]\n"
+                "       cortex login PROVIDER [URL]\n"
+                "       cortex --version"
+            ),
             description=(
                 "Terminal AI coding agent. Run `cortex` in a repository for the\n"
                 "interactive app, or `cortex -p PROMPT --model PROVIDER:MODEL` for one turn."
@@ -226,18 +231,25 @@ def main() -> None:
         )
         # Words outside -p, kept to say where they belong.
         parser.add_argument("stray", nargs="*", help=argparse.SUPPRESS)
-        args = parser.parse_args()
+        args, unknown = parser.parse_known_args()
+        options = [arg.split("=", 1)[0] for arg in unknown if arg.startswith("-")]
+        if options:
+            # Named without what follows: that may be a key put in the wrong place.
+            parser.error(f"unknown option {', '.join(options)} (see cortex --help)")
         stray = " ".join(args.stray)
+        # The options given with a misplaced prompt, kept in the command shown.
+        rest = " --full-auto" if args.full_auto else ""
+        rest += f" --model {args.model}" if args.model else ""
         if args.print is _NO_PROMPT:
             if stray:
-                rest = " --full-auto" if args.full_auto else ""
-                rest += f" --model {args.model}" if args.model else ""
                 parser.error(f'-p takes the prompt right after it: cortex -p "{stray}"{rest}')
             parser.error('-p needs a prompt, for example: cortex -p "fix the failing test"')
         if stray and args.print is not None:
-            parser.error(f'quote the prompt, it is one argument: cortex -p "{args.print} {stray}"')
+            parser.error(
+                f'quote the prompt, it is one argument: cortex -p "{args.print} {stray}"{rest}'
+            )
         if stray:
-            parser.error(f'to run one prompt, put -p before it: cortex -p "{stray}"')
+            parser.error(f'to run one prompt, put -p before it: cortex -p "{stray}"{rest}')
 
         if args.worker_stdio:
             _run_worker_stdio()

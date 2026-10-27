@@ -49,7 +49,11 @@ class GitArgs(BaseModel):
     paths: List[str] = Field(default_factory=list, description="Limit to these paths.")
     staged: bool = Field(default=False, description="diff: the staged changes.")
     stat: bool = Field(default=False, description="diff, log, show: a summary per file.")
-    patch: bool = Field(default=False, description="log: each commit's changes too.")
+    patch: bool = Field(
+        default=False,
+        description="diff, log, show: the changes line by line. diff and show give them "
+        "unless stat is set (with stat, both); log gives them only with patch.",
+    )
     max_count: int = Field(default=20, ge=1, le=200, description="log: how many commits.")
 
 
@@ -97,10 +101,11 @@ def _argv(args: GitArgs, root: Path) -> List[str]:
     command = args.command
     if args.staged and command != "diff":
         raise ToolExecutionError("staged applies to diff only")
-    if args.patch and command != "log":
-        raise ToolExecutionError("patch applies to log only")
-    if args.stat and command in ("status", "merge-base"):
-        raise ToolExecutionError(f"stat does not apply to {command}")
+    for name in ("stat", "patch"):
+        if getattr(args, name) and command in ("status", "merge-base"):
+            raise ToolExecutionError(f"{name} does not apply to {command}")
+    # The changes as asked for: a summary, the lines, or both.
+    changes = [*(["--stat"] if args.stat else []), *(["--patch"] if args.patch else [])]
     revision = _revision(args.revision)
     if command == "status":
         if revision:
@@ -115,16 +120,14 @@ def _argv(args: GitArgs, root: Path) -> List[str]:
     elif command == "diff":
         if args.staged and revision:
             raise ToolExecutionError("staged compares the index with HEAD: give no revision")
-        argv = ["diff", *_SAFE_DIFF, *(["--cached"] if args.staged else [])]
-        argv += ["--stat"] if args.stat else []
+        argv = ["diff", *_SAFE_DIFF, *(["--cached"] if args.staged else []), *changes]
         argv += [revision] if revision else []
     elif command == "log":
         argv = ["log", f"--max-count={args.max_count}", "--date=short",
                 "--format=%h %ad %an: %s", *_SAFE_DIFF]
-        argv += ["--stat"] if args.stat else (["--patch"] if args.patch else [])
-        argv += [revision] if revision else []
+        argv += [*changes, *([revision] if revision else [])]
     else:  # show
-        argv = ["show", *_SAFE_DIFF, *(["--stat"] if args.stat else []), revision or "HEAD"]
+        argv = ["show", *_SAFE_DIFF, *changes, revision or "HEAD"]
     return [*argv, "--", *(_pathspec(path, root) for path in args.paths)]
 
 

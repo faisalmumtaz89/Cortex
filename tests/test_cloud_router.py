@@ -88,7 +88,7 @@ def test_failure_names_the_model_and_key_source():
         _events(router)
 
     assert str(exc.value) == (
-        "Cloud generation failed for openai:gpt-5.5 (key saved with /login): boom"
+        "Cloud generation failed for openai:gpt-5.5 (the saved key): boom"
     )
 
 

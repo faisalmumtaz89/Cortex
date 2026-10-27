@@ -161,8 +161,8 @@ class CloudRouter:
             # Which key was sent: an old variable can shadow the key /login saved.
             key_label = {
                 "env": f" (key from {ENV_KEY_MAP[model_ref.provider]})",
-                "keychain": " (key saved with /login)",
-                "file": " (key saved with /login)",
+                "keychain": " (the saved key)",
+                "file": " (the saved key)",
             }.get(str(source), "")
             logger.error("Cloud generation failed for %s: %s", model_ref.selector, exc)
             raise RuntimeError(

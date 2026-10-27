@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 from typing import Callable, Dict, cast
 
 from cortex.app.command_output import format_auth_status, format_status_summary
 from cortex.app.model_service import LOGIN_URL_ARGUMENT
 from cortex.cloud.types import CloudProvider
+from cortex.update_check import running_cortex_version
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +140,13 @@ class CommandService:
                 ),
             }
         if cmd == "/status":
-            status = self.model_service.status_summary()
+            home = str(Path.home())
+            cwd = str(Path.cwd())
+            status = {
+                "cortex": running_cortex_version() or "unknown",
+                "directory": "~" + cwd[len(home):] if cwd == home or cwd.startswith(home + os.sep) else cwd,
+                **self.model_service.status_summary(),
+            }
             return {"ok": True, "status": status, "message": format_status_summary(status)}
         if cmd == "/clear":
             return self.clear_session(session_id)

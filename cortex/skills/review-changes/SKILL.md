@@ -40,8 +40,11 @@ as proven what you could not prove.
      weak crypto.
 5. **Prove each candidate.** Write the smallest script that shows the wrong
    result, crash or exploit, and run it against the changed code. Put scratch
-   files in `mktemp -d /tmp/cortex-review.XXXXXX` and reuse the literal path it
-   prints: shell variables do not survive between bash calls. Prefer
+   files outside the repository, in a directory made by
+   `mktemp -d /tmp/cortex-review.XXXXXX` run as a command of its own (the user
+   approves each command, and rejecting one must not cost another), and reuse
+   the literal path it prints: shell variables do not survive between bash
+   calls. Run the project's tests as a command of their own too. Prefer
    standalone scripts run as `PYTHONPATH=. python /tmp/cortex-review.…/repro.py`
    (or the project's own interpreter and import path); a test file outside the
    repository does not get the project's conftest.py fixtures. To compare with

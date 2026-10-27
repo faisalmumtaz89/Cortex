@@ -196,8 +196,8 @@ def test_login_status_says_where_the_key_comes_from() -> None:
 
     env = {"active_source": "env", "env_var": "OPENAI_API_KEY", "file_present": True}
     assert format_auth_status(provider="openai", auth=env) == (
-        "openai: logged in, using the OPENAI_API_KEY environment variable. A key saved with "
-        "/login is also there; OPENAI_API_KEY takes precedence."
+        "openai: logged in, using the OPENAI_API_KEY environment variable. A saved key is "
+        "also there; OPENAI_API_KEY takes precedence."
     )
     saved = {"active_source": "file", "env_var": "OPENAI_API_KEY", "file_present": True}
     assert "in ~/.cortex/credentials.json" in format_auth_status(provider="openai", auth=saved)
@@ -205,3 +205,20 @@ def test_login_status_says_where_the_key_comes_from() -> None:
     assert format_auth_status(provider="openai", auth=none) == (
         "openai: not logged in. Add a key with /login openai <api_key>, or set OPENAI_API_KEY."
     )
+
+
+def test_status_names_the_version_and_the_directory(tmp_path, monkeypatch) -> None:
+    import cortex
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project = tmp_path / "code" / "app"
+    project.mkdir(parents=True)
+    monkeypatch.chdir(project)
+    service, _ = _build()
+    message = str(service.execute(session_id="s1", command="/status")["message"])
+    assert message.splitlines()[:3] == [
+        "System status",
+        f"- Cortex: {cortex.__version__}",
+        "- Directory: ~/code/app",
+    ], message
+    assert "- Active model: No model loaded" in message

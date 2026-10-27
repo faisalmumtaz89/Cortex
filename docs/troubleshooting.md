@@ -13,7 +13,7 @@ Cortex uses a split runtime:
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all available commands |
-| `/status` | Show the active model and the model that answered the last turn |
+| `/status` | Show the Cortex version, the directory, the active model and the model that answered the last turn |
 | `/model` | List and switch models |
 | `/login` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials |
 | `/update` | Show the installed version and any newer one, or update Cortex |

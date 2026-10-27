@@ -14,6 +14,7 @@ import sys
 from typing import Optional
 
 from cortex.cloud.types import CloudProvider
+from cortex.tooling.orchestrator import skill_command_name
 from cortex.tooling.types import PermissionAction, PermissionRule
 
 # Slash commands of the interactive app; a skill's /<name> still runs headless.
@@ -97,18 +98,24 @@ def _diff_text(diff: dict) -> str:
 
 
 def _refusal(selection: dict) -> str:
-    """Why a model cannot be used, as a headless run says it: a missing key is
-    saved with `cortex login` here, where /login is not at hand."""
+    """Why a model cannot be used, as a headless run says it: a missing key or
+    URL is saved with `cortex login` here, where /login is not at hand."""
     missing = selection.get("missing_key")
-    if not isinstance(missing, dict):
-        return str(selection.get("message", ""))
-    login = f"cortex login {missing['provider']}"
-    if missing.get("url"):
-        login = f"{login} {missing['url']}"
-    return (
-        f"{missing['provider']} is not authenticated. Save a key with `{login}`, "
-        f"or set {missing['variables']}."
-    )
+    if isinstance(missing, dict):
+        login = f"cortex login {missing['provider']}"
+        if missing.get("url"):
+            login = f"{login} {missing['url']}"
+        return (
+            f"{missing['provider']} is not authenticated. Save a key with `{login}`, "
+            f"or set {missing['variables']}."
+        )
+    url = selection.get("missing_url")
+    if isinstance(url, dict):
+        return (
+            f"{url['provider']} also needs its {url['what']}: set {url['variable']}, or save it "
+            f"with `cortex login {url['provider']} {url['url']}`, which saves a key with it."
+        )
+    return str(selection.get("message", ""))
 
 
 def _rules_elsewhere(manager, commands: list[str]) -> list[str]:
@@ -301,7 +308,12 @@ def run_headless(
 
     command = prompt.strip().split(maxsplit=1)[0].lower() if prompt.strip() else ""
     if command in _APP_COMMANDS:
-        hint = " Pick the model with --model provider:model." if command == "/model" else ""
+        hints = {
+            "/model": " Pick the model with --model provider:model.",
+            "/login": " Here, save a key with `cortex login PROVIDER [URL]`, which reads it from "
+            "stdin.",
+        }
+        hint = hints.get(command, "")
         print(
             f"error: {command} is a command of the interactive app: run `cortex` and type it "
             f"there.{hint}",
@@ -338,6 +350,15 @@ def run_headless(
             file=sys.stderr,
         )
         return 2
+
+    name = skill_command_name(prompt.strip())
+    skills = runtime.tooling_orchestrator.available_skills()
+    if name and name not in skills:
+        # Sent as written, as any prompt is; the run says it ran no skill.
+        sys.stderr.write(
+            f"note: no skill is named {name} (skills here: {', '.join(sorted(skills)) or 'none'}); "
+            "the prompt is sent as written\n"
+        )
 
     printer = _Printer()
     runtime.session_service.create_or_resume(session_id=session_id)

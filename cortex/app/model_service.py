@@ -179,31 +179,29 @@ class ModelService:
                 },
             }
 
-        if provider_enum == CloudProvider.AZURE:
-            endpoint = self.cloud_router._azure_endpoint()
-            if not endpoint:
+        url_argument = LOGIN_URL_ARGUMENT.get(provider_enum)
+        if url_argument:
+            url = self.endpoint_url(provider_enum)
+            if not url:
+                what = "resource endpoint" if provider_enum == CloudProvider.AZURE else "base URL"
+                variable = URL_ENV_VARIABLE[provider_enum]
                 return {
                     "ok": False,
                     "message": (
-                        "Azure OpenAI also needs your resource endpoint: "
-                        "/login azure <api_key> <endpoint>, or set AZURE_OPENAI_ENDPOINT."
+                        f"{provider_enum.value} also needs its {what}: "
+                        f"/login {provider_enum.value} <api_key> {url_argument}, or set {variable}."
                     ),
+                    # The same, for a caller that words it its own way (headless).
+                    "missing_url": {
+                        "provider": provider_enum.value,
+                        "what": what,
+                        "url": url_argument,
+                        "variable": variable,
+                    },
                 }
             # Persist so later sessions work without the env var.
-            self.config.set_state_value("azure_endpoint", endpoint)
-
-        if provider_enum == CloudProvider.OPENAI_COMPATIBLE:
-            base_url = self.cloud_router.openai_compatible_base_url()
-            if not base_url:
-                return {
-                    "ok": False,
-                    "message": (
-                        "An OpenAI-compatible endpoint also needs its base URL: "
-                        "/login openai-compatible <api_key> <base_url>, "
-                        "or set OPENAI_COMPATIBLE_BASE_URL."
-                    ),
-                }
-            self.config.set_state_value("openai_compatible_base_url", base_url)
+            state_key = "azure_endpoint" if provider_enum == CloudProvider.AZURE else "openai_compatible_base_url"
+            self.config.set_state_value(state_key, url)
 
         ref = CloudModelRef(provider=provider_enum, model_id=normalized_model_id)
         self.active_target = ActiveModelTarget.cloud(ref)
@@ -242,10 +240,8 @@ class ModelService:
         The environment variable and config.yaml still take precedence."""
         url = url.strip().rstrip("/")
         if not url.startswith(("https://", "http://")):
-            return {
-                "ok": False,
-                "message": f"The URL must start with https:// or http:// (got {url}).",
-            }
+            # Not repeated back: it may be a key typed where the URL goes.
+            return {"ok": False, "message": "The URL must start with https:// or http://."}
         is_azure = provider == CloudProvider.AZURE
         state_key = "azure_endpoint" if is_azure else "openai_compatible_base_url"
         self.config.set_state_value(state_key, url)

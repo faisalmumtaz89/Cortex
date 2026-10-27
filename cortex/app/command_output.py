@@ -46,12 +46,12 @@ def format_auth_status(*, provider: str, auth: Mapping[str, Any]) -> str:
     saved = bool(auth.get("keychain_present") or auth.get("file_present"))
     where = {
         "env": f"the {env_var} environment variable",
-        "keychain": "the key saved with /login, in the system keyring",
-        "file": "the key saved with /login, in ~/.cortex/credentials.json",
+        "keychain": "the saved key, in the system keyring",
+        "file": "the saved key, in ~/.cortex/credentials.json",
     }
     if source in where:
         message = f"{provider}: logged in, using {where[str(source)]}."
         if source == "env" and saved:
-            message += f" A key saved with /login is also there; {env_var} takes precedence."
+            message += f" A saved key is also there; {env_var} takes precedence."
         return message
     return f"{provider}: not logged in. Add a key with /login {provider} <api_key>, or set {env_var}."

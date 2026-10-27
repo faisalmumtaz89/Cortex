@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -454,6 +455,22 @@ def test_the_git_tool_refuses_arguments_that_are_options_or_outside_the_project(
     assert "outside the working directory" in errors[1], errors
     assert "staged applies to diff only" in errors[2], errors
     assert not outside.exists()
+    assert sorted(path.name for path in marks.iterdir()) == []
+
+
+def test_the_git_tool_takes_patch_and_stat_wherever_they_show_changes(tmp_path: Path) -> None:
+    """patch asks for the changes line by line: diff and show give them anyway,
+    and with stat both come; only status and merge-base have none to give."""
+    repo, marks = _hostile_git_repo(tmp_path)
+    results = _tool_results(tmp_path, repo, [
+        ("git", {"command": "show", "patch": True}),
+        ("git", {"command": "diff", "stat": True, "patch": True}),
+        ("git", {"command": "status", "patch": True}),
+    ])
+    show, diff, status = results
+    assert show["ok"] and "+two" in show["output"], show
+    assert diff["ok"] and "notes.txt | 1 +" in diff["output"] and "+three" in diff["output"], diff
+    assert "patch does not apply to status" in status["error"], status
     assert sorted(path.name for path in marks.iterdir()) == []
 
 
@@ -2205,6 +2222,8 @@ def test_headless_puts_a_misplaced_prompt_right(tmp_path: Path, scratch_repo: Pa
          'error: -p takes the prompt right after it: cortex -p "fix it" --full-auto'),
         (["fix it"],
          'error: to run one prompt, put -p before it: cortex -p "fix it"'),
+        (["--full-auto", "fix it"],
+         'error: to run one prompt, put -p before it: cortex -p "fix it" --full-auto'),
     ):
         process = subprocess.run([sys.executable, "-P", "-m", "cortex", *args], cwd=scratch_repo,
                                  env=env, capture_output=True, text=True, timeout=120)
@@ -2229,6 +2248,29 @@ def test_headless_names_cortex_login_when_a_key_is_missing(
         "`cortex login openai-compatible <base_url>`, or set OPENAI_COMPATIBLE_API_KEY and "
         "OPENAI_COMPATIBLE_BASE_URL."
     ) in process.stderr, process.stderr
+
+    # With the key set but no base URL, the URL is what it names.
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compat-e2e"
+    process = subprocess.run(
+        [sys.executable, "-P", "-m", "cortex", "-p", "hi", "--model", "openai-compatible:org/m"],
+        cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert process.returncode == 2, process.stderr
+    assert (
+        "error: openai-compatible also needs its base URL: set OPENAI_COMPATIBLE_BASE_URL, or "
+        "save it with `cortex login openai-compatible <base_url>`, which saves a key with it."
+    ) in process.stderr, process.stderr
+
+
+def test_an_unknown_option_is_named_without_its_value(tmp_path: Path, scratch_repo: Path) -> None:
+    """A key put in an option that does not exist is not repeated into a CI log."""
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    for args in (["-p", "hi", "--key=sk-in-an-option"], ["-p", "hi", "--key", "sk-in-an-option"]):
+        process = subprocess.run([sys.executable, "-P", "-m", "cortex", *args], cwd=scratch_repo,
+                                 env=env, capture_output=True, text=True, timeout=120)
+        assert process.returncode == 2, process.stderr
+        assert "unknown option --key" in process.stderr, process.stderr
+        assert "sk-in-an-option" not in process.stderr, process.stderr
 
 
 def _cortex_login(env: dict, cwd: Path, args: list, key_input: str):
@@ -2311,11 +2353,18 @@ def test_cortex_login_refuses_what_it_cannot_save_safely(
          "or run cortex login anthropic in a terminal to type it"),
         (["nosuch"], "k\n",
          "error: unknown provider nosuch. Use one of: anthropic, azure, openai, openai-compatible"),
+        # The key where the URL goes, with or without one on stdin: not repeated back.
+        (["openai-compatible", "sk-where-the-url-goes"], "sk-x\n",
+         "error: openai-compatible takes its base URL after the provider, and that is not a URL "
+         "(it does not start with https:// or http://). The key goes on stdin: "
+         'printf %s "$KEY" | cortex login openai-compatible <base_url>'),
+        (["openai-compatible", "sk-where-the-url-goes"], "", "that is not a URL"),
     )
     for args, key_input, expected in cases:
         process = _cortex_login(env, scratch_repo, args, key_input)
         assert process.returncode == 2, process.stderr
         assert expected in process.stderr, process.stderr
+        assert "sk-where-the-url-goes" not in process.stderr
     assert not (tmp_path / "home" / ".cortex" / "credentials.json").exists()
 
 
@@ -2559,6 +2608,8 @@ def test_headless_says_where_an_app_command_runs(
     assert "interactive app" in process.stderr
     if command.startswith("/model"):
         assert "--model" in process.stderr
+    if command.startswith("/login"):
+        assert "cortex login PROVIDER [URL]" in process.stderr
     assert "sk-x" not in process.stderr
 
 
@@ -2630,3 +2681,72 @@ def test_headless_model_without_its_provider_names_the_flag(
     )
     assert process.returncode == 2
     assert "--model provider:model" in process.stderr and "/model" not in process.stderr.replace("--model", "")
+
+
+def test_the_documented_pre_commit_hook_blocks_a_bug_and_fails_closed(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The hook in docs/cli.md, as written: a review that ends in VERDICT: BUG
+    stops the commit, one that ends in VERDICT: OK lets it through, and a
+    review that cannot run (no key) stops it too."""
+    docs = (REPO_ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
+    hook = re.search(r"```bash\n(#!/bin/sh\n# \.git/hooks/pre-commit[^`]*)```", docs)
+    assert hook, "the pre-commit hook was not found in docs/cli.md"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "cortex").write_text(f'#!/bin/sh\nexec "{sys.executable}" -m cortex "$@"\n')
+    (bin_dir / "cortex").chmod(0o755)
+    script = tmp_path / "script.json"
+    env = _worker_env(tmp_path, script)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], cwd=scratch_repo, env=env, capture_output=True,
+                              text=True, timeout=180)
+
+    git("init", "-q")
+    git("config", "user.email", "dev@example.com")
+    git("config", "user.name", "Dev")
+    git("add", "-A")
+    assert git("commit", "-qm", "start").returncode == 0
+    hook_path = scratch_repo / ".git" / "hooks" / "pre-commit"
+    hook_path.write_text(hook.group(1))
+    hook_path.chmod(0o755)
+
+    (scratch_repo / "src" / "app.py").write_text("def main():\n    return 2\n", encoding="utf-8")
+    git("add", "src/app.py")
+    _write_script(script, [[{"text": "main() now returns the wrong value.\nVERDICT: BUG"}]])
+    blocked = git("commit", "-qm", "change")
+    assert blocked.returncode == 1, blocked.stderr
+    assert "the review found a problem" in blocked.stderr
+    assert git("rev-list", "--count", "HEAD").stdout.strip() == "1"
+
+    env.pop("OPENAI_API_KEY")
+    unreviewed = git("commit", "-qm", "change")
+    assert unreviewed.returncode == 1
+    assert "the review did not run (exit 2)" in unreviewed.stderr, unreviewed.stderr
+    assert "openai is not authenticated" in (scratch_repo / ".git" / "cortex-review.log").read_text()
+
+    env["OPENAI_API_KEY"] = "sk-test-scripted"
+    _write_script(script, [[{"text": "The change is correct.\nVERDICT: OK"}]])
+    passed = git("commit", "-qm", "change")
+    assert passed.returncode == 0, passed.stderr
+    assert git("rev-list", "--count", "HEAD").stdout.strip() == "2"
+
+
+def test_headless_says_when_a_slash_name_is_no_skill(tmp_path: Path, scratch_repo: Path) -> None:
+    """A mistyped skill (/review for /review-changes) still reaches the model,
+    as any prompt does, and the run says it ran no skill."""
+    script = _write_script(tmp_path / "script.json", [[{"text": "ANSWERED"}]] * 2)
+    env = _worker_env(tmp_path, script)
+    typo = _run_headless(cwd=scratch_repo, env=env, prompt="/review my changes", extra_args=[])
+    assert typo.returncode == 0, typo.stderr
+    assert "ANSWERED" in typo.stdout
+    assert (
+        "note: no skill is named review (skills here: commit-and-pr, map-and-plan, "
+        "reproduce-and-fix, review-changes, safe-refactor); the prompt is sent as written"
+    ) in typo.stderr, typo.stderr
+    skill = _run_headless(cwd=scratch_repo, env=env, prompt="/review-changes my changes",
+                          extra_args=[])
+    assert skill.returncode == 0, skill.stderr
+    assert "no skill is named" not in skill.stderr

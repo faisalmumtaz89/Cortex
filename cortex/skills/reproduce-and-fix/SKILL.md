@@ -1,7 +1,7 @@
 ---
 name: reproduce-and-fix
 description: >-
-  Use when the user wants something broken fixed: a bug report, a failing
+  Use when something broken needs fixing: a bug report, a failing
   test, an error or traceback, or a failing CI log. Finds the first real error,
   reproduces it with a failing test, fixes the code rather than the test, and
   re-runs the full suite. Not for only explaining an error, new features,

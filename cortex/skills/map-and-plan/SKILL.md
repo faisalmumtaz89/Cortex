@@ -1,8 +1,8 @@
 ---
 name: map-and-plan
 description: >-
-  Use when the user asks how code works, where something happens, or wants a
-  change planned but not yet made: maps entry points, data flow and key
+  Use when asked how code works, where something happens, or for a change
+  planned but not yet made: maps entry points, data flow and key
   modules with exact path:line references, then writes a step-by-step edit
   plan. Read-only for the whole turn: not for requests that also ask to make
   the change, run commands, or fix something now.

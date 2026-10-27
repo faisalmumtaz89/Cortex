@@ -23,6 +23,10 @@ def _fail(message: str) -> int:
     return 2
 
 
+def _url_name(provider: CloudProvider) -> str:
+    return "endpoint" if provider == CloudProvider.AZURE else "base URL"
+
+
 def _read_key(provider: str) -> str:
     if sys.stdin.isatty():
         return getpass.getpass(f"API key for {provider} (not shown): ").strip()
@@ -55,12 +59,19 @@ def run_login(argv: List[str]) -> int:
             "it reads the key from stdin, or asks for it in a terminal"
         )
 
-    service = _model_service()
-    url = argv[1] if len(argv) == 2 else ""
-    if url_argument and not url and not service.endpoint_url(provider):
-        what = "endpoint" if provider == CloudProvider.AZURE else "base URL"
+    url = argv[1].strip() if len(argv) == 2 else ""
+    if url and not url.startswith(("https://", "http://")):
+        # Not repeated back: most often it is the key.
         return _fail(
-            f"{provider.value} also needs its {what}: "
+            f"{provider.value} takes its {_url_name(provider)} after the provider, and that is "
+            "not a URL (it does not start with https:// or http://). The key goes on stdin: "
+            f'printf %s "$KEY" | cortex login {provider.value} {url_argument}'
+        )
+
+    service = _model_service()
+    if url_argument and not url and not service.endpoint_url(provider):
+        return _fail(
+            f"{provider.value} also needs its {_url_name(provider)}: "
             f"cortex login {provider.value} {url_argument}"
         )
 
