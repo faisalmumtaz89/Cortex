@@ -19,7 +19,7 @@ Runs on macOS (Apple Silicon or Intel), Linux (x86_64 or arm64), and Windows thr
    cortex
    ```
 
-3. Add a provider key with `/login openai <api_key>` (or `anthropic`), `/login azure <api_key> <endpoint>`, or `/login openai-compatible <api_key> <base_url>` for DeepSeek, OpenRouter, vLLM and other OpenAI-compatible endpoints — or set the provider's environment variables (for an OpenAI-compatible endpoint, `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL`) — then pick a model with `/model` (`/model openai-compatible:<model>` names an OpenAI-compatible model).
+3. Inside Cortex, type `/login` and pick your provider: OpenAI, Anthropic, Azure OpenAI (it also asks for your endpoint), or any OpenAI-compatible endpoint such as DeepSeek, OpenRouter or vLLM (it also asks for the base URL). Then pick a model with `/model`. You can also set the provider's environment variables instead: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY` with `AZURE_OPENAI_ENDPOINT`, or `OPENAI_COMPATIBLE_API_KEY` with `OPENAI_COMPATIBLE_BASE_URL`.
 
 4. Describe what you want done. Cortex reads `AGENTS.md` (or `CLAUDE.md`) from your project, so your conventions travel with the agent.
 
@@ -28,18 +28,18 @@ Runs on macOS (Apple Silicon or Intel), Linux (x86_64 or arm64), and Windows thr
 ## How it works
 
 - Reading, searching, and listing files is free; every edit, write, and shell command asks first (headless `-p` runs refuse them unless you pass `--full-auto`).
-- Edits render as green/red diffs before they land.
+- In the interactive app, edits render as green/red diffs before they land.
 - Every reply is provenance-verified: it must come from the provider you picked — the model shown is the model that answered.
 - Skills give the model step-by-step instructions for kinds of task. Cortex ships five (`map-and-plan`, `reproduce-and-fix`, `safe-refactor`, `review-changes`, `commit-and-pr`), and you can add your own in `~/.cortex/skills/` or the project's `.cortex/skills/`. The model loads one when a request matches it, or you run one with `/<skill> request`. See [Skills](docs/cli.md#skills).
 - Headless mode for scripts and CI: `cortex -p "fix the failing test" --model openai:gpt-5.5 --full-auto` (the model is remembered for later runs).
 
 ## Commands
 
-`/model` · `/login` · `/status` · `/update` · `/clear` · `/save` · `/help` · `/quit`
+`/model` · `/login` · `/status` · `/update` · `/clear` · `/save` · `/help` · `/quit` (or `/exit`) · `/<skill> request`
 
 ## Documentation
 
-[Installation](docs/installation.md) · [CLI & tools](docs/cli.md) · [Configuration](docs/configuration.md) · [Conversations](docs/conversation-management.md) · [Troubleshooting](docs/troubleshooting.md) · [Architecture](docs/architecture-runtime.md) · [Protocol debugging](docs/protocol-debugging.md) · [Development](docs/development.md)
+[Installation](docs/installation.md) ([uninstall](docs/installation.md#uninstallation)) · [CLI & tools](docs/cli.md) · [Configuration](docs/configuration.md) · [Conversations](docs/conversation-management.md) · [Troubleshooting](docs/troubleshooting.md) · [Architecture](docs/architecture-runtime.md) · [Protocol debugging](docs/protocol-debugging.md) · [Development](docs/development.md)
 
 ## Contributing
 

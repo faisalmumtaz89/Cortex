@@ -590,6 +590,8 @@ PIP="${VENV_DIR}/bin/pip"
 # no package-index call for pip's own version.
 export PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUNTIME_PYTHON="${VENV_DIR}/bin/python"
+# The version this install replaces, if any, to say what changes.
+PREVIOUS_VERSION="$("${RUNTIME_PYTHON}" -c 'from importlib.metadata import version; print(version("cortex-llm"))' 2>/dev/null || true)"
 
 log "Upgrading installer tooling"
 "${PIP}" install --quiet --disable-pip-version-check --upgrade pip setuptools wheel >/dev/null
@@ -644,7 +646,7 @@ else
   # Local-wheel installs upgrade AND downgrade without extra flags; only the
   # cortex-llm artifact itself comes from the release — new/changed
   # dependencies still resolve from the package index.
-  log "Installing Cortex and its dependencies (a first install takes a minute or two)"
+  log "Installing Cortex and its dependencies (a first install takes a few minutes)"
   "${PIP}" install --quiet --disable-pip-version-check "${WHEEL_PATH}" \
     || die "pip could not install ${WHEEL_PATH##*/}; see the messages above."
   clear_hidden_site_flags "${RUNTIME_PYTHON}"
@@ -665,7 +667,13 @@ print(version("cortex-llm"))
 PY
 )"
 
-ok "Installed Cortex ${INSTALLED_VERSION}"
+if [[ -z "${PREVIOUS_VERSION}" ]]; then
+  ok "Installed Cortex ${INSTALLED_VERSION}"
+elif [[ "${PREVIOUS_VERSION}" == "${INSTALLED_VERSION}" ]]; then
+  ok "Reinstalled Cortex ${INSTALLED_VERSION}"
+else
+  ok "Installed Cortex ${INSTALLED_VERSION} (replacing ${PREVIOUS_VERSION})"
+fi
 ok "Launcher: ${LOCAL_LINK}"
 
 NEW_SHELL_NEEDED="0"

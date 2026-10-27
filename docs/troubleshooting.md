@@ -193,4 +193,4 @@ Logs are written to `~/.cortex/cortex.log`.
 
 - **Inside Cortex:** `/help` lists all commands.
 - **GitHub Issues:** report bugs at https://github.com/faisalmumtaz89/Cortex/issues. Include `cortex --version`, and the end of `~/.cortex/cortex.log` (and `~/.cortex/cortex-tui.log` if it exists).
-- **Source code:** in the repository, the entry point is `cortex/__main__.py` and the worker runtime is `cortex/app/worker_runtime.py`.
+- **Working on Cortex itself:** see the [Development Guide](development.md).

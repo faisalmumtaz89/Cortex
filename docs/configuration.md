@@ -2,13 +2,13 @@
 
 ## Overview
 
-Cortex reads configuration from `~/.cortex/config.yaml`. It never reads a `config.yaml` from the project it runs in, so a cloned repository's `config.yaml` cannot change Cortex's settings, such as where requests and API keys are sent. The file uses a flat key structure (no nested sections) and **every key is optional** — anything omitted falls back to its default. The [Template](#template) below lists the most useful keys.
+Cortex reads configuration from `~/.cortex/config.yaml` when it starts: restart Cortex after changing it. It never reads a `config.yaml` from the project it runs in, so a cloned repository's `config.yaml` cannot change Cortex's settings, such as where requests and API keys are sent. The file uses a flat key structure (no nested sections) and **every key is optional** — anything omitted falls back to its default. The [Template](#template) below lists the most useful keys.
 
 A setting that is unknown or not valid (for example a number above its maximum) is ignored, and the others still apply: it falls back to its default, or, for a `CORTEX_*` variable that is not valid, to the value in `config.yaml`. Cortex lists what it ignored in the notice when a session starts (on stderr for a headless `-p` run) and in `~/.cortex/cortex.log`. `tools_idle_timeout_seconds` is not read: `cloud_timeout_seconds` sets the request timeout, and a permission prompt waits for your answer.
 
 Any flat key can also be overridden with a `CORTEX_<KEY>` environment variable (values parsed as YAML): `CORTEX_TOOLS_MAX_ITERATIONS=80` overrides `tools_max_iterations`, `CORTEX_TOOLS_ENABLED=false` disables tooling. Env overrides beat `config.yaml`. Unknown `CORTEX_*` variables are ignored.
 
-Files Cortex writes outside the project (`~/.cortex` is readable only by you):
+Files Cortex writes outside the project (the folder `~/.cortex` opens only for you, so the files in it are private too):
 
 - `~/.cortex/state.yaml` — runtime state, kept separate from `config.yaml` so Cortex never rewrites your configuration: the last-used model, and the Azure endpoint and OpenAI-compatible base URL last used to select a model, so later sessions work without setting them again. `AZURE_OPENAI_ENDPOINT`/`OPENAI_COMPATIBLE_BASE_URL` and the `config.yaml` keys take precedence over the saved ones.
 - `~/.cortex/credentials.json` — API keys saved with `/login` where no system keyring works, readable only by you.

@@ -18,7 +18,7 @@ The installer needs only `curl`. It uses a Python 3.11+ from your system when on
 # One-line installer (latest GitHub release)
 curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
 
-# Pin a release version X.Y.Z (installs the vX.Y.Z GitHub release's wheel)
+# Install release X.Y.Z, newer or older than the one you have (the vX.Y.Z GitHub release's wheel)
 curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash -s -- X.Y.Z
 
 # Or clone and run locally (installs from the source checkout)
@@ -85,7 +85,7 @@ Then inside Cortex:
 
 Add a key for a provider, then pick a model:
 
-```bash
+```text
 /login openai <api_key>        # or anthropic / azure / openai-compatible
 /model openai:gpt-5.5
 ```
@@ -96,7 +96,11 @@ Provider keys can also come from environment variables (`OPENAI_API_KEY`, `ANTHR
 
 Cortex checks once a day (in the background, never blocking startup) whether a newer Cortex release exists and posts a one-line notice at session start when one does. Opt out with `auto_update_check: false` in `~/.cortex/config.yaml`.
 
-```bash
+To go back to an earlier release, run the installer with that version
+(`... | bash -s -- X.Y.Z`, as above): settings, keys and conversations stay.
+`/update cortex` only ever moves to a newer release.
+
+```text
 /update            # inside Cortex: installed vs latest version
 /update cortex     # install the latest published Cortex release (restart to apply)
 ```
@@ -157,6 +161,8 @@ or `~/.profile`, or the file `~/.config/fish/conf.d/cortex.fish`. These
 commands remove what it added, keep your own lines, and delete a profile file
 the installer created once nothing else is in it (skip them if other programs
 you use live in `~/.local/bin`):
+
+These use `perl`, which macOS and most Linux systems have.
 
 ```bash
 for f in ~/.zshrc ~/.bashrc ~/.bash_profile ~/.profile; do
