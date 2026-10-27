@@ -72,6 +72,9 @@ class TuiSession:
             # Hermeticity: never probe GitHub for releases from the suite.
             # The update e2e test opts back in with a local stub probe server.
             "CORTEX_AUTO_UPDATE_CHECK": "false",
+            # A key /login saves goes to the test's HOME, never the user's
+            # keyring (on macOS, the login Keychain).
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring",
             "TERM": os.environ.get("TERM", "xterm-256color"),
             # A truecolor terminal, as the color assertions expect: without it
             # OpenTUI falls back to 256 colors under TERM=xterm-256color.
@@ -741,10 +744,7 @@ def test_openai_compatible_login_takes_the_base_url_and_needs_no_restart(tui_pro
     session. "/login " and "/model " with nothing after them open their
     pickers instead of failing with a usage error."""
     project, start = tui_project
-    session = start(
-        [[{"text": "IGNORED"}]],
-        extra_env={"PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"},
-    )
+    session = start([[{"text": "IGNORED"}]])
     session.wait_for("Session ready")
 
     session.send_key("/login ")

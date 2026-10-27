@@ -215,12 +215,14 @@ def test_an_installer_choice_that_cannot_be_met_stops_before_anything_is_install
     """A Python named with CORTEX_PYTHON is used or the install stops: it is
     never swapped for another one. So does a choice that is not 1 or 0, or
     two that contradict each other. HOME is left as it was."""
+    import shutil
     import subprocess
     import sys
 
+    true = shutil.which("true")  # a program that runs, but is no Python
     cases = {
         "CORTEX_PYTHON=/no/such/python": "CORTEX_PYTHON=/no/such/python is not a command",
-        "CORTEX_PYTHON=/bin/true": "CORTEX_PYTHON=/bin/true is not a Python that runs",
+        f"CORTEX_PYTHON={true}": f"CORTEX_PYTHON={true} is not a Python that runs",
         "CORTEX_MANAGED_PYTHON=yes": "CORTEX_MANAGED_PYTHON must be 1 or 0 (got: yes)",
         "CORTEX_NO_MODIFY_PATH=true": "CORTEX_NO_MODIFY_PATH must be 1 or 0 (got: true)",
         f"CORTEX_MANAGED_PYTHON=1 CORTEX_PYTHON={sys.executable}": "set one of them",
