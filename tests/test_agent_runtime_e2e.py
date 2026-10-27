@@ -2016,28 +2016,29 @@ def test_headless_in_a_terminal_streams_each_message_as_a_paragraph(
     """In a terminal every message shows as it streams, and text after a tool
     call starts a new paragraph instead of running on."""
     import pty
+    import select
 
     master, slave = pty.openpty()
+    shown = b""
     try:
-        process = subprocess.run(
+        process = subprocess.Popen(
             [sys.executable, "-m", "cortex", "-p", "look", "--model", "openai:scripted"],
             cwd=scratch_repo, env=_worker_env(tmp_path, _narrating_script(tmp_path)),
-            stdin=subprocess.DEVNULL, stdout=slave, stderr=subprocess.PIPE, timeout=120,
+            stdin=subprocess.DEVNULL, stdout=slave, stderr=subprocess.PIPE,
         )
-        os.close(slave)
-        shown = b""
-        while True:
-            try:
-                chunk = os.read(master, 65536)
-            except OSError:
-                break
+        # This end stays open until all is read: macOS drops unread output
+        # once the last holder of the terminal closes it.
+        _, stderr = process.communicate(timeout=120)
+        while select.select([master], [], [], 0.5)[0]:
+            chunk = os.read(master, 65536)
             if not chunk:
                 break
             shown += chunk
     finally:
+        os.close(slave)
         os.close(master)
 
-    assert process.returncode == 0, process.stderr
+    assert process.returncode == 0, stderr
     assert shown.decode().replace("\r\n", "\n") == "Looking first.\n\nDone.\n"
 
 
