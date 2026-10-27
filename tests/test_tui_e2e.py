@@ -755,7 +755,10 @@ def test_openai_compatible_login_takes_the_base_url_and_needs_no_restart(tui_pro
         timeout=10,
     )
     session.send_line("deepseek/deepseek-v4.1-flash")
-    session.wait_for("openai-compatible:deepseek/deepseek-v4.1-flash — now active.", timeout=15)
+    active = session.wait_for("openai-compatible:deepseek/deepseek-v4.1-flash — now active.",
+                              timeout=15)
+    # A 130-column header has room for the whole name.
+    assert "openai-compatible:deepseek/deepseek-v4.1-flash · idle" in active.splitlines()[1], active
     session.send_key("Escape")
     time.sleep(0.8)
 
@@ -967,7 +970,10 @@ def test_permission_modal_shows_every_line_of_a_command(tui_project) -> None:
     session.send_line("run it")
 
     modal = session.wait_for("Permission required")
-    assert "blank or invisible characters⟩; touch HIDDEN.txt" in modal
+    flat = "".join(line.strip().lstrip("┃").strip() for line in modal.splitlines())
+    # The blank run is counted, and each line break stays visible.
+    assert "⟨20000 blank or invisible characters⟩\\n\\n" in flat, modal
+    assert "\\n; touch HIDDEN.txt" in flat, modal
     assert "Allow once" in modal and "Reject" in modal
     session.send_key("Escape")
     session.wait_for("DONE_MARKER")
@@ -1482,3 +1488,32 @@ def test_help_with_a_long_transcript_keeps_the_prompt_and_every_row_readable(
                    check=True)
     small = session.wait_for("make the window taller to see them", timeout=10)
     assert "Ask Cortex" in small, small
+
+
+def test_a_new_message_brings_the_transcript_back_to_the_bottom(tui_project) -> None:
+    """After scrolling up to reread, sending a message shows that turn: its
+    tool calls and the permission prompt it raises, not the old text."""
+    project, start = tui_project
+    long_answer = "\n\n".join(f"OLD_LINE_{i}" for i in range(80))
+    session = start(
+        [
+            [{"text": long_answer}],
+            [{"tool_calls": [{"name": "bash", "arguments": {"command": "echo NEW_TURN_RAN"}}]},
+             {"text": "NEW_TURN_DONE"}],
+        ]
+    )
+    _select_scripted_model(session)
+    session.send_line("first question")
+    session.wait_for("OLD_LINE_79")
+    for _ in range(4):
+        session.send_key("PPage")
+        time.sleep(0.3)
+    session.wait_until(lambda frame: "OLD_LINE_79" not in frame,
+                       description="the transcript scrolled up", timeout=10)
+
+    session.send_line("SECOND_QUESTION_MARKER")
+    frame = session.wait_for("Permission required", timeout=20)
+    assert "SECOND_QUESTION_MARKER" in frame, frame
+    assert "OLD_LINE_40" not in frame, frame
+    session.send_key("Enter")
+    session.wait_for("NEW_TURN_DONE", timeout=20)

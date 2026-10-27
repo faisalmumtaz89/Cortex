@@ -556,7 +556,9 @@ export function SessionRoute(props: {
       return "no model"
     }
     const label = activeModelLabel()
-    return label.length > 36 ? `${label.slice(0, 35)}…` : label
+    // Up to half the row: a wide terminal shows the whole name.
+    const cap = Math.max(20, Math.floor(terminalColumns() / 2) - 10)
+    return label.length > cap ? `${label.slice(0, cap - 1)}…` : label
   })
   const headerRightLen = createMemo(() => headerModel().length + 3 + store.state.status.length)
   // Branch is capped (never wider than 24 or the remaining budget) and SHED
@@ -698,6 +700,9 @@ export function SessionRoute(props: {
     lastSubmitAtMs = now
     if (!commandLike) {
       setIsSubmitting(true)
+      // Show the turn being sent, also after scrolling up: the submit
+      // resolves only when the turn ends.
+      toBottom()
     }
     input.clear()
 
@@ -838,6 +843,17 @@ export function SessionRoute(props: {
       input.focus()
     }
   })
+
+  // A permission prompt is answered with what led to it in view.
+  createEffect(
+    on(
+      () => store.state.pendingPermission?.request_id,
+      (requestID) => {
+        if (requestID) toBottom()
+      },
+      { defer: true },
+    ),
+  )
 
   createEffect(
     on(

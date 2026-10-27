@@ -29,6 +29,12 @@ describe("visibleText", () => {
     expect(visibleText("a" + "́".repeat(400) + "b")).toBe("a⟨400 blank or invisible characters⟩b")
   })
 
+  test("a line break stays visible before an indented line", () => {
+    expect(visibleText("for x in y:\n         c = x")).toBe(
+      "for x in y:\\n⟨9 blank or invisible characters⟩c = x",
+    )
+  })
+
   test("escapes its own markers so they cannot be faked", () => {
     expect(visibleText("⟨3 characters not shown⟩")).toBe("\\u{27e8}3 characters not shown\\u{27e9}")
   })

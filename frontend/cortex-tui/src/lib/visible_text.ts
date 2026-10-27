@@ -12,7 +12,8 @@
  *   room for more) keeps its start and end, cut at whole characters, with a
  *   count of the characters in between; `shownInFull` then returns false,
  *   and the prompt starts on Reject. */
-const BLANK = String.raw`\s\p{Zs}\p{Zl}\p{Zp}\p{Cf}\p{M}\p{Default_Ignorable_Code_Point}ᅟᅠ⠀ㅤﾠ`
+// Not \n or \r: a line break is shown on its own, never folded into a count.
+const BLANK = String.raw`\t\v\f\ufeff\p{Zs}\p{Zl}\p{Zp}\p{Cf}\p{M}\p{Default_Ignorable_Code_Point}ᅟᅠ⠀ㅤﾠ`
 const ESCAPE = String.raw`\\\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Zs}\p{Default_Ignorable_Code_Point}ᅟᅠ⠀ㅤﾠ⟨⟩`
 const TOKEN = new RegExp(`([${BLANK}]{8,})|([${ESCAPE}])`, "gu")
 export const SHOWN_CHARS = 240
