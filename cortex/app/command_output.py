@@ -40,5 +40,18 @@ def format_status_summary(status: Mapping[str, Any]) -> str:
 
 
 def format_auth_status(*, provider: str, auth: Mapping[str, Any]) -> str:
-    payload = {"provider": provider, **auth}
-    return format_key_value_block(title="Authentication status", values=payload, include_empty=True)
+    """Where the key /login status reports comes from, as sentences."""
+    env_var = str(auth.get("env_var") or "")
+    source = auth.get("active_source")
+    saved = bool(auth.get("keychain_present") or auth.get("file_present"))
+    where = {
+        "env": f"the {env_var} environment variable",
+        "keychain": "the key saved with /login, in the system keyring",
+        "file": "the key saved with /login, in ~/.cortex/credentials.json",
+    }
+    if source in where:
+        message = f"{provider}: logged in, using {where[str(source)]}."
+        if source == "env" and saved:
+            message += f" A key saved with /login is also there; {env_var} takes precedence."
+        return message
+    return f"{provider}: not logged in. Add a key with /login {provider} <api_key>, or set {env_var}."

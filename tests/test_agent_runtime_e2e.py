@@ -1838,6 +1838,25 @@ def test_headless_reports_a_command_that_exits_non_zero_as_such(
     assert "failed: exit_code" not in process.stderr, process.stderr
 
 
+def test_headless_tells_the_model_it_is_a_one_shot_run_and_what_it_may_do(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The model knows its reply is the output and, without --full-auto, that
+    edits and commands are refused, before it tries one."""
+    process, server = _run_against_gateway(tmp_path, scratch_repo, [{"text": "Answer."}])
+    assert process.returncode == 0, process.stderr
+    system = str(server.requests[0]["messages"][0]["content"])
+    assert "non-interactive" in system, system
+    assert "--full-auto" in system, system
+
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo, [{"text": "Answer."}], full_auto=True
+    )
+    system = str(server.requests[0]["messages"][0]["content"])
+    assert "non-interactive" in system, system
+    assert "--full-auto" not in system, system
+
+
 def test_headless_reads_what_is_piped_to_it(tmp_path: Path, scratch_repo: Path) -> None:
     """`git diff | cortex -p "summarize this"` sends the diff with the prompt."""
     piped = "diff --git a/src/app.py b/src/app.py\n-    return 1\n+    return 2\n"
@@ -1952,12 +1971,8 @@ def test_headless_without_a_model_says_to_pass_one(tmp_path: Path, scratch_repo:
     assert process.stdout.strip() == ""
 
 
-def test_headless_starts_a_new_paragraph_after_tool_calls(
-    tmp_path: Path, scratch_repo: Path
-) -> None:
-    """Text the model writes after a tool call is a new message: it must not
-    run on from the text before the call."""
-    script = _write_script(
+def _narrating_script(tmp_path: Path) -> Path:
+    return _write_script(
         tmp_path / "script.json",
         [[
             {"text": "Looking first.",
@@ -1965,12 +1980,52 @@ def test_headless_starts_a_new_paragraph_after_tool_calls(
             {"text": "Done."},
         ]],
     )
+
+
+def test_headless_output_sent_to_a_pipe_is_the_answer_alone(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A script reads the answer: what the model wrote before its tool calls
+    ("Looking first.") goes to stderr with the tool lines."""
     process = _run_headless(
-        cwd=scratch_repo, env=_worker_env(tmp_path, script), prompt="look", extra_args=[]
+        cwd=scratch_repo, env=_worker_env(tmp_path, _narrating_script(tmp_path)),
+        prompt="look", extra_args=[],
     )
 
     assert process.returncode == 0, process.stderr
-    assert process.stdout == "Looking first.\n\nDone.\n"
+    assert process.stdout == "Done.\n"
+    assert "Looking first." in process.stderr, process.stderr
+
+
+def test_headless_in_a_terminal_streams_each_message_as_a_paragraph(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """In a terminal every message shows as it streams, and text after a tool
+    call starts a new paragraph instead of running on."""
+    import pty
+
+    master, slave = pty.openpty()
+    try:
+        process = subprocess.run(
+            [sys.executable, "-m", "cortex", "-p", "look", "--model", "openai:scripted"],
+            cwd=scratch_repo, env=_worker_env(tmp_path, _narrating_script(tmp_path)),
+            stdin=subprocess.DEVNULL, stdout=slave, stderr=subprocess.PIPE, timeout=120,
+        )
+        os.close(slave)
+        shown = b""
+        while True:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            shown += chunk
+    finally:
+        os.close(master)
+
+    assert process.returncode == 0, process.stderr
+    assert shown.decode().replace("\r\n", "\n") == "Looking first.\n\nDone.\n"
 
 
 def test_openai_compatible_setup_finishes_inside_the_app(

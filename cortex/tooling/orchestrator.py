@@ -230,6 +230,8 @@ class ToolingOrchestrator:
     def __init__(self, *, cli):
         self.cli = cli
         self.permission_manager = PermissionManager(rules=default_rules())
+        # What the system prompt says about the run itself (headless mode).
+        self.run_note: Optional[str] = None
 
     def _tooling_flags(self) -> dict:
         tools_cfg = getattr(self.cli.config, "tools", None)
@@ -437,7 +439,7 @@ class ToolingOrchestrator:
                 {
                     "role": "system",
                     "content": build_system_prompt(
-                        cwd=registry.repo_root, skills=registry.skills
+                        cwd=registry.repo_root, skills=registry.skills, run_note=self.run_note
                     ),
                 },
                 *messages,

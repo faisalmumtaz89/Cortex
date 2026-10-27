@@ -189,3 +189,19 @@ def test_template_command_is_gone() -> None:
     result = service.execute(session_id="s1", command="/template status")
     assert result["ok"] is False
     assert "Unknown command" in str(result["message"])
+
+
+def test_login_status_says_where_the_key_comes_from() -> None:
+    from cortex.app.command_output import format_auth_status
+
+    env = {"active_source": "env", "env_var": "OPENAI_API_KEY", "file_present": True}
+    assert format_auth_status(provider="openai", auth=env) == (
+        "openai: logged in, using the OPENAI_API_KEY environment variable. A key saved with "
+        "/login is also there; OPENAI_API_KEY takes precedence."
+    )
+    saved = {"active_source": "file", "env_var": "OPENAI_API_KEY", "file_present": True}
+    assert "in ~/.cortex/credentials.json" in format_auth_status(provider="openai", auth=saved)
+    none = {"active_source": None, "env_var": "OPENAI_API_KEY"}
+    assert format_auth_status(provider="openai", auth=none) == (
+        "openai: not logged in. Add a key with /login openai <api_key>, or set OPENAI_API_KEY."
+    )

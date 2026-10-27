@@ -80,9 +80,12 @@ def build_system_prompt(
     *,
     cwd: Path,
     skills: Optional[Dict[str, Skill]] = None,
+    run_note: Optional[str] = None,
 ) -> str:
     """Assemble the full system prompt for one agent turn."""
     sections = [AGENT_SYSTEM_PROMPT.format(cwd=cwd)]
+    if run_note:
+        sections.append(run_note)
 
     if skills:
         sections.append(skills_prompt(skills))

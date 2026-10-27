@@ -26,6 +26,16 @@ _REFUSED = (
 )
 _EXIT_CODE = re.compile(r"exit_code=-?\d+")  # a command that ran and exited non-zero
 _GLOB_ESCAPE = re.compile(r"\[([*?\[])\]")  # how "Allow always" escapes a wildcard
+# The system prompt's note on a headless run: its reply is the output.
+_RUN_NOTE = (
+    "This is a single non-interactive run (cortex -p): your final reply is printed as its "
+    "result, often read by a script. Reply with the answer itself: do not narrate the steps "
+    "you are about to take, and do not offer follow-ups, since nobody can answer."
+)
+_NO_FULL_AUTO_NOTE = (
+    " Edits and shell commands are refused in this run (it has no --full-auto): use the "
+    "read, list and search tools, and say what you could not do."
+)
 _MODEL_STATE_KEYS = ("last_used_cloud_provider", "last_used_cloud_model", "selected_models")
 
 
@@ -72,15 +82,19 @@ def _saved_model(config) -> str:
 
 
 class _Printer:
-    """Assistant text to stdout, tool activity to stderr. Text that follows a
-    tool call starts a new paragraph, and a tool line never starts partway
-    through a line of text when both streams share a terminal."""
+    """Assistant text to stdout, tool activity to stderr. In a terminal the
+    text streams: text that follows a tool call starts a new paragraph, and a
+    tool line never starts partway through a line of text. Sent to a pipe or
+    a file, stdout gets the answer alone, the text after the last tool call;
+    what the model wrote before its tool calls goes to stderr."""
 
     def __init__(self) -> None:
         self.wrote_text = False
         self.line_open = False
         self.after_tool = False
         self.denied = 0  # tool calls the headless permission policy refused
+        self.answer_only = not sys.stdout.isatty()
+        self.pending: list[str] = []  # answer_only: text since the last tool call
 
     def _write(self, text: str) -> None:
         sys.stdout.write(text)
@@ -91,12 +105,23 @@ class _Printer:
         if self.line_open and not sys.stdout.closed:
             self._write("\n")
 
+    def finish(self) -> None:
+        """Print the answer held back for a pipe, and end the last line."""
+        if self.pending:
+            self._write("".join(self.pending).strip("\n"))
+            self.pending = []
+        self.end_line()
+
     def event(self, *, session_id: str, event_type: str, payload: dict) -> None:
         if event_type == "message.part.updated":
             part = payload.get("part") or {}
             if part.get("type") == "text":
                 delta = str(part.get("delta", ""))
                 if not delta:
+                    return
+                if self.answer_only:
+                    self.pending.append(delta)
+                    self.wrote_text = True
                     return
                 if self.after_tool and self.wrote_text:
                     self.end_line()
@@ -105,6 +130,10 @@ class _Printer:
                 self.wrote_text = True
                 self._write(delta)
             elif part.get("type") == "tool":
+                if self.pending:
+                    # Words before a tool call are not the answer.
+                    print("".join(self.pending).strip(), file=sys.stderr)
+                    self.pending = []
                 self.end_line()
                 self.after_tool = True
                 state = str(part.get("state", ""))
@@ -178,6 +207,11 @@ def run_headless(
             for name in ("read", "list", "grep")
         )
 
+    note = _RUN_NOTE
+    if not full_auto:
+        note += _NO_FULL_AUTO_NOTE + _allowed_commands(manager)
+    runtime.tooling_orchestrator.run_note = note
+
     session_id = "headless"
 
     command = prompt.strip().split(maxsplit=1)[0].lower() if prompt.strip() else ""
@@ -228,7 +262,7 @@ def run_headless(
         stop_sequences=None,
         emit_event=printer.event,
     )
-    printer.end_line()
+    printer.finish()
     ok = bool(result.get("ok", True))
     if model and not ok and not (printer.wrote_text or printer.after_tool):
         for key, value in saved_state.items():

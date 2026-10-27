@@ -172,7 +172,9 @@ def main() -> None:
                 "  openai-compatible:deepseek/deepseek-v4.1-flash\n"
                 "\n"
                 "Each -p run is a new conversation. Input piped to it is sent after\n"
-                "the prompt: git diff | cortex -p \"summarize this diff\"."
+                "the prompt: git diff | cortex -p \"summarize this diff\".\n"
+                "\n"
+                "Exit codes: 0 done, 1 the turn failed, 2 a setup or usage error."
             ),
         )
         parser.add_argument(
