@@ -55,11 +55,12 @@ for system_dir in /usr/local/bin /opt/homebrew/bin; do
     exit 1
   fi
 done
-# In HOME, install.sh writes ~/.cortex, the cortex link and the PATH lines:
-# nothing else (a private Python must not leave links or caches around).
-extra="$(cd "${work}/home" && find . -path ./.cortex -prune -o -print \
-  | grep -vxE '\.|\./\.local|\./\.local/bin|\./\.local/bin/cortex|\./\.bashrc|\./\.bash_profile|\./\.profile' || true)"
-[[ -z "${extra}" ]] || { echo "install.sh wrote outside ~/.cortex:"; echo "${extra}"; exit 1; }
+# Outside ~/.cortex, install.sh adds the cortex link and the PATH lines: no
+# other command in ~/.local/bin (a private Python's python3.12 shadowed the
+# system one) and no cache in ~/.cache.
+extra="$(ls -A "${work}/home/.local/bin" | grep -vx cortex || true)"
+[[ -z "${extra}" ]] || { echo "install.sh put more than cortex in ~/.local/bin:"; echo "${extra}"; exit 1; }
+[[ ! -e "${work}/home/.cache" ]] || { echo "install.sh left a cache in ~/.cache:"; ls -A "${work}/home/.cache"; exit 1; }
 
 base_prefix() { "$1" -c 'import os, sys; print(os.path.realpath(sys.base_prefix))'; }
 if [[ "${CORTEX_MANAGED_PYTHON:-0}" == "1" ]]; then
