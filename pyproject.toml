@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cortex-llm"
-version = "2.0.6"
+version = "2.0.7"
 description = "Terminal AI coding agent for OpenAI, Anthropic, Azure OpenAI, and OpenAI-compatible models"
 readme = "README.md"
 license = "MIT"
