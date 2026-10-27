@@ -55,17 +55,17 @@ If the worker handshake fails, check protocol version compatibility between fron
 
 ### Python version
 
-Cortex requires Python 3.11 or later (`python --version`). If your version is older:
+The installer needs nothing from you here: it uses a Python 3.11 or later
+from your system, or installs a private one when there is none (set
+`CORTEX_MANAGED_PYTHON=1` to always use the private one).
+
+A source checkout (`pip install -e .`) needs Python 3.11 or later
+(`python3 --version`). If yours is older:
 
 ```bash
-# Using pyenv
-pyenv install 3.12
-pyenv global 3.12
-
-# Or a fresh virtual environment with a newer interpreter
-python3.12 -m venv cortex-env
-source cortex-env/bin/activate
-pip install -e .
+python3.12 -m venv .venv      # or install one first, e.g. pyenv install 3.12
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
 ### Package conflicts

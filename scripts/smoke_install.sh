@@ -39,6 +39,8 @@ step "install.sh ${version} (${name})"
     bash "${repo}/install.sh" "${version}"
 )
 cortex="${work}/home/.local/bin/cortex"
+mode="$("${python}" -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "${work}/home/.cortex")"
+[[ "${mode}" == "0o700" ]] || { echo "install.sh left ~/.cortex readable by others (${mode})"; exit 1; }
 grep -qsF ".local/bin" "${work}/home/.bashrc" || { echo "install.sh did not add ~/.local/bin to PATH"; exit 1; }
 # A new terminal finds cortex, whether it starts a login shell or not.
 for flags in -lc -ic; do

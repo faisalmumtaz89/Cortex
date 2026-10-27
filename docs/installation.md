@@ -144,18 +144,19 @@ stay in `~/.cortex`. To remove them too:
 rm -rf ~/.cortex
 ```
 
-API keys saved with `/login` in the system keyring stay there (service
-`cortex-llm`); delete them with your keyring tool: Keychain Access on macOS,
-or on Linux Passwords and Keys (Seahorse) or
+Keys `/login` saved to `~/.cortex/credentials.json` go with `~/.cortex`. If
+it said it saved a key to the system keyring instead, that key stays there
+(service `cortex-llm`); delete it with your keyring tool: Keychain Access on
+macOS, or on Linux Passwords and Keys (Seahorse) or, where it is installed,
 `secret-tool clear service cortex-llm username openai_api_key` (likewise
 `anthropic_api_key`, `azure_openai_api_key`, `openai_compatible_api_key`).
-Keys saved to `~/.cortex/credentials.json` go with `~/.cortex`.
 
 The installer may have put `~/.local/bin` on your `PATH`: a line under
 `# Added by the Cortex installer` in `~/.zshrc`, `~/.bashrc`, `~/.bash_profile`
-or `~/.profile`, or the file `~/.config/fish/conf.d/cortex.fish`. If nothing
-else of yours lives in `~/.local/bin`, remove them. This also deletes a
-profile file left empty, which the installer created:
+or `~/.profile`, or the file `~/.config/fish/conf.d/cortex.fish`. These
+commands remove what it added, keep your own lines, and delete a profile file
+the installer created once nothing else is in it (skip them if other programs
+you use live in `~/.local/bin`):
 
 ```bash
 for f in ~/.zshrc ~/.bashrc ~/.bash_profile ~/.profile; do

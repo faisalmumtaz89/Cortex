@@ -564,6 +564,9 @@ VENV_DIR="${INSTALL_ROOT}/venv"
 BIN_DIR="${CORTEX_BIN_DIR:-$HOME/.local/bin}"
 LOCAL_LINK="${BIN_DIR}/cortex"
 
+# ~/.cortex will hold conversations, logs and keys: only its owner may open it.
+mkdir -p "${HOME}/.cortex"
+chmod 700 "${HOME}/.cortex" 2>/dev/null || true
 mkdir -p "${INSTALL_ROOT}" "${BIN_DIR}"
 
 # A system Python 3.11+ with venv support, or else a private one (no admin

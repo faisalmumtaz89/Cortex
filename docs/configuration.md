@@ -53,6 +53,9 @@ tools_max_iterations: 100
 # Logging
 log_level: INFO
 log_file: ~/.cortex/cortex.log
+
+# Updates
+auto_update_check: true      # false: no daily check for a new release
 ```
 
 ## Key Reference
