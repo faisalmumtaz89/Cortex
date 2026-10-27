@@ -2,7 +2,7 @@
 
 Cortex is a terminal AI coding agent: OpenAI, Anthropic, Azure OpenAI, and
 OpenAI-compatible models drive a small permissioned tool set (read_file,
-list_dir, search, edit_file, write_file, bash, skill) inside the user's
+list_dir, search, git, edit_file, write_file, bash, skill) inside the user's
 repository.
 
 ## Architecture (two processes)

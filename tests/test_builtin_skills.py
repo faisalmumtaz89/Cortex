@@ -32,7 +32,7 @@ def test_shipped_skills_name_only_real_tools_and_files(shipped, tmp_path: Path) 
 
 
 def test_read_only_skills_cannot_edit(shipped) -> None:
-    assert shipped["map-and-plan"].allowed_tools == ("read_file", "list_dir", "search")
+    assert shipped["map-and-plan"].allowed_tools == ("read_file", "list_dir", "search", "git")
     for name in ("review-changes", "commit-and-pr"):
         allowed = set(shipped[name].allowed_tools or ())
         # They may write the file the user asks for (a review, a PR description),

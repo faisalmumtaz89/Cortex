@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { shellSummary } from "../src/lib/shell_summary"
+import { gitSummary } from "../src/lib/git_summary"
 
 describe("bash row summary", () => {
   test("names the command, not the cd in front of it", () => {
@@ -20,5 +21,14 @@ describe("bash row summary", () => {
 
   test("a lone cd is still shown", () => {
     expect(shellSummary("cd src")).toBe("cd src")
+  })
+})
+
+describe("git row summary", () => {
+  test("reads as the git command that runs", () => {
+    expect(gitSummary({ command: "status" })).toBe("status")
+    expect(gitSummary({ command: "diff", staged: true })).toBe("diff --staged")
+    expect(gitSummary({ command: "diff", revision: "main...HEAD", stat: true })).toBe("diff main...HEAD --stat")
+    expect(gitSummary({ command: "log", patch: true, paths: ["src/app.py"] })).toBe("log -p -- src/app.py")
   })
 })

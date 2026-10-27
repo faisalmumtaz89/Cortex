@@ -65,7 +65,7 @@ auto_update_check: true      # false: no daily check for a new release
 - `tools_enabled` (default: `true`) — master toggle for tool execution.
 - `tools_profile` (default: `full`) — which tools the model may call:
   - `off`: none
-  - `read_only`: `read_file`, `list_dir`, `search` (and `skill` when skills exist)
+  - `read_only`: `read_file`, `list_dir`, `search`, `git` (and `skill` when skills exist)
   - `edit`: read-only + `edit_file`, `write_file` (the legacy value `patch` is accepted as an alias)
   - `full`: edit + `bash`
 - `tools_max_iterations` (default: `100`, at most `1000`) — model requests one turn may make while it uses tools. A turn that reaches the limit stops with a message naming it; its tool calls and results stay in the conversation, so a new message lets the model continue.

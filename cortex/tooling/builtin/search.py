@@ -80,9 +80,13 @@ class SearchTool(BaseTool[SearchArgs]):
         cmd = ["rg", "--line-number", "--with-filename", "--no-heading"]
         if not args.use_regex:
             cmd.append("-F")
-        cmd.extend(["-e", args.query, str(target)])
+        # Relative to the root rg runs in, so it names files as the other tools do.
+        cmd.extend(["-e", args.query, "--", str(target.relative_to(root))])
 
-        result = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+        # No stdin: the worker's is its JSON-RPC channel.
+        result = subprocess.run(
+            cmd, cwd=root, stdin=subprocess.DEVNULL, capture_output=True, text=True
+        )
         if result.returncode not in (0, 1):
             raise ToolExecutionError(f"rg failed: {result.stderr.strip()}")
 
@@ -92,7 +96,9 @@ class SearchTool(BaseTool[SearchArgs]):
                 file_path, line_no, text = line.split(":", 2)
             except ValueError:
                 continue
-            matches.append({"path": file_path, "line": int(line_no), "text": text})
+            matches.append(
+                {"path": os.path.normpath(file_path), "line": int(line_no), "text": text}
+            )
             if len(matches) >= args.max_results:
                 break
         return matches

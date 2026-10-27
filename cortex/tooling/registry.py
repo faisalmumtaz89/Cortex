@@ -9,6 +9,7 @@ from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
 from cortex.tooling.builtin import (
     BashTool,
     EditFileTool,
+    GitTool,
     ListDirTool,
     ReadFileTool,
     SearchTool,
@@ -55,6 +56,7 @@ class ToolRegistry:
         self._register(ListDirTool(), "read_only")
         self._register(ReadFileTool(), "read_only")
         self._register(SearchTool(), "read_only")
+        self._register(GitTool(), "read_only")
         self._register(EditFileTool(), "edit")
         self._register(WriteFileTool(), "edit")
         self._register(BashTool(), "full")

@@ -52,7 +52,7 @@ Cortex/
 │   │   ├── provenance.py           # Per-turn model provenance verification
 │   │   ├── agent_prompt.py         # System prompt + AGENTS.md context + skill list
 │   │   ├── skills.py               # Skill discovery and SKILL.md parsing
-│   │   └── builtin/                # read_file, list_dir, search, edit_file, write_file, bash, skill
+│   │   └── builtin/                # read_file, list_dir, search, git, edit_file, write_file, bash, skill
 │   ├── cloud/                      # Model providers
 │   │   ├── router.py               # Provider routing
 │   │   ├── retry.py                # Request retries and backoff

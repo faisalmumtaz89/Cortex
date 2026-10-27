@@ -287,6 +287,21 @@ def test_tools_fold_and_answer_renders_after_them(tui_project) -> None:
     assert "def add(a, b):" in expanded
 
 
+def test_a_git_tool_row_reads_as_the_git_command_and_asks_nothing(tui_project) -> None:
+    project, start = tui_project
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    session = start(
+        [[{"tool_calls": [{"name": "git", "arguments": {"command": "diff", "staged": True,
+                                                         "stat": True}}]},
+          {"text": "GIT_DONE_MARKER"}]]
+    )
+    _select_scripted_model(session)
+    session.send_line("what is staged")
+    frame = session.wait_for("GIT_DONE_MARKER")
+    assert "Git diff --staged --stat" in frame, frame
+    assert "Permission required" not in frame, frame
+
+
 def test_fast_tool_running_state_is_visibly_dwelled(tui_project) -> None:
     """A tool that completes in milliseconds must still visibly pass through
     its running presentation (min-dwell): without it the amber state was

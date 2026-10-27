@@ -6,7 +6,7 @@ description: >-
   leftovers, writes clear commit messages and PR descriptions, and runs git
   safely: no force pushes, no history rewrites. It never changes source or
   test files; if the request also asks for code changes, make them first.
-allowed-tools: [read_file, list_dir, search, bash, write_file]
+allowed-tools: [read_file, list_dir, search, git, bash, write_file]
 ---
 # Commit and PR
 
@@ -18,15 +18,15 @@ for it, and only for it.
 
 ## Process
 
-1. **Look at the state.** Run `git status --porcelain -uall`,
-   `git branch --show-current`, `git log --oneline -10`, `git remote -v`,
-   `git diff` and `git diff --staged`. Decide what belongs in the commit: by
-   default, the changes of the task at hand. Leave unrelated changes
-   uncommitted and say which you left. If you are on `main` or `master` and
+1. **Look at the state** with the git tool, which needs no approval: `status`
+   (it names the branch), `log`, `diff`, and `diff` with `staged`. Run
+   `git remote -v` with bash only when you will push. Decide what belongs in
+   the commit: by default, the changes of the task at hand. Leave unrelated
+   changes uncommitted and say which you left. If you are on `main` or `master` and
    the user did not ask to commit there, create a branch with
    `git switch -c <short-name>` and say so.
-2. **Scan the lines being added** (`git diff` / `git diff --staged`, the `+`
-   lines, and every new file in full).
+2. **Scan the lines being added** (the git tool's `diff`, staged and not, the
+   `+` lines, and every new file in full).
    - **Blockers**: do not commit; stop and report. These are secrets (API keys
      and tokens such as `sk-…`, `ghp_…`, `AKIA…`, `xox…`; `-----BEGIN … PRIVATE
      KEY-----`; passwords or tokens assigned real-looking values), credential
@@ -41,10 +41,10 @@ for it, and only for it.
      entry.
 3. **Stage by path**: `git add -- <path> …`. Use `git add -A` or `git add .`
    only when every change was reviewed and belongs. If the index already holds
-   changes you did not stage, stop and ask; do not unstage them. Check
-   `git diff --staged --stat`.
-4. **Write the message** in the repository's style. Check `git log` for its
-   prefixes, case and length. Otherwise:
+   changes you did not stage, stop and ask; do not unstage them. Check with
+   the git tool: `diff` with `staged` and `stat`.
+4. **Write the message** in the repository's style. Check the git tool's
+   `log` for its prefixes, case and length. Otherwise:
    - a subject of at most 72 characters, in the imperative ("Fix …", not
      "Fixed …"), with no trailing period;
    - a blank line;
@@ -54,7 +54,8 @@ for it, and only for it.
    Commit with `git commit -F - <<'EOF'`, the message, then `EOF`. Quote
    `'EOF'` so backticks and `$` stay literal. `examples/message.md` shows a
    good message.
-5. **Commit and verify** with `git log -1 --stat` and `git status`.
+5. **Commit and verify** with the git tool: `log` with `stat` and `max_count`
+   1, and `status`.
 6. **Push only when asked**: `git push -u origin <branch>`. If the push is
    rejected (the remote has commits you do not have), stop and report. Do not
    rebase, merge or force.
@@ -82,7 +83,7 @@ for it, and only for it.
 - Interactive commands: `-i`, `-p`, or `git commit` without `-F`, which opens
   an editor and hangs.
 - `--no-verify`. If a hook fails, report its output; if it changed files, list
-  them (`git status`), do not stage them, and stop.
+  them (the git tool's `status`), do not stage them, and stop.
 - Committing to `main` or `master`, or pushing to them, unless the user asked
   for exactly that.
 - Editing source or test files, even to remove a debug line, and writing or

@@ -69,7 +69,7 @@ class BashTool(BaseTool[BashArgs]):
                 metadata={"exit_code": None, "timed_out": False, "workdir": str(cwd),
                           "truncated": False, "interrupted": True},
             )
-        output, exit_code, ended_by = _run(
+        output, exit_code, ended_by = run_command(
             parsed_args.command,
             cwd=cwd,
             timeout=parsed_args.timeout_ms / 1000,
@@ -157,7 +157,7 @@ def _newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _command_env() -> dict[str, str]:
+def command_env() -> dict[str, str]:
     """The environment commands run in: the user's, without the provider API
     keys Cortex uses and without Cortex's own CORTEX_* variables."""
     hidden = set(ENV_KEY_MAP.values())
@@ -168,10 +168,16 @@ def _command_env() -> dict[str, str]:
     }
 
 
-def _run(
-    command: str, *, cwd: Path, timeout: float, interrupt: TurnInterrupt
+def run_command(
+    command: str | list[str],
+    *,
+    cwd: Path,
+    timeout: float,
+    interrupt: TurnInterrupt,
+    env: dict[str, str] | None = None,
 ) -> tuple[_Output, int, str]:
-    """Run `command` in its own process group, with no stdin (the worker's
+    """Run `command` (a shell command, or an argument list run without a
+    shell) in its own process group, with no stdin (the worker's
     stdin is its JSON-RPC channel) and stderr merged into stdout. Returns when
     the command exits; a background child it started keeps running, and its
     later output is read and discarded so writing it does not kill the child.
@@ -181,11 +187,11 @@ def _run(
     proc = subprocess.Popen(
         command,
         cwd=cwd,
-        shell=True,
+        shell=isinstance(command, str),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        env=_command_env(),
+        env=command_env() if env is None else env,
         start_new_session=True,
     )
     assert proc.stdout is not None

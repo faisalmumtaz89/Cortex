@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -312,6 +313,164 @@ def _turn_answering_prompts(harness: WorkerHarness, session_id: str, text: str, 
 def _bash_turn(command: str) -> list:
     return [{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
             {"text": "Ran it."}]
+
+
+@pytest.mark.parametrize("ripgrep", [True, False], ids=["ripgrep", "python"])
+def test_search_names_files_relative_to_the_project(
+    tmp_path: Path, scratch_repo: Path, ripgrep: bool
+) -> None:
+    """With ripgrep or without it, search names a file as the other tools do:
+    relative to the project, never by its absolute path."""
+    if ripgrep and shutil.which("rg") is None:
+        pytest.skip("ripgrep is not installed")
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "search", "arguments": {"query": "def main"}}]},
+          {"text": "Found it."}]],
+    )
+    env = _worker_env(tmp_path, script)
+    if not ripgrep:
+        # A PATH with python and git but no rg.
+        bare = tmp_path / "bin"
+        bare.mkdir()
+        for tool in ("git", "sh"):
+            (bare / tool).symlink_to(shutil.which(tool))
+        env["PATH"] = str(bare)
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        _turn_answering_prompts(harness, session_id, "find main", "reject")
+        [part] = [part for part in harness.tool_parts() if part.get("state") == "completed"]
+    finally:
+        harness.close()
+    assert part["output"] == "src/app.py:1: def main():", part["output"]
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True,
+        env={**os.environ, "GIT_CONFIG_GLOBAL": str(repo.parent / "home" / ".gitconfig")},
+    ).stdout
+
+
+def _hostile_git_repo(tmp_path: Path) -> tuple[Path, Path]:
+    """A repository whose own .git/config names a program for every setting
+    git runs one for while reading, each leaving a marker file if it runs.
+    The user's global config defines a filter of theirs, which must still
+    apply. Returns the repository and the marker folder."""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    (home / ".gitconfig").write_text(
+        "[user]\n\tname = Dev\n\temail = dev@example.com\n"
+        "[filter \"upper\"]\n\tclean = tr a-z A-Z\n", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    marks = tmp_path / "marks"
+    marks.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "notes.txt").write_text("one\n", encoding="utf-8")
+    (repo / "loud.txt").write_text("quiet\n", encoding="utf-8")
+    (repo / ".gitattributes").write_text(
+        "notes.txt filter=evil diff=evil\nloud.txt filter=upper\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "first")
+    _git(repo, "switch", "-qc", "feature")
+    (repo / "notes.txt").write_text("one\ntwo\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "second")
+    (repo / "notes.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    hook = repo / ".git" / "hooks" / "post-index-change"
+    hook.write_text(f"#!/bin/sh\ntouch {marks}/hook\n", encoding="utf-8")
+    hook.chmod(0o755)
+    for key, program in {
+        "core.fsmonitor": f"touch {marks}/fsmonitor; false",
+        "filter.evil.clean": f"touch {marks}/clean; cat",
+        "filter.evil.smudge": f"touch {marks}/smudge; cat",
+        "filter.evil.process": f"touch {marks}/process",
+        "diff.evil.textconv": f"touch {marks}/textconv; cat",
+        "diff.evil.command": f"touch {marks}/diffcommand",
+        "diff.external": f"touch {marks}/external",
+        "core.pager": f"touch {marks}/pager; cat",
+        "log.showSignature": "true",
+        "gpg.program": f"touch {marks}/gpg",
+    }.items():
+        _git(repo, "config", key, program)
+    return repo, marks
+
+
+def test_the_git_tool_reads_a_repository_without_a_prompt_and_runs_nothing_it_names(
+    tmp_path: Path,
+) -> None:
+    """status, diff, log, show and merge-base answer without a permission
+    prompt, and nothing the repository's own config names runs."""
+    repo, marks = _hostile_git_repo(tmp_path)
+    calls = [
+        {"command": "status"},
+        {"command": "diff"},
+        {"command": "diff", "revision": "main...feature", "stat": True},
+        {"command": "log", "patch": True},
+        {"command": "show", "revision": "main:notes.txt"},
+        {"command": "merge-base", "revision": "main"},
+    ]
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "git", "arguments": args}]}, {"text": "Read it."}]
+         for args in calls],
+    )
+    env = _worker_env(tmp_path, script)
+    env["GIT_EXTERNAL_DIFF"] = f"touch {marks}/env-external"  # the user's own GIT_* stay out
+    harness = WorkerHarness(cwd=repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        for index in range(len(calls)):
+            assert _turn_answering_prompts(harness, session_id, f"read {index}", "reject") == []
+        parts = [part for part in harness.tool_parts() if part.get("state") != "running"]
+    finally:
+        harness.close()
+    assert sorted(path.name for path in marks.iterdir()) == []
+    assert [part["ok"] for part in parts] == [True] * len(calls), parts
+    status, diff, branch_stat, log, show, base = (part["output"] for part in parts)
+    assert "## feature" in status and " M notes.txt" in status, status
+    assert "+three" in diff, diff
+    # The user's own filter still applies: loud.txt is unchanged, not "modified".
+    assert "loud.txt" not in status, status
+    assert "notes.txt | 1 +" in branch_stat, branch_stat
+    assert "Dev: second" in log and "+two" in log, log
+    assert show == "one", show
+    assert base.strip() == _git(repo, "rev-parse", "main").strip()
+
+
+def test_the_git_tool_refuses_arguments_that_are_options_or_outside_the_project(
+    tmp_path: Path,
+) -> None:
+    repo, marks = _hostile_git_repo(tmp_path)
+    outside = tmp_path / "written.txt"
+    results = _tool_results(tmp_path, repo, [
+        ("git", {"command": "diff", "revision": f"--output={outside}"}),
+        ("git", {"command": "log", "paths": ["../home/.gitconfig"]}),
+        ("git", {"command": "status", "staged": True}),
+    ])
+    errors = [part["error"] for part in results]
+    assert "not a revision" in errors[0], errors
+    assert "outside the working directory" in errors[1], errors
+    assert "staged applies to diff only" in errors[2], errors
+    assert not outside.exists()
+    assert sorted(path.name for path in marks.iterdir()) == []
+
+
+def test_headless_runs_the_git_tool_without_full_auto(tmp_path: Path) -> None:
+    repo, _marks = _hostile_git_repo(tmp_path)
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "git", "arguments": {"command": "status"}}]},
+          {"text": "One file changed."}]],
+    )
+    process = _run_headless(
+        cwd=repo, env=_worker_env(tmp_path, script), prompt="what changed", extra_args=[]
+    )
+    assert process.returncode == 0, process.stderr
+    assert "[tool] git command=status" in process.stderr, process.stderr
+    assert "[tool] git ok" in process.stderr, process.stderr
+    assert "refused" not in process.stderr, process.stderr
 
 
 def test_a_file_tool_call_outside_the_project_is_refused_without_a_prompt(

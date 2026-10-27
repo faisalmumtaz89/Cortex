@@ -2,6 +2,7 @@ import type { RGBA } from "@opentui/core"
 import { For, Show } from "solid-js"
 import type { DiffData } from "../context/store"
 import { createFadeIn, createMinDwell, mixRgba } from "../lib/animation"
+import { gitSummary } from "../lib/git_summary"
 import { displayPath } from "../lib/paths"
 import { shellSummary } from "../lib/shell_summary"
 import { spinnerFrame } from "../lib/spinner"
@@ -21,6 +22,7 @@ const TOOL_VERB: Record<string, string> = {
   edit_file: "Update",
   write_file: "Write",
   skill: "Skill",
+  git: "Git",
 }
 
 function toolVerb(tool: string): string {
@@ -66,6 +68,8 @@ export function toolCallSummary(tool: string, input?: Record<string, unknown>): 
       return truncatePath(path, budget)
     case "write_file":
       return truncatePath(path, budget)
+    case "git":
+      return truncate(gitSummary(args))
     case "skill":
       return truncate(args.file ? `${String(args.name ?? "")} ${String(args.file)}` : String(args.name ?? ""))
     default: {

@@ -52,7 +52,7 @@ def test_stopping_a_command_also_ends_children_that_ignore_sigterm(tmp_path):
     interrupt = TurnInterrupt()
     threading.Timer(1.0, interrupt.set).start()
 
-    _, _, ended_by = bash._run(child, cwd=tmp_path, timeout=60, interrupt=interrupt)
+    _, _, ended_by = bash.run_command(child, cwd=tmp_path, timeout=60, interrupt=interrupt)
 
     assert ended_by == "interrupt"
     time.sleep(5)
@@ -77,7 +77,7 @@ def test_interrupt_keeps_the_output_when_the_system_answers_eperm_for_a_dead_gro
     interrupt = TurnInterrupt()
     threading.Timer(1.0, interrupt.set).start()
 
-    output, _, ended_by = bash._run(
+    output, _, ended_by = bash.run_command(
         "echo started; sleep 4; touch finished.txt", cwd=tmp_path, timeout=60, interrupt=interrupt
     )
 

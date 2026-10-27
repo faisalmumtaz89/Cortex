@@ -6,7 +6,7 @@ description: >-
   modules with exact path:line references, then writes a step-by-step edit
   plan. Read-only for the whole turn: not for requests that also ask to make
   the change, run commands, or fix something now.
-allowed-tools: [read_file, list_dir, search]
+allowed-tools: [read_file, list_dir, search, git]
 ---
 # Map and plan
 
