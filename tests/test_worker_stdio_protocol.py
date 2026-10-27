@@ -150,12 +150,14 @@ def test_worker_session_start_reports_no_model_without_keys(tmp_path: Path) -> N
     try:
         _session_id, events = _start_session(send, recv_until)
         notices = [
-            str(event["params"]["payload"].get("message", ""))
+            (event["params"]["payload"].get("message"), event["params"]["payload"].get("origin"))
             for event in events
             if event["params"]["event_type"] == "system.notice"
         ]
+        # The setup hint is its own notice, which the TUI drops once a model is picked.
         assert notices == [
-            "Session ready · No model loaded. Pick one with /model, or add a key with /login."
+            ("Session ready", None),
+            ("No model loaded. Pick one with /model, or add a key with /login.", "model-setup"),
         ]
     finally:
         process.terminate()

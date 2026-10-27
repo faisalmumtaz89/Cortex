@@ -49,6 +49,18 @@ export const SLASH_COMMAND_NAMES: ReadonlySet<string> = new Set([
   "exit", // alias for quit
 ])
 
+/** The slash command an input runs, or null for a message to the model. A
+ * command name typed alone runs it without the slash ("quit"); a message
+ * that only starts with one ("Clear up the docstring") is a message. */
+export function slashCommandFor(input: string): string | null {
+  const trimmed = input.trim()
+  if (trimmed.startsWith("/")) {
+    return trimmed
+  }
+  const word = trimmed.toLowerCase()
+  return SLASH_COMMAND_NAMES.has(word) ? `/${word}` : null
+}
+
 export function findCommand(name: string): SlashCommand | undefined {
   const key = name.replace(/^\//, "").toLowerCase()
   return BY_NAME.get(key) ?? skillCommands().find((command) => command.name === key)

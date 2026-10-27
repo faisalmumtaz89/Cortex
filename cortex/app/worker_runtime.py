@@ -113,10 +113,14 @@ class WorkerRuntime:
         self._pending_update_notice: str | None = None
         self._update_notice_session_id: str | None = None
         self._update_notice_emitted = False
+        model_notices = self._restore_startup_target()
+        restored = self.model_service.active_target.cloud_model is not None
         self._startup_notices: list[str] = [
             *getattr(config, "warnings", []),
-            *self._restore_startup_target(),
+            *(model_notices if restored else []),
         ]
+        # How to get a model, shown until one is picked (the TUI then drops it).
+        self._model_setup_notice = "" if restored else " ".join(model_notices)
         if os.environ.get("CORTEX_SCRIPTED_MODEL", "").strip():
             # A scripted override answers EVERY turn with canned output — make
             # that impossible to miss in a real session.
@@ -507,6 +511,12 @@ class WorkerRuntime:
             event_type="system.notice",
             payload={"message": " · ".join(notice_parts)},
         )
+        if self._model_setup_notice and self.model_service.active_target.cloud_model is None:
+            self._emit_event(
+                session_id=session_id,
+                event_type="system.notice",
+                payload={"message": self._model_setup_notice, "origin": "model-setup"},
+            )
         with self._update_notice_lock:
             if self._update_notice_session_id is None:
                 self._update_notice_session_id = session_id

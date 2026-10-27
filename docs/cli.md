@@ -20,9 +20,9 @@ Type a message to run an agent turn with the active model, or a slash command to
 
 | Key | Action |
 |---|---|
-| `Enter` | Submit input |
+| `Enter` | Submit input (a command name typed alone, such as `quit`, runs that command; any longer text is a message) |
 | `Shift+Enter` | Insert newline |
-| `↑` / `↓`, `Enter` / `Esc` | Choose an answer to a pending permission prompt / reject it |
+| `↑` / `↓`, `Enter` / `Esc` | Choose an answer to a pending permission prompt / reject it. With a message typed in the input, `Enter` queues the message and the prompt stays open |
 | `↑` / `↓` (empty input) | Recall earlier prompts |
 | `Esc` | Close the palette or result panel; otherwise interrupt the running turn |
 | `Ctrl+O` | Show or hide tool details |
@@ -37,7 +37,7 @@ cortex -p "PROMPT" [--model <selector>] [--full-auto]
 
 Runs one agent turn through the same worker wiring the TUI uses:
 
-- The assistant reply streams to **stdout**; tool activity and errors go to **stderr**, so stdout stays pipeable.
+- The assistant reply streams to **stdout**; tool activity and errors go to **stderr**, so stdout stays pipeable. stderr shows each call (`[tool] bash $ <command as typed>`, `[tool] read_file path=src/app.py`), how it ended, and each edit as a unified diff. A file a command changes (a `sed -i`, a script) is not diffed: run `git diff` after the step to see everything the run changed.
 - `--model` accepts the same `provider:model` selectors as `/model`.
 - Permission policy: reads (`read_file`, `list_dir`, `search`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt): the model is told so, along with the commands your saved rules allow, stderr shows `[tool] bash refused (needs --full-auto)`, and the run ends with a note saying how many calls were refused. Persisted rules from `~/.cortex/tool_permissions.yaml` still apply, so a command you allowed with "Allow always" in the app runs without `--full-auto` (see `tool_permissions.yaml` in the [Configuration Guide](configuration.md)).
 - stderr ends with the model that answered, as `answered by provider:model (verified)`.
@@ -131,15 +131,15 @@ With tools enabled (the default: `tools_enabled: true`, `tools_profile: full`), 
 - `edit_file` (exact string replacement), `write_file` — prompt for permission. `edit_file` matches text as `read_file` shows it and changes only the text it replaces: the rest of the file keeps its line breaks (`\r\n`, `\n` or `\r`), and its UTF-8 byte order mark. Content `write_file` writes without `\r` gets the line break the old file used most; to change a file's line breaks, use `bash`. A changed file keeps its mode, owner, group, extended attributes and ACLs, and is replaced in one step, so it never holds part of a write. Where that cannot be done keeping all of these (a file with hard links, one owned by another user, one whose attributes cannot be copied, a file mounted on its own, or one in a directory that does not allow new files), the file is written in place instead, which can leave it cut short if the disk fills or the machine stops mid-write. Read-only files are refused, unless Cortex runs as root.
 - `bash` — prompts for permission. A command runs with no input (it cannot read from the terminal), with stderr merged into stdout (programs that buffer their output when it is not a terminal may still print out of order), and in your environment minus the provider API keys Cortex uses (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`) and all `CORTEX_*` variables. That keeps those keys out of commands' output; it is not a sandbox, and a project whose own tests need one of those keys has to get it another way. The call returns when the command exits; a background process it started keeps running while Cortex does, and its later output is discarded. At its timeout (2 minutes by default, at most 10), or when you press `Esc`, the command and everything in its process group get SIGTERM, then SIGKILL 3 seconds later; `Esc` also ends the turn. Of long output, the first 20 KB and the last 230 KB are kept, with a note of how many bytes were left out; carriage returns become line breaks.
 
-File tools work only inside the directory Cortex was started in, and `bash` runs there or in a directory below it; `bash` commands are not otherwise sandboxed. When permission is needed, the TUI shows an arrow menu (↑↓ to choose, Enter to confirm):
+File tools work only inside the directory Cortex was started in (a call for a file elsewhere is refused without a prompt), and `bash` runs there or in a directory below it; `bash` commands are not otherwise sandboxed. When permission is needed, the TUI shows an arrow menu (↑↓ to choose, Enter to confirm):
 
 - **Allow once** — allows this one call; the next call asks again
 - **Allow always** — allows this exact command, run in the same directory (for `bash`), or this file (for edits) from now on, only in the directory Cortex was started in; saved in `~/.cortex/tool_permissions.yaml`. A call with no command or file to name is allowed this once only.
 - **Reject** (or `Esc`) — the model continues without the tool result
 
-An edit's prompt shows the change it would make, as a diff with line numbers, before anything is written (as many rows as fit the screen, then a count of the rest).
+An edit's prompt shows the change it would make, as a diff with line numbers, before anything is written (as many rows as fit the screen, starting at the change, with a count of the rows above and below).
 
-The prompt shows a command on one line: backslashes, line breaks, tabs and invisible or blank-looking characters appear as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count (a line break is always shown, as `\n`). A long command fills the rows free on screen; one longer than they hold keeps its start and end, with a count of the characters not shown, and the prompt then starts on **Reject**.
+The prompt shows a command with backslashes, line breaks, tabs and invisible or blank-looking characters as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count (a line break is always shown, as `\n`). Each line of a command starts a row, after the `\n` that ends the line before it; a command whose lines do not fit is shown on one line. A long command fills the rows free on screen; one longer than they hold keeps its start and end, with a count of the characters not shown, and the prompt then starts on **Reject**.
 
 Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds `edit_file`/`write_file`), `full` (adds `bash`). See `docs/configuration.md` for the `tools_*` keys.
 

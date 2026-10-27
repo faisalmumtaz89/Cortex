@@ -343,7 +343,7 @@ def test_many_tool_calls_collapse_with_compact_lines(tui_project) -> None:
     frame = session.wait_for("COLLAPSE_DONE")
 
     # Older tools fold to a summary; only the last few show as one-liners.
-    assert "earlier steps (ctrl+o to expand)" in frame
+    assert "earlier steps (Ctrl+O to expand)" in frame
     visible_tools = frame.count("Read module_")
     assert visible_tools <= 6, f"expected <=6 visible tool lines, saw {visible_tools}"
     # The last tool is a single compact line (no separate "⎿ +N lines" fold block).
@@ -615,7 +615,7 @@ def test_slash_palette_login_masks_api_key(tui_project) -> None:
 def test_login_picker_shows_each_provider_auth_status(tui_project) -> None:
     project, start = tui_project
     session = start(
-        [[{"text": "IGNORED"}]], extra_env={"OPENAI_COMPATIBLE_API_KEY": "sk-compatible-test"}
+        [[{"text": "IGNORED"}]], extra_env={"OPENAI_COMPATIBLE_BASE_URL": "http://127.0.0.1:9/v1"}
     )
     session.wait_for("Session ready")
 
@@ -627,8 +627,10 @@ def test_login_picker_shows_each_provider_auth_status(tui_project) -> None:
     def row(provider: str) -> str:
         return next(line for line in picker.splitlines() if f" {provider} " in line)
 
-    assert "logged in" in row("openai-compatible"), picker
-    assert "not configured" in row("anthropic"), picker
+    assert "logged in · env" in row("azure"), picker  # the harness sets its key
+    assert "not logged in" in row("anthropic"), picker
+    # A base URL alone is half the setup: the row says the key is what is missing.
+    assert "URL saved, no key" in row("openai-compatible"), picker
 
 
 def test_the_tui_leaves_no_files_in_the_temp_folder(tui_project, tmp_path) -> None:
@@ -800,7 +802,7 @@ def test_bare_login_opens_provider_picker_and_prefills_key_prompt(tui_project) -
     assert "azure" in picker
     # Auth-status tags render (azure has env creds in this harness; the others
     # may or may not — at least one status tag of each kind's vocabulary shows).
-    assert "logged in" in picker or "not configured" in picker
+    assert "logged in" in picker
     # No numbered selection anywhere.
     assert "[1]" not in picker
 
@@ -849,6 +851,76 @@ def test_clear_resets_the_transcript(tui_project) -> None:
     assert "FIRST_ANSWER_MARKER" not in frame
     assert "first question" not in frame
     assert "Ask anything about this repository" in frame
+
+
+def test_a_message_that_starts_with_a_command_name_goes_to_the_model(tui_project) -> None:
+    """Only a command name typed alone runs without its slash: "Clear up the
+    docstring…" once ran /clear and wiped the model's context."""
+    project, start = tui_project
+    session = start([[{"text": "FIRST_ANSWER_MARKER"}], [{"text": "SECOND_ANSWER_MARKER"}]])
+    session.wait_for("No model loaded. Pick one with /model")
+    _select_scripted_model(session)
+    # How to get a model leaves the transcript once one is active.
+    session.wait_until(
+        lambda frame: "No model loaded" not in frame, description="the setup hint gone"
+    )
+    session.send_line("first question")
+    session.wait_for("FIRST_ANSWER_MARKER")
+
+    session.send_line("Clear up the docstring wording in calc.py")
+    frame = session.wait_for("SECOND_ANSWER_MARKER")
+    assert "Conversation cleared" not in frame, frame
+    assert "FIRST_ANSWER_MARKER" in frame, frame
+    assert "Clear up the docstring wording in calc.py" in frame, frame
+
+    session.send_line("help")  # alone, a command name still runs the command
+    session.wait_for("Esc to dismiss", timeout=15)
+
+
+def test_a_small_screen_edit_prompt_shows_the_change_itself(tui_project) -> None:
+    """At 80x24 there is room for a few diff rows: they must be the change,
+    not the unchanged lines above it."""
+    project, start = tui_project
+    lines = [f"line_{n} = {n}" for n in range(1, 9)]
+    (project / "values.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    session = start(
+        [
+            [
+                {"tool_calls": [{"name": "edit_file", "arguments": {
+                    "path": "values.py", "old_text": "line_6 = 6", "new_text": "line_6 = 60"}}]},
+                {"text": "EDIT_DONE_MARKER"},
+            ]
+        ]
+    )
+    _select_scripted_model(session)
+    subprocess.run(["tmux", "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
+                   check=True)
+    session.send_line("edit the file")
+    prompt = session.wait_for("Permission required")
+    assert "6 + line_6 = 60" in prompt, prompt
+    assert "unchanged lines above" in prompt, prompt
+
+
+def test_a_wide_table_fits_the_screen_and_shows_no_markup(tui_project) -> None:
+    """A table wider than the screen is narrowed to fit, so each row stays on
+    its own lines, and a cell shows its text without backticks or **."""
+    project, start = tui_project
+    table = (
+        "| Command | Before | After |\n"
+        "|---|---|---|\n"
+        "| `python3 -m unittest discover -s tests -v` (the README's command, run from the "
+        "project root with the default settings) | 4 run, 1 FAIL | 4 run, **OK** |\n"
+    )
+    session = start([[{"text": f"Results:\n\n{table}\nTABLE_DONE_MARKER"}]])
+    _select_scripted_model(session)
+    session.send_line("show the results")
+    frame = session.wait_for("TABLE_DONE_MARKER")
+    row = next((line for line in frame.splitlines() if "4 run, 1 FAIL" in line), "")
+    assert "4 run, OK" in row, frame  # the last column did not wrap to the next line
+    assert "`" not in frame and "**" not in frame, frame
+    separator = next((line for line in frame.splitlines() if "┼" in line), "")
+    assert separator, frame
+    assert len(separator.rstrip()) <= 130, frame
 
 
 def test_edit_file_renders_green_red_diff(tui_project) -> None:
@@ -936,6 +1008,36 @@ def test_permission_modal_shows_command_and_executes_it(tui_project) -> None:
     assert (project / "proof.txt").read_text(encoding="utf-8").strip() == "proof"
 
 
+def test_enter_after_typing_a_message_queues_it_and_leaves_the_prompt_open(tui_project) -> None:
+    """A prompt that appears while you type is not answered by the Enter that
+    ends your sentence: the message is queued, and the prompt still waits."""
+    project, start = tui_project
+    session = start(
+        [
+            [
+                {"tool_calls": [{"name": "bash", "arguments": {"command": "echo proof > proof.txt"}}]},
+                {"text": "WROTE_FILE_MARKER"},
+            ],
+            [{"text": "FOLLOW_UP_MARKER"}],
+        ]
+    )
+    _select_scripted_model(session)
+    session.send_line("create the proof file")
+    modal = session.wait_for("Waiting for your answer to the prompt above")
+    assert "Permission required" in modal and "Working…" not in modal, modal
+    assert "Enter answer prompt" in modal, modal
+
+    session.send_line("also update the README")
+    frame = session.wait_for("↳ queued: also update the README", timeout=10)
+    assert "Permission required" in frame, frame
+    assert not (project / "proof.txt").exists()
+
+    session.send_key("Enter")  # an empty input: Enter answers the prompt
+    session.wait_for("WROTE_FILE_MARKER")
+    session.wait_for("FOLLOW_UP_MARKER")  # the queued message ran next
+    assert (project / "proof.txt").read_text(encoding="utf-8").strip() == "proof"
+
+
 def test_permission_modal_shows_the_directory_a_command_runs_in(tui_project) -> None:
     project, start = tui_project
     (project / "sub").mkdir()
@@ -952,11 +1054,34 @@ def test_permission_modal_shows_the_directory_a_command_runs_in(tui_project) -> 
     session.send_line("write the file in sub")
 
     modal = session.wait_for("Permission required")
-    assert "Run command: cd ./sub || exit 1\\necho here > here.txt" in modal
+    rows = [line.strip().lstrip("┃").strip() for line in modal.splitlines()]
+    assert "Run command: cd ./sub || exit 1\\n" in rows, modal
+    assert "echo here > here.txt" in rows, modal
 
     session.send_key("Enter")
     session.wait_for("RAN_IN_SUB_MARKER")
     assert (project / "sub" / "here.txt").exists()
+
+
+def test_permission_modal_shows_a_command_of_several_lines_line_by_line(tui_project) -> None:
+    """Each line of a command starts a row of the prompt, its line break still
+    shown as \\n, instead of one run of escapes."""
+    project, start = tui_project
+    command = "cd src\npython3 -m unittest discover -s tests\necho done"
+    session = start(
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+          {"text": "DONE_MARKER"}]]
+    )
+    _select_scripted_model(session)
+    session.send_line("run it")
+    modal = session.wait_for("Permission required")
+    rows = [line.strip().lstrip("┃").strip() for line in modal.splitlines()]
+    assert "Run command: cd src\\n" in rows, modal
+    assert "python3 -m unittest discover -s tests\\n" in rows, modal
+    assert "echo done" in rows, modal
+    assert "❯ Allow once" in modal, modal  # all of it is shown, so Enter may allow it
+    session.send_key("Escape")
+    session.wait_for("DONE_MARKER")
 
 
 def test_permission_modal_shows_every_line_of_a_command(tui_project) -> None:

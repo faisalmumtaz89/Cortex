@@ -314,6 +314,35 @@ def _bash_turn(command: str) -> list:
             {"text": "Ran it."}]
 
 
+def test_a_file_tool_call_outside_the_project_is_refused_without_a_prompt(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """File tools work only inside the project: a write elsewhere is refused
+    at once, not offered as a prompt that cannot say what it touches."""
+    outside = tmp_path / "elsewhere" / "sweep.py"
+    outside.parent.mkdir()
+    calls = [
+        ("write_file", {"path": str(outside), "content": "print(1)\n"}),
+        ("edit_file", {"path": "../elsewhere/sweep.py", "old_text": "a", "new_text": "b"}),
+    ]
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": name, "arguments": args}]}, {"text": "Done."}]
+         for name, args in calls],
+    )
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    try:
+        session_id = _start_session(harness)
+        for index in range(len(calls)):
+            assert _turn_answering_prompts(harness, session_id, f"run {index}", "allow_once") == []
+        errors = [part["error"] for part in harness.tool_parts() if part.get("state") == "error"]
+    finally:
+        harness.close()
+    assert len(errors) == 2, errors
+    assert all("outside the working directory" in error for error in errors), errors
+    assert not outside.exists()
+
+
 def test_allow_always_covers_only_that_command_in_that_repository(
     tmp_path: Path, scratch_repo: Path
 ) -> None:
@@ -440,6 +469,39 @@ def test_headless_full_auto_executes_bash(tmp_path: Path, scratch_repo: Path) ->
     assert process.returncode == 0, process.stderr
     assert "Created the file." in process.stdout
     assert (scratch_repo / "created.txt").exists()
+
+
+def test_headless_log_shows_commands_as_typed_and_edits_as_diffs(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A CI log shows what a run changed: a command as it was typed, and an
+    edit as a unified diff."""
+    script = _write_script(
+        tmp_path / "script.json",
+        [
+            [
+                {"tool_calls": [
+                    {"name": "bash", "arguments": {"command": "echo one\necho 'two' > two.txt"}},
+                    {"name": "edit_file", "arguments": {
+                        "path": "src/app.py", "old_text": "return 1", "new_text": "return 2"}},
+                ]},
+                {"text": "Changed it."},
+            ]
+        ],
+    )
+    process = _run_headless(
+        cwd=scratch_repo, env=_worker_env(tmp_path, script), prompt="change it",
+        extra_args=["--full-auto"],
+    )
+
+    assert process.returncode == 0, process.stderr
+    assert "[tool] bash $ echo one\n    echo 'two' > two.txt\n" in process.stderr, process.stderr
+    assert "[tool] edit_file path=src/app.py old_text=return 1 new_text=return 2" in process.stderr
+    assert (
+        "--- src/app.py\n+++ src/app.py\n@@ -1,2 +1,2 @@\n def main():\n-    return 1\n"
+        "+    return 2\n"
+    ) in process.stderr, process.stderr
+    assert process.stdout.strip() == "Changed it."
 
 
 def test_bash_commands_inherit_no_worker_warning_filters(

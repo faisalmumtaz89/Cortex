@@ -168,8 +168,8 @@ class ModelService:
                 "ok": False,
                 "message": (
                     f"{provider_enum.value} is not authenticated. "
-                    f"Run /login {provider_enum.value} <api_key>{url_hint} "
-                    f"in cortex, or set {variables}."
+                    f"Add a key with /login {provider_enum.value} <api_key>{url_hint}, "
+                    f"or set {variables}."
                 ),
             }
 

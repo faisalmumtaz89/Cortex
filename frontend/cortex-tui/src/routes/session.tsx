@@ -15,12 +15,14 @@ import {
   findCommand,
   isSkillInput,
   matchCommands,
+  slashCommandFor,
   type SlashCommand,
 } from "../commands"
 import { useStore } from "../context/store"
 import { readGitBranch } from "../lib/git_branch"
 import { spinnerFrame } from "../lib/spinner"
 import { permissionShown } from "../lib/permission_prompt"
+import { promptHasDraft, registerPromptDraft } from "../lib/prompt_draft"
 import { turnRunning } from "../protocol"
 import { terminalColumns, terminalRows } from "../lib/terminal_size"
 import { parseDiff } from "../context/session_store"
@@ -36,19 +38,6 @@ class CustomSpeedScroll implements ScrollAcceleration {
   reset(): void {}
 }
 
-const SLASH_COMMAND_ALIASES = new Set([
-  "help",
-  "status",
-  "model",
-  "login",
-  "clear",
-  "save",
-  "template",
-  "quit",
-  "exit",
-  "update",
-])
-
 function isSlashCommandLike(raw: string): boolean {
   const trimmed = raw.trim()
   if (!trimmed) {
@@ -57,8 +46,7 @@ function isSlashCommandLike(raw: string): boolean {
   if (trimmed.startsWith("/")) {
     return !isSkillInput(trimmed) // a skill runs as a message to the model
   }
-  const firstWord = trimmed.split(/\s+/, 1)[0]?.toLowerCase() || ""
-  return SLASH_COMMAND_ALIASES.has(firstWord)
+  return slashCommandFor(trimmed) !== null
 }
 
 // Thick "┃" left rail used by every overlay (palette, result, permission, picker).
@@ -140,6 +128,8 @@ export function SessionRoute(props: {
   // ---- Slash command palette (derived from the prompt contents) ----
   const [promptValue, setPromptValue] = createSignal("")
   const [selectedIndex, setSelectedIndex] = createSignal(0)
+
+  createEffect(() => store.setPromptHasText(promptValue().trim().length > 0))
 
   const paletteOpen = createMemo(() => {
     const value = promptValue()
@@ -313,7 +303,7 @@ export function SessionRoute(props: {
               text: source ? `logged in · ${source}` : "logged in",
               color: UI_PALETTE.statusIdle,
             }
-          : { text: "not configured", color: UI_PALETTE.statusBusy },
+          : { text: row?.url_saved ? "URL saved, no key" : "not logged in", color: UI_PALETTE.statusBusy },
       }
     }),
   )
@@ -527,12 +517,15 @@ export function SessionRoute(props: {
     if (!turnRunning(store.state.status)) {
       return ""
     }
+    if (hasPendingPermission()) {
+      return "Waiting for your answer to the prompt above"
+    }
     const frame = spinnerFrame()
     const since = store.state.busySinceMs
     const elapsed = since ? Math.max(0, Math.round((Date.now() - since) / 1000)) : 0
     const tools = currentTurnToolCount()
     const toolNote = tools > 0 ? ` · ${tools} tool call${tools === 1 ? "" : "s"}` : ""
-    const expandNote = tools > 0 ? " · ctrl+o details" : ""
+    const expandNote = tools > 0 ? " · Ctrl+O details" : ""
     return `${frame} Working… ${elapsed}s${toolNote} · Esc to interrupt${expandNote}`
   })
 
@@ -684,7 +677,7 @@ export function SessionRoute(props: {
       return
     }
     // Busy turn: queue the follow-up and send it when the turn finishes.
-    if (!commandLike && (turnRunning(store.state.status) || isSubmitting())) {
+    if (!commandLike && (turnRunning(store.state.status) || isSubmitting() || hasPendingPermission())) {
       store.enqueueInput(fingerprint)
       input.clear()
       return
@@ -818,7 +811,24 @@ export function SessionRoute(props: {
       }
       return
     }
-    event.preventDefault()
+    // A permission prompt is open: the global handler answers it with the
+    // arrows, Enter and Esc. Other keys type a message, which Enter queues.
+    const key = String(event.name ?? "").toLowerCase()
+    const shift = Boolean((event as { shift?: boolean }).shift)
+    if (key.includes("enter") || key === "return" || key === "linefeed") {
+      if (shift) {
+        return // a newline in the message
+      }
+      event.preventDefault()
+      if (promptHasDraft()) {
+        // Later, so the global handler still sees the text and leaves the prompt open.
+        setTimeout(() => void submitFromPrompt(), 0)
+      }
+      return
+    }
+    if (["up", "down", "escape", "esc", "tab"].includes(key)) {
+      event.preventDefault()
+    }
   }
 
   // Dispatch queued follow-ups once the session is connected and idle.
@@ -1100,10 +1110,12 @@ export function SessionRoute(props: {
 
         <PromptPanel
           hasPendingPermission={hasPendingPermission()}
+          hasText={store.state.promptHasText}
           status={store.state.status}
           statusColor={statusColor()}
           setInputRef={(r: TextareaRenderable) => {
             input = r
+            registerPromptDraft(() => (r.isDestroyed ? "" : r.plainText))
             attachCommandHighlighter(r)
             if (!hasPendingPermission() && !r.isDestroyed) {
               r.focus()

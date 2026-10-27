@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, cast
 
 from cortex.cloud.types import CloudModelRef, CloudProvider
 from cortex.tooling.agent_prompt import build_system_prompt
+from cortex.tooling.builtin.common import resolve_repo_path
 from cortex.tooling.builtin.skill import skill_text
 from cortex.tooling.permissions import (
     PermissionDecision,
@@ -314,6 +315,20 @@ class ToolingOrchestrator:
             )
 
         permission = registry.permission_for(call.name)
+        path = (call.arguments or {}).get("path")
+        if call.name != "bash" and isinstance(path, str) and path.strip():
+            # The tool refuses a path outside the project: refuse it before
+            # asking, since no answer to the prompt could make it run.
+            try:
+                resolve_repo_path(root=registry.repo_root, relative_path=path)
+            except ValueError as exc:
+                return ToolResult(
+                    id=call.id,
+                    name=call.name,
+                    state=ToolExecutionState.ERROR,
+                    ok=False,
+                    error=str(exc),
+                )
         patterns = self._extract_permission_patterns(call, registry.repo_root)
 
         try:

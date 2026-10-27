@@ -1,5 +1,5 @@
 import { createContext, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
-import { SLASH_COMMANDS, isSkillInput, setSkills, skills } from "../commands"
+import { SLASH_COMMANDS, isSkillInput, setSkills, skills, slashCommandFor } from "../commands"
 import { exitCortex, registerWorkerKill } from "../lib/exit"
 import { RpcClient } from "../protocol"
 import { useStore } from "./store"
@@ -33,20 +33,6 @@ type RpcContextValue = {
 }
 
 const RpcContext = createContext<RpcContextValue>()
-
-const SLASH_COMMAND_ALIASES = new Set([
-  "help",
-  "status",
-  "model",
-  "models",
-  "login",
-  "clear",
-  "save",
-  "template",
-  "quit",
-  "exit",
-  "update",
-])
 
 function splitCommandArgs(raw: string): string[] {
   const result: string[] = []
@@ -129,23 +115,6 @@ function maskCommand(command: string): string {
   return command
 }
 
-function normalizeSlashCommand(raw: string): string | null {
-  const trimmed = raw.trim()
-  if (!trimmed) {
-    return null
-  }
-  if (trimmed.startsWith("/")) {
-    return trimmed
-  }
-
-  const parts = splitCommandArgs(trimmed)
-  const first = (parts[0] || "").toLowerCase()
-  if (!SLASH_COMMAND_ALIASES.has(first)) {
-    return null
-  }
-  return `/${trimmed}`
-}
-
 export function RpcProvider(props: ParentProps) {
   const store = useStore()
   const worker = parseWorkerCommand()
@@ -192,7 +161,7 @@ export function RpcProvider(props: ParentProps) {
       return false
     }
 
-    const slashCommand = normalizeSlashCommand(normalized) || (normalized.startsWith("/") ? normalized : `/${normalized}`)
+    const slashCommand = slashCommandFor(normalized) ?? `/${normalized}`
     const lowerCommand = slashCommand.toLowerCase()
     const timeoutMs = parseTimeoutMs(
       process.env.CORTEX_WORKER_COMMAND_TIMEOUT_MS ?? process.env.CORTEX_WORKER_TURN_TIMEOUT_MS,
@@ -256,7 +225,7 @@ export function RpcProvider(props: ParentProps) {
     }
     store.clearError()
     try {
-      const maybeCommand = isSkillInput(normalized) ? null : normalizeSlashCommand(normalized)
+      const maybeCommand = isSkillInput(normalized) ? null : slashCommandFor(normalized)
       if (maybeCommand) {
         return runCommand(maybeCommand)
       }

@@ -1,5 +1,6 @@
 import { createMemo, For, Show } from "solid-js"
 import type { DiffData, DiffRow } from "../context/store"
+import { diffWindow } from "../lib/diff_window"
 import { highlightLine } from "./syntax_highlight"
 import { UI_PALETTE } from "./ui_palette"
 
@@ -41,10 +42,17 @@ export function DiffView(props: { diff: DiffData; expanded: boolean; maxRows?: n
     return rows
   })
 
-  const visibleRows = createMemo<DisplayRow[]>(() =>
-    props.expanded ? flatRows() : flatRows().slice(0, props.maxRows ?? COLLAPSED_ROWS),
-  )
-  const hiddenRows = createMemo(() => Math.max(0, flatRows().length - visibleRows().length))
+  // The rows shown: all when expanded, else as many as fit, starting just
+  // before the first change so the change is never the part cut off.
+  const window = createMemo(() => {
+    const rows = flatRows()
+    if (props.expanded) return { start: 0, end: rows.length }
+    const kinds = rows.map((entry) => (entry.sep ? "sep" : entry.row.kind))
+    return diffWindow(kinds, props.maxRows ?? COLLAPSED_ROWS)
+  })
+  const visibleRows = createMemo<DisplayRow[]>(() => flatRows().slice(window().start, window().end))
+  const rowsAbove = createMemo(() => flatRows().slice(0, window().start).filter((entry) => !entry.sep).length)
+  const hiddenRows = createMemo(() => Math.max(0, flatRows().length - window().end))
 
   const summary = createMemo(() => {
     const { added, removed } = diff()
@@ -76,6 +84,9 @@ export function DiffView(props: { diff: DiffData; expanded: boolean; maxRows?: n
 
       {/* Diff body: full-width colored bands, one line-number gutter. */}
       <box flexDirection="column" flexShrink={0}>
+        <Show when={rowsAbove() > 0}>
+          <text fg={UI_PALETTE.textMuted}>{`  … ${rowsAbove()} unchanged line${plural(rowsAbove())} above`}</text>
+        </Show>
         <For each={visibleRows()}>
           {(entry) => {
             if (entry.sep) {
@@ -123,7 +134,7 @@ export function DiffView(props: { diff: DiffData; expanded: boolean; maxRows?: n
         <Show when={hiddenRows() > 0}>
           {/* With maxRows (a permission prompt) Ctrl+O does not expand it. */}
           <text fg={UI_PALETTE.textMuted}>
-            {`  … +${hiddenRows()} more line${plural(hiddenRows())}${props.maxRows === undefined ? " (ctrl+o)" : ""}`}
+            {`  … +${hiddenRows()} more line${plural(hiddenRows())}${props.maxRows === undefined ? " (Ctrl+O)" : ""}`}
           </text>
         </Show>
         <Show when={props.expanded && diff().truncated}>

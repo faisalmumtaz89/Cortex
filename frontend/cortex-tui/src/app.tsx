@@ -6,6 +6,7 @@ import { StoreProvider, useStore } from "./context/store"
 import { SessionRoute } from "./routes/session"
 import { classifySelectionKey } from "./components/selection_list"
 import { exitCortex, registerRendererDestroy } from "./lib/exit"
+import { promptHasDraft } from "./lib/prompt_draft"
 import { UI_PALETTE } from "./components/ui_palette"
 import { turnRunning } from "./protocol"
 
@@ -42,8 +43,8 @@ function SessionScreen() {
       return
     }
     if (store.state.pendingPermission) {
-      // The prompt textarea is unfocused while a permission is pending, so the
-      // global handler owns these keys. Arrow-select + Enter, no numbers.
+      // The global handler answers the prompt: arrow-select + Enter, no
+      // numbers. Typing still goes to the input, for a message sent after it.
       const requestId = store.state.pendingPermission.request_id
       const action = classifySelectionKey(evt)
       if (action === "up") {
@@ -55,6 +56,11 @@ function SessionScreen() {
         return
       }
       if (action === "enter") {
+        // Enter with a message typed sends (queues) the message: a prompt
+        // that appears mid-sentence is never answered by the Enter after it.
+        if (promptHasDraft()) {
+          return
+        }
         void rpc.replyPermission(requestId, PERMISSION_REPLIES[store.state.permissionChoiceIndex])
         return
       }

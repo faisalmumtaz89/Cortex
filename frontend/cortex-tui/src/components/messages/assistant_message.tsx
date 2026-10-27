@@ -1,5 +1,6 @@
 import { For, Match, Show, Switch, createMemo } from "solid-js"
 import type { MessagePart, MessageRecord } from "../../context/store"
+import { PROSE_MAX_WIDTH } from "../../lib/terminal_size"
 import { Markdown } from "../markdown"
 import { ToolBlock } from "../tool_block"
 import { UI_PALETTE, formatDuration, titlecase } from "../ui_palette"
@@ -152,7 +153,7 @@ export function AssistantMessage(props: {
       // Cap prose width on wide terminals for readability (opencode has no cap,
       // so answers run edge-to-edge on ultrawide displays); ignored when the
       // terminal is already narrower than this.
-      maxWidth={104}
+      maxWidth={PROSE_MAX_WIDTH}
     >
       <Show when={placeholder().length > 0}>
         <text fg={UI_PALETTE.text}>{placeholder()}</text>
@@ -169,7 +170,7 @@ export function AssistantMessage(props: {
                 </Match>
                 <Match when={segment.kind === "collapsed"}>
                   <text fg={UI_PALETTE.textMuted}>
-                    {`⋮ ${(segment as { kind: "collapsed"; count: number }).count} earlier steps (ctrl+o to expand)`}
+                    {`⋮ ${(segment as { kind: "collapsed"; count: number }).count} earlier steps (Ctrl+O to expand)`}
                   </text>
                 </Match>
                 <Match when={segment.kind === "tool"}>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { SHOWN_CHARS, shownInFull, visibleText } from "../src/lib/visible_text"
+import { SHOWN_CHARS, rowsAtLineBreaks, shownInFull, visibleText } from "../src/lib/visible_text"
 
 describe("visibleText", () => {
   test("keeps ordinary text, accents included", () => {
@@ -47,5 +47,19 @@ describe("visibleText", () => {
     expect([...shown].length).toBeLessThan(SHOWN_CHARS + 40)
     expect(shown).not.toMatch(/\p{Cs}/u)
     expect(shownInFull(text)).toBe(false)
+  })
+})
+
+describe("rowsAtLineBreaks", () => {
+  test("a command of several lines reads line by line, each break still shown", () => {
+    expect(rowsAtLineBreaks(visibleText("cd src\nmake test"))).toEqual(["cd src\\n", "make test"])
+  })
+
+  test("a run of line breaks stays on one row, and a trailing break ends the last", () => {
+    expect(rowsAtLineBreaks(visibleText("a\n\n\nb\n"))).toEqual(["a\\n\\n\\n", "b\\n"])
+  })
+
+  test("a backslash before an n is not a line break", () => {
+    expect(rowsAtLineBreaks(visibleText("printf 'a\\nb'"))).toEqual(["printf 'a\\\\nb'"])
   })
 })

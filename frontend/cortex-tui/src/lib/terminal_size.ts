@@ -21,3 +21,14 @@ process.on("SIGWINCH", sync)
 
 export const terminalColumns = columns
 export const terminalRows = rows
+
+// A reply's widest line on a wide terminal (its box's maxWidth), for blocks
+// such as tables that lay themselves out to fit it.
+export const PROSE_MAX_WIDTH = 104
+// Columns a reply's text loses to the transcript's margins and its own indent.
+const PROSE_MARGINS = 8
+
+/** The columns a reply's text has on this terminal. */
+export function proseColumns(): number {
+  return Math.max(20, Math.min(PROSE_MAX_WIDTH - 3, terminalColumns() - PROSE_MARGINS))
+}

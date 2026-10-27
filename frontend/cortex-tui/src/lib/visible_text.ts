@@ -46,3 +46,30 @@ export function visibleText(text: string, limit = SHOWN_CHARS): string {
   const hidden = chars.length - 2 * half
   return `${chars.slice(0, half).join("")} ⟨${hidden} characters not shown⟩ ${chars.slice(-half).join("")}`
 }
+
+/** Shown text split into rows after each line break it shows (`\n`, kept at
+ * the row's end; a run of them stays on one row), so a command of several
+ * lines reads line by line while every break stays visible. */
+export function rowsAtLineBreaks(shown: string): string[] {
+  const rows: string[] = []
+  let row = ""
+  let index = 0
+  while (index < shown.length) {
+    if (shown[index] !== "\\") {
+      row += shown[index]
+      index += 1
+      continue
+    }
+    // An escape: "\\" (a backslash), "\n", "\r", "\t" or "\u{...}".
+    const end = shown[index + 1] === "u" ? shown.indexOf("}", index) + 1 : index + 2
+    const token = shown.slice(index, end > index ? end : index + 2)
+    row += token
+    index += token.length
+    if (token === "\\n" && !shown.startsWith("\\n", index) && index < shown.length) {
+      rows.push(row)
+      row = ""
+    }
+  }
+  rows.push(row)
+  return rows
+}

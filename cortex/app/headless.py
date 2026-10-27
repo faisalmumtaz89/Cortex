@@ -8,6 +8,7 @@ stays pipeable. Exit codes: 0 success, 1 turn error, 2 setup error.
 from __future__ import annotations
 
 import io
+import json
 import re
 import sys
 from typing import Optional
@@ -54,6 +55,53 @@ def _allowed_commands(manager) -> str:
     return " These commands are allowed, written exactly so: " + ", ".join(
         f"`{command}`" for command in commands
     ) + "."
+
+
+def _call_summary(tool: str, arguments) -> str:
+    """A tool call as the log shows it: a command as typed, other calls by
+    their short arguments (an edit's text is in the diff printed after it)."""
+    if not isinstance(arguments, dict):
+        return str(arguments)
+    command = arguments.get("command")
+    if tool == "bash" and isinstance(command, str):
+        workdir = arguments.get("workdir")
+        where = f" (in {workdir})" if isinstance(workdir, str) and workdir else ""
+        return "$ " + command.strip().replace("\n", "\n    ") + where
+    shown = []
+    for key, value in arguments.items():
+        text = value if isinstance(value, str) else json.dumps(value)
+        if "\n" in text or len(text) > 80:
+            lines = text.count("\n") + 1
+            text = f"<{lines} lines>" if lines > 1 else f"<{len(text)} characters>"
+        shown.append(f"{key}={text}")
+    return " ".join(shown)
+
+
+def _diff_text(diff: dict) -> str:
+    """An edit's diff (the tool result's metadata.diff) as a unified diff."""
+    path = str(diff.get("path", ""))
+    lines = [f"--- {path}", f"+++ {path}"]
+    marks = {"ctx": " ", "del": "-", "add": "+"}
+    for hunk in diff.get("hunks", []):
+        rows = hunk.get("rows", [])
+        old = sum(1 for row in rows if row.get("kind") != "add")
+        new = sum(1 for row in rows if row.get("kind") != "del")
+        # A side with no lines is numbered from the line before it, as diff does.
+        old_start = int(hunk.get("oldStart", 1)) - (0 if old else 1)
+        new_start = int(hunk.get("newStart", 1)) - (0 if new else 1)
+        lines.append(f"@@ -{old_start},{old} +{new_start},{new} @@")
+        lines.extend(marks.get(str(row.get("kind")), " ") + str(row.get("text", "")) for row in rows)
+    if diff.get("truncated"):
+        lines.append(f"... {diff.get('truncatedRows', 0)} more lines not shown")
+    return "\n".join(lines)
+
+
+def _headless_wording(message: str) -> str:
+    """A model refusal as a headless run says it: /login is a command of the
+    interactive app."""
+    return message.replace(
+        "Add a key with /login", "Add a key with /login in the interactive app (cortex)"
+    )
 
 
 def _example_model(runtime) -> str:
@@ -139,7 +187,7 @@ class _Printer:
                 state = str(part.get("state", ""))
                 tool = str(part.get("tool", ""))
                 if state == "running":
-                    print(f"[tool] {tool} {part.get('input', {})}", file=sys.stderr)
+                    print(f"[tool] {tool} {_call_summary(tool, part.get('input', {}))}", file=sys.stderr)
                 elif state == "error" or part.get("ok") is False:
                     error = str(part.get("error", ""))
                     if error.startswith(_REFUSED):
@@ -153,6 +201,9 @@ class _Printer:
                 elif state == "completed":
                     output = str(part.get("output", "") or "")
                     print(f"[tool] {tool} ok ({len(output)} chars)", file=sys.stderr)
+                    diff = (part.get("metadata") or {}).get("diff")
+                    if isinstance(diff, dict):
+                        print(_diff_text(diff), file=sys.stderr)
             return
         if event_type == "session.error":
             self.end_line()
@@ -232,7 +283,7 @@ def run_headless(
             session_id=session_id, command=f"/model {model}"
         )
         if not bool(selection.get("ok")):
-            message = str(selection.get("message", model))
+            message = _headless_wording(str(selection.get("message", model)))
             if message.startswith("Usage: /model"):
                 message = f"pass --model provider:model, for example {_example_model(runtime)}"
             print(f"error: {message}", file=sys.stderr)
@@ -244,7 +295,8 @@ def run_headless(
             # Remembered, but not usable now (most often: its key is not set here).
             provider, _, model_id = saved.partition(":")
             reason = runtime.model_service.select_cloud_model(provider=provider, model_id=model_id)
-            print(f"error: {saved} cannot be used: {reason.get('message', '')}", file=sys.stderr)
+            message = _headless_wording(str(reason.get("message", "")))
+            print(f"error: {saved} cannot be used: {message}", file=sys.stderr)
             return 2
         print(
             "error: no model selected. Pass one with --model provider:model, "

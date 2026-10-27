@@ -2,7 +2,7 @@
 // store decides the prompt's starting choice from exactly these lines, so
 // Enter never approves a call whose text the user could not see.
 import { displayPath } from "./paths"
-import { SHOWN_CHARS, shownInFull, visibleText } from "./visible_text"
+import { SHOWN_CHARS, rowsAtLineBreaks, shownInFull, visibleText } from "./visible_text"
 
 export type PermissionPrompt = {
   permission: string
@@ -91,11 +91,24 @@ export function permissionShown(
     full &&= shownInFull(line, limit)
     return visibleText(line, limit)
   })
-  const textRows = lines
-    // One row more per line: wrapping at word breaks can leave rows short.
-    .map((line) => Math.ceil(columnsAtMost(line) / width) + 1)
-    .reduce((sum, count) => sum + count, 0)
-  return { lines, full: full && textRows + PROMPT_ROWS + RESERVED_ROWS + extraRows <= rows }
+  const free = rows - PROMPT_ROWS - RESERVED_ROWS - extraRows
+  const sum = (counts: number[]) => counts.reduce((total, count) => total + count, 0)
+  // A command of several lines is shown line by line when its rows fit (a
+  // row that wraps may lose a row to a word break), else as one line.
+  const splitRows = sum(
+    lines.flatMap((line) =>
+      rowsAtLineBreaks(line).map((row) => {
+        const used = columnsAtMost(row)
+        return used <= width ? 1 : Math.ceil(used / width) + 1
+      }),
+    ),
+  )
+  if (splitRows <= free) {
+    return { lines: lines.map((line) => rowsAtLineBreaks(line).join("\n")), full }
+  }
+  // One row more per line: wrapping at word breaks can leave rows short.
+  const textRows = sum(lines.map((line) => Math.ceil(columnsAtMost(line) / width) + 1))
+  return { lines, full: full && textRows <= free }
 }
 
 /** Whether the prompt shows all of the call and fits on screen. */

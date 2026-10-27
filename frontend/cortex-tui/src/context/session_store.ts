@@ -144,6 +144,7 @@ type State = {
   lastInterrupted: boolean
   // Slash command palette + ephemeral command result (never enters the transcript).
   paletteOpen: boolean
+  promptHasText: boolean // whether the input holds a message being typed
   commandInFlight: boolean
   commandResult?: { command: string; ok: boolean; text: string; background?: boolean }
   // Full model lists (for the interactive /model picker) + permission-menu highlight.
@@ -171,6 +172,7 @@ function freshState(): State {
     queuedInputs: [],
     lastInterrupted: false,
     paletteOpen: false,
+    promptHasText: false,
     commandInFlight: false,
     models: { cloud: [], providers: [] },
     permissionChoiceIndex: 0,
@@ -318,6 +320,9 @@ export function createSessionStore() {
     }
     return { kind: "engine-update", repoID, phase: parseString(payload.phase) ?? "preparing" }
   }
+
+  // The notices saying how to get a model, removed once one is active.
+  const modelSetupNotices = new Set<string>()
 
   const ensureMessage = (id: string, role: MessageRole = "assistant") => {
     if (state.messages[id]) {
@@ -499,7 +504,13 @@ export function createSessionStore() {
           return
         }
         const messageID = `system-notice:${event.session_id}:${event.seq}`
+        if (event.payload.origin === "model-setup" && state.activeModelLabel !== "No model loaded") {
+          return // a model is already active: how to get one is moot
+        }
         ensureMessage(messageID, "system")
+        if (event.payload.origin === "model-setup") {
+          modelSetupNotices.add(messageID)
+        }
         setState("messages", messageID, "content", message)
         setState("messages", messageID, "final", true)
         setState("messages", messageID, "createdTsMs", event.ts_ms)
@@ -650,6 +661,10 @@ export function createSessionStore() {
     setState("paletteOpen", open)
   }
 
+  const setPromptHasText = (hasText: boolean) => {
+    setState("promptHasText", hasText)
+  }
+
   const setPermissionChoice = (index: number) => {
     setState("permissionChoiceIndex", index)
   }
@@ -742,6 +757,11 @@ export function createSessionStore() {
 
     batch(() => {
       setState("activeModelLabel", activeLabel)
+      if (activeLabel !== "No model loaded" && modelSetupNotices.size > 0) {
+        // How to get a model stops applying once one is active.
+        setState("orderedMessageIDs", (ids) => ids.filter((id) => !modelSetupNotices.has(id)))
+        modelSetupNotices.clear()
+      }
       setState("models", { cloud: asRecords(cloudRaw), providers: asRecords(providersRaw) })
     })
   }
@@ -788,6 +808,7 @@ export function createSessionStore() {
       enqueueInput,
       dequeueInput,
       setPaletteOpen,
+      setPromptHasText,
       setPermissionChoice,
       setCommandResult,
       clearCommandResult,

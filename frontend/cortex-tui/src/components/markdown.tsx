@@ -1,6 +1,7 @@
 import type { RGBA } from "@opentui/core"
 import { For, Show, createMemo } from "solid-js"
-import { terminalColumns } from "../lib/terminal_size"
+import { tableLines } from "../lib/table_layout"
+import { proseColumns, terminalColumns } from "../lib/terminal_size"
 import { highlightLine } from "./syntax_highlight"
 import { UI_PALETTE } from "./ui_palette"
 
@@ -53,7 +54,10 @@ export function parseInline(input: string): InlineToken[] {
       const afterUnderscore = marker === "__" ? input[i + end + 2] ?? "" : ""
       if (end > 1 && (marker === "**" || !ALNUM.test(afterUnderscore))) {
         flush()
-        tokens.push({ kind: "bold", text: rest.slice(2, end) })
+        // Code inside bold text stays code: "**Run `make`**".
+        for (const inner of parseInline(rest.slice(2, end))) {
+          tokens.push(inner.kind === "text" ? { kind: "bold", text: inner.text } : inner)
+        }
         i += end + 2
         continue
       }
@@ -66,7 +70,9 @@ export function parseInline(input: string): InlineToken[] {
       const afterUnderscore = marker === "_" ? input[i + end + 1] ?? "" : ""
       if (end > 0 && rest[end - 1] !== " " && (marker === "*" || !ALNUM.test(afterUnderscore))) {
         flush()
-        tokens.push({ kind: "italic", text: rest.slice(1, end) })
+        for (const inner of parseInline(rest.slice(1, end))) {
+          tokens.push(inner.kind === "text" ? { kind: "italic", text: inner.text } : inner)
+        }
         i += end + 1
         continue
       }
@@ -321,39 +327,43 @@ function CodeBlock(props: { language?: string; lines: string[]; marginTop: numbe
   )
 }
 
+/** A cell as plain text: a table lays its columns out by the text it shows. */
+function plainCell(cell: string): string {
+  return parseInline(cell)
+    .map((token) => token.text)
+    .join("")
+}
+
 function TableBlock(props: { header: string[]; rows: string[][]; marginTop: number }) {
-  const columnCount = () => Math.max(props.header.length, ...props.rows.map((row) => row.length))
-  const widths = () => {
-    const cols = columnCount()
-    const w = new Array(cols).fill(0)
-    const consider = (cells: string[]) => {
-      for (let c = 0; c < cols; c++) {
-        w[c] = Math.max(w[c], (cells[c] ?? "").length)
-      }
-    }
-    consider(props.header)
-    props.rows.forEach(consider)
-    return w
-  }
-  const pad = (text: string, width: number) => text + " ".repeat(Math.max(0, width - text.length))
-  const rowText = (cells: string[]) =>
-    widths()
-      .map((width, c) => pad(cells[c] ?? "", width))
-      .join("  │  ")
-  const separator = () =>
-    widths()
-      .map((width) => "─".repeat(width))
-      .join("──┼──")
+  // Fitted to the transcript's width, so no line wraps onto the next.
+  const lines = createMemo(() =>
+    tableLines(
+      props.header.map(plainCell),
+      props.rows.map((row) => row.map(plainCell)),
+      proseColumns(),
+    ),
+  )
 
   return (
     // Inter-block spacing is owned by blockMarginTop() (no bottom margin —
     // it would stack with the next block's marginTop into a doubled gap).
     <box flexDirection="column" flexShrink={0} marginTop={props.marginTop}>
-      <text attributes={1 /* bold */} fg={UI_PALETTE.heading}>
-        {rowText(props.header)}
-      </text>
-      <text fg={UI_PALETTE.textMuted}>{separator()}</text>
-      <For each={props.rows}>{(row) => <text fg={UI_PALETTE.text}>{rowText(row)}</text>}</For>
+      <For each={lines()}>
+        {(line) => (
+          <text
+            attributes={line.kind === "header" ? 1 /* bold */ : 0}
+            fg={
+              line.kind === "header"
+                ? UI_PALETTE.heading
+                : line.kind === "separator"
+                  ? UI_PALETTE.textMuted
+                  : UI_PALETTE.text
+            }
+          >
+            {line.text}
+          </text>
+        )}
+      </For>
     </box>
   )
 }

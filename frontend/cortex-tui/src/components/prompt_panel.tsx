@@ -4,9 +4,10 @@ import { terminalColumns } from "../lib/terminal_size"
 import { UI_PALETTE } from "./ui_palette"
 
 // Hint segments in display order; `drop` is the order they are shed when width
-// is tight (lowest first). "Enter send" survives longest (primary action).
+// is tight (lowest first). Enter's segment survives longest (primary action).
+const ENTER_SEGMENT = "Enter send"
 const HINT_SEGMENTS: { text: string; drop: number }[] = [
-  { text: "Enter send", drop: 3 },
+  { text: ENTER_SEGMENT, drop: 3 },
   { text: "Shift+Enter newline", drop: 1 },
   { text: "/help commands", drop: 0 },
   { text: "Ctrl+C quit", drop: 2 },
@@ -14,12 +15,12 @@ const HINT_SEGMENTS: { text: string; drop: number }[] = [
 
 /** Build the widest hint string that fits `available` columns, dropping the
  * least-important segments first so it never collides with the status. */
-function buildHint(available: number): string {
+function buildHint(available: number, enter: string): string {
   const dropOrder = [...HINT_SEGMENTS].sort((a, b) => a.drop - b.drop)
   const removed = new Set<string>()
   const render = () =>
     HINT_SEGMENTS.filter((segment) => !removed.has(segment.text))
-      .map((segment) => segment.text)
+      .map((segment) => (segment.text === ENTER_SEGMENT ? enter : segment.text))
       .join(" · ")
   for (const candidate of dropOrder) {
     if (render().length <= available) {
@@ -65,6 +66,7 @@ const EMPTY_BORDER = {
 
 export function PromptPanel(props: {
   hasPendingPermission: boolean
+  hasText: boolean
   status: string
   statusColor: RGBA
   onPromptKeyDown: (event: KeyEvent) => void
@@ -95,7 +97,9 @@ export function PromptPanel(props: {
               ref={(r: TextareaRenderable) => {
                 props.setInputRef(r)
               }}
-              placeholder={props.hasPendingPermission ? "Permission modal active..." : "Ask Cortex..."}
+              placeholder={
+                props.hasPendingPermission ? "Answer the prompt above, or type a message for after it" : "Ask Cortex..."
+              }
               minHeight={1}
               maxHeight={6}
               textColor={UI_PALETTE.promptText}
@@ -119,6 +123,8 @@ export function PromptPanel(props: {
         <text fg={UI_PALETTE.textMuted}>
           {buildHint(
             terminalColumns() - 4 - (props.status !== "idle" ? props.status.length + 2 : 0),
+            // While a prompt waits, Enter answers it, or queues a typed message.
+            props.hasPendingPermission ? (props.hasText ? "Enter queue message" : "Enter answer prompt") : ENTER_SEGMENT,
           )}
         </text>
         <Show when={props.status !== "idle"}>
