@@ -171,6 +171,12 @@ class ModelService:
                     f"Add a key with /login {provider_enum.value} <api_key>{url_hint}, "
                     f"or set {variables}."
                 ),
+                # The same, for a caller that words it its own way (headless).
+                "missing_key": {
+                    "provider": provider_enum.value,
+                    "url": url_hint.strip(),
+                    "variables": variables,
+                },
             }
 
         if provider_enum == CloudProvider.AZURE:

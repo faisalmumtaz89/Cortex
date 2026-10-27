@@ -86,11 +86,12 @@ Then inside Cortex:
 Add a key for a provider, then pick a model:
 
 ```text
-/login openai <api_key>        # or anthropic / azure / openai-compatible
+/login openai <api_key>                          # or anthropic
+/login openai-compatible <api_key> <base_url>    # azure: <api_key> <endpoint>
 /model openai:gpt-5.5
 ```
 
-Provider keys can also come from environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`); see the [CLI Documentation](cli.md#login--credentials) for Azure and OpenAI-compatible endpoints. Cortex remembers the last selected model across restarts (`~/.cortex/state.yaml`).
+Typing `/login` alone opens a picker of the providers. Provider keys can also come from environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_API_KEY` with `AZURE_OPENAI_ENDPOINT`, `OPENAI_COMPATIBLE_API_KEY` with `OPENAI_COMPATIBLE_BASE_URL`), and on a machine that only runs `cortex -p`, `cortex login PROVIDER [URL]` saves one (see [Headless Mode](cli.md#saving-a-key-without-the-interactive-app)). Cortex remembers the last selected model across restarts (`~/.cortex/state.yaml`).
 
 ## Upgrading
 

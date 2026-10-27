@@ -1894,8 +1894,8 @@ def test_headless_default_denies_writes(tmp_path: Path, scratch_repo: Path) -> N
     assert process.returncode == 0, process.stderr
     assert "Tried to create the file." in process.stdout
     assert not (scratch_repo / "created.txt").exists()
-    # The run says how to allow what it refused.
-    assert "--full-auto" in process.stderr.splitlines()[-1], process.stderr
+    # The run says how to allow what it refused, just before naming the model.
+    assert "--full-auto" in process.stderr.splitlines()[-2], process.stderr
 
 
 def test_headless_runs_a_command_a_saved_rule_allows(tmp_path: Path, scratch_repo: Path) -> None:
@@ -2141,6 +2141,182 @@ def test_headless_does_not_wait_for_an_open_stdin_that_sends_nothing(
     assert process.returncode == 0, process.stderr
     assert sent == "say hi", sent
     assert "stdin" in process.stderr, process.stderr
+
+
+def test_headless_says_when_it_sends_piped_input(tmp_path: Path, scratch_repo: Path) -> None:
+    """In `ls | while read f; do cortex -p ...; done` the first run takes the
+    loop's remaining input: it says so, instead of the loop just stopping."""
+    process, sent = _gateway_run(tmp_path, scratch_repo, ["-p", "what are these"],
+                                 input="a.js\nb.js\n")
+    assert process.returncode == 0, process.stderr
+    assert "a.js" in sent, sent
+    assert ("note: sent 10 bytes of piped input after the prompt "
+            "(run with < /dev/null to send none)") in process.stderr, process.stderr
+    # With -p - the input is the prompt itself.
+    process, _sent = _gateway_run(tmp_path, scratch_repo, ["-p", "-"], input="explain\n")
+    assert "piped input" not in process.stderr, process.stderr
+
+
+def test_headless_log_ends_with_the_model_that_answered(tmp_path: Path, scratch_repo: Path) -> None:
+    """The refusal note comes before the "answered by" line, which ends stderr
+    as the docs say; a call with no arguments is logged by its name alone."""
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "list_dir", "arguments": {}},
+                          {"name": "bash", "arguments": {"command": "ls"}}]},
+          {"text": "Listed."}]],
+    )
+    process = _run_headless(cwd=scratch_repo, env=_worker_env(tmp_path, script),
+                            prompt="list", extra_args=[])
+    lines = process.stderr.splitlines()
+    assert lines[-1].startswith("answered by openai:scripted"), process.stderr
+    assert any(line.startswith("note: 1 edit or command call") for line in lines), lines
+    assert "[tool] list_dir" in lines, lines
+
+
+def test_headless_refusal_names_a_rule_saved_for_another_start_directory(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A saved rule applies where Cortex was started when it was saved. Started
+    in a subdirectory, the refusal says which rule exists and where it applies."""
+    rules = tmp_path / "home" / ".cortex" / "tool_permissions.yaml"
+    rules.parent.mkdir(parents=True)
+    rules.write_text(
+        "version: 2\nrules:\n  - permission: bash\n    pattern: echo done\n"
+        f"    action: allow\n    repo: {scratch_repo}\n",
+        encoding="utf-8",
+    )
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": "echo done"}}]},
+          {"text": "Could not."}]],
+    )
+    process = _run_headless(cwd=scratch_repo / "src", env=_worker_env(tmp_path, script),
+                            prompt="run it", extra_args=[])
+    assert process.returncode == 0, process.stderr
+    assert (f"note: a saved rule allows `echo done` when Cortex starts in {scratch_repo}; "
+            f"this run started in {scratch_repo / 'src'}") in process.stderr, process.stderr
+
+
+def test_headless_puts_a_misplaced_prompt_right(tmp_path: Path, scratch_repo: Path) -> None:
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    for args, expected in (
+        (["-p", "--full-auto", "fix it"],
+         'error: -p takes the prompt right after it: cortex -p "fix it" --full-auto'),
+        (["fix it"],
+         'error: to run one prompt, put -p before it: cortex -p "fix it"'),
+    ):
+        process = subprocess.run([sys.executable, "-P", "-m", "cortex", *args], cwd=scratch_repo,
+                                 env=env, capture_output=True, text=True, timeout=120)
+        assert process.returncode == 2, process.stderr
+        assert expected in process.stderr, process.stderr
+
+
+def test_headless_names_cortex_login_when_a_key_is_missing(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    for name in ("CORTEX_SCRIPTED_MODEL", "OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_BASE_URL"):
+        env.pop(name, None)
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+    process = subprocess.run(
+        [sys.executable, "-P", "-m", "cortex", "-p", "hi", "--model", "openai-compatible:org/m"],
+        cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert process.returncode == 2, process.stderr
+    assert (
+        "error: openai-compatible is not authenticated. Save a key with "
+        "`cortex login openai-compatible <base_url>`, or set OPENAI_COMPATIBLE_API_KEY and "
+        "OPENAI_COMPATIBLE_BASE_URL."
+    ) in process.stderr, process.stderr
+
+
+def _cortex_login(env: dict, cwd: Path, args: list, key_input: str):
+    return subprocess.run([sys.executable, "-P", "-m", "cortex", "login", *args], cwd=cwd,
+                          env=env, input=key_input, capture_output=True, text=True, timeout=120)
+
+
+def test_cortex_login_saves_a_key_from_stdin_for_later_headless_runs(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A machine without the interactive app (CI, a git hook) saves its key
+    once; the key is read from stdin, never from the command line."""
+    script = _write_script(tmp_path / "script.json", [[{"text": "Hello."}]])
+    env = _worker_env(tmp_path, script)
+    env.pop("OPENAI_API_KEY")
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+    process = _cortex_login(env, scratch_repo, ["openai"], "sk-from-stdin\n")
+    assert process.returncode == 0, process.stderr
+    assert "API key saved to" in process.stdout, process.stdout
+    assert "sk-from-stdin" not in process.stdout + process.stderr
+    key_file = tmp_path / "home" / ".cortex" / "credentials.json"
+    assert "sk-from-stdin" in key_file.read_text(encoding="utf-8")
+    assert key_file.stat().st_mode & 0o777 == 0o600
+
+    run = _run_headless(cwd=scratch_repo, env=env, prompt="hi", extra_args=[])
+    assert run.returncode == 0, run.stderr
+    assert run.stdout == "Hello.\n"
+
+
+def test_cortex_login_asks_for_the_key_in_a_terminal_without_showing_it(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    import pty
+
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+    pid, fd = pty.fork()
+    if pid == 0:  # the child: cortex login in a terminal
+        os.chdir(scratch_repo)
+        os.execve(sys.executable, [sys.executable, "-P", "-m", "cortex", "login", "anthropic"], env)
+    seen = b""
+    deadline = time.time() + 60
+    try:
+        while b"(not shown): " not in seen and time.time() < deadline:
+            seen += os.read(fd, 4096)
+        os.write(fd, b"sk-ant-typed\n")
+        while time.time() < deadline:
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:  # Linux: EIO once the child has exited
+                break
+            if not chunk:
+                break
+            seen += chunk
+    finally:
+        _, status = os.waitpid(pid, 0)
+        os.close(fd)
+    assert os.waitstatus_to_exitcode(status) == 0, seen
+    assert b"API key for anthropic (not shown): " in seen, seen
+    assert b"sk-ant-typed" not in seen, seen  # not echoed, not printed
+    key_file = tmp_path / "home" / ".cortex" / "credentials.json"
+    assert "sk-ant-typed" in key_file.read_text(encoding="utf-8")
+
+
+def test_cortex_login_refuses_what_it_cannot_save_safely(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    for name in ("OPENAI_COMPATIBLE_BASE_URL", "AZURE_OPENAI_ENDPOINT"):
+        env.pop(name, None)
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+    cases = (
+        (["openai", "sk-on-the-command-line"], "sk-x\n",
+         "error: openai takes no URL. cortex login reads the key from stdin, or asks for it "
+         "in a terminal: never put it on the command line"),
+        (["azure"], "key\n",
+         "error: azure also needs its endpoint: cortex login azure <endpoint>"),
+        (["anthropic"], "",
+         'error: no key on stdin. Pipe it in (printf %s "$KEY" | cortex login anthropic), '
+         "or run cortex login anthropic in a terminal to type it"),
+        (["nosuch"], "k\n",
+         "error: unknown provider nosuch. Use one of: anthropic, azure, openai, openai-compatible"),
+    )
+    for args, key_input, expected in cases:
+        process = _cortex_login(env, scratch_repo, args, key_input)
+        assert process.returncode == 2, process.stderr
+        assert expected in process.stderr, process.stderr
+    assert not (tmp_path / "home" / ".cortex" / "credentials.json").exists()
 
 
 def test_login_works_without_a_system_keyring(tmp_path: Path, scratch_repo: Path) -> None:

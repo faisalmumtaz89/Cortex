@@ -97,6 +97,11 @@ def _piped_input() -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def _size(text: str) -> str:
+    count = len(text.encode("utf-8"))
+    return f"{count} bytes" if count < 1024 else f"{count / 1024:.1f} KB"
+
+
 def _run_headless(args) -> None:
     from cortex.app.headless import run_headless
 
@@ -109,6 +114,11 @@ def _run_headless(args) -> None:
             raise SystemExit(2)
     elif piped.strip():
         prompt = f"{args.print}\n\nInput piped to this run:\n{piped}"
+        # Said every time: a loop reading the same stdin would lose its input silently.
+        sys.stderr.write(
+            f"note: sent {_size(piped)} of piped input after the prompt "
+            "(run with < /dev/null to send none)\n"
+        )
     else:
         prompt = args.print
 
@@ -150,8 +160,16 @@ def _private_home_folder() -> None:
         pass  # Cortex still runs; the files say why they cannot be written.
 
 
+# What -p holds when no prompt follows it.
+_NO_PROMPT = object()
+
+
 def main() -> None:
     _private_home_folder()
+    if sys.argv[1:2] == ["login"]:
+        from cortex.app.login_cli import run_login
+
+        raise SystemExit(run_login(sys.argv[2:]))
     try:
         parser = argparse.ArgumentParser(
             prog="cortex",
@@ -174,7 +192,10 @@ def main() -> None:
                 "Each -p run is a new conversation. Input piped to it is sent after\n"
                 "the prompt: git diff | cortex -p \"summarize this diff\".\n"
                 "\n"
-                "Exit codes: 0 done, 1 the turn failed, 2 a setup or usage error."
+                "Exit codes: 0 done, 1 the turn failed, 2 a setup or usage error.\n"
+                "\n"
+                "Save a key without the interactive app: cortex login PROVIDER [URL]\n"
+                "(it reads the key from stdin, or asks for it in a terminal)."
             ),
         )
         parser.add_argument(
@@ -189,6 +210,8 @@ def main() -> None:
             "-p",
             "--print",
             metavar="PROMPT",
+            nargs="?",
+            const=_NO_PROMPT,
             help="Run one agent turn headlessly, print the reply, and exit.",
         )
         parser.add_argument(
@@ -201,7 +224,20 @@ def main() -> None:
             action="store_true",
             help="Headless mode: auto-approve edits and shell commands.",
         )
+        # Words outside -p, kept to say where they belong.
+        parser.add_argument("stray", nargs="*", help=argparse.SUPPRESS)
         args = parser.parse_args()
+        stray = " ".join(args.stray)
+        if args.print is _NO_PROMPT:
+            if stray:
+                rest = " --full-auto" if args.full_auto else ""
+                rest += f" --model {args.model}" if args.model else ""
+                parser.error(f'-p takes the prompt right after it: cortex -p "{stray}"{rest}')
+            parser.error('-p needs a prompt, for example: cortex -p "fix the failing test"')
+        if stray and args.print is not None:
+            parser.error(f'quote the prompt, it is one argument: cortex -p "{args.print} {stray}"')
+        if stray:
+            parser.error(f'to run one prompt, put -p before it: cortex -p "{stray}"')
 
         if args.worker_stdio:
             _run_worker_stdio()

@@ -40,17 +40,49 @@ Runs one agent turn through the same worker wiring the TUI uses:
 - The assistant reply streams to **stdout**; tool activity and errors go to **stderr**, so stdout stays pipeable. stderr shows each call (`[tool] bash $ <command as typed>`, `[tool] read_file path=src/app.py`), how it ended, and each edit as a unified diff. A file a command changes (a `sed -i`, a script) is not diffed: run `git diff` after the step to see everything the run changed.
 - `--model` accepts the same `provider:model` selectors as `/model`.
 - Permission policy: reads (`read_file`, `list_dir`, `search`, `git`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt): the model is told so, along with the commands your saved rules allow, stderr shows `[tool] bash refused (needs --full-auto)`, and the run ends with a note saying how many calls were refused. Persisted rules from `~/.cortex/tool_permissions.yaml` still apply, so a command you allowed with "Allow always" in the app runs without `--full-auto` (see `tool_permissions.yaml` in the [Configuration Guide](configuration.md)).
-- stderr ends with the model that answered, as `answered by provider:model (verified)`.
+- stderr ends with the model that answered, as `answered by provider:model (verified)`, after any note. When a refused command is one a saved rule allows for another start directory, a note says so: a rule applies only when Cortex starts in the directory it was saved in (its `repo:`), not in a directory below it.
 - Exit codes: `0` success, `1` turn error (the provider refused the request, for example an unknown model name; the reply was cut off; ...), `2` setup error (no model selected, or model selection failed); setup errors start with `error:`. A turn whose edits or commands were refused still exits `0`; check stderr for the refusal note.
 - Without `--model`, the model last selected (in the TUI or by an earlier `--model`) is used; the first run needs `--model`. If that model cannot be used now (most often: its key is not set in this terminal), the run says why and exits `2`, and the model stays selected for the next run. A `--model` the provider refuses outright (an unknown model name, for example) is not remembered. `-p` is also available as `--print`.
-- `-p` needs a prompt: an empty one, or `--model`/`--full-auto` without `-p`, is a usage error (exit `2`) rather than starting the interactive app.
+- `-p` needs a prompt, right after it: an empty one, an option in its place (`-p --full-auto "..."`), words outside it, or `--model`/`--full-auto` without `-p` are usage errors (exit `2`) that show the command written correctly, rather than starting the interactive app.
 - Each run is a new conversation: it does not see earlier `-p` runs, so say everything the task needs in the prompt.
 - stdout gets the answer: when it goes to a pipe or a file, what the model writes before its tool calls ("I'll read the file first.") goes to stderr instead, so a script reads only the final reply. In a terminal everything streams as it is written.
-- Input piped to the run is sent after the prompt, so `git diff | cortex -p "summarize this diff"` works (up to 512 KB). `cortex -p -` reads the whole prompt from stdin. A stdin left open with nothing in it is ignored after 3 seconds, with a note on stderr; run with `< /dev/null` to skip that wait.
+- Input piped to the run is sent after the prompt, so `git diff | cortex -p "summarize this diff"` works (up to 512 KB), and stderr says how much was sent. `cortex -p -` reads the whole prompt from stdin. A stdin left open with nothing in it is ignored after 3 seconds, with a note on stderr; run with `< /dev/null` to skip that wait. In a loop that reads its own input, give each run `< /dev/null`, or the first run takes the rest of the loop's input: `ls src/*.js | while read -r f; do cortex -p "what does $f do" < /dev/null; done`.
 - Text the model writes after a tool call starts a new paragraph.
 - Slash commands are not run in headless mode, except `/<skill> request`. A prompt that starts with a command of the interactive app (`/model`, `/login`, `/update`, ...) is refused with exit code `2` and not sent to the model; any other text, `/` or not, is sent to the model as written.
 
 In CI, pass `--model` on every run: a fresh runner has no remembered model. Exit `0` means the turn finished, not that the task succeeded, so check the result yourself (re-run the tests, look at `git diff`); with `--full-auto` the model may change any file in the repository.
+
+### Saving a key without the interactive app
+
+```bash
+printf %s "$OPENAI_API_KEY" | cortex login openai          # the key from stdin
+cortex login openai-compatible https://llm.example.com/v1    # in a terminal: asks for the key
+```
+
+`cortex login PROVIDER [URL]` saves the key where `/login` does (the system keyring, else `~/.cortex/credentials.json`, readable only by you), so later `cortex -p` runs on that machine find it. It reads the key from stdin, or asks for it without showing it when run in a terminal; it never takes the key as an argument, which would keep it in shell history and process listings. `azure` takes its endpoint and `openai-compatible` its base URL, unless one is saved or set already. On a CI runner, a secret in the `*_API_KEY` variable is usually simpler.
+
+### A review that can fail a commit
+
+Exit codes say whether the run worked, not what the model found, so a check that passes or fails asks for a fixed last line and reads it. A git pre-commit hook:
+
+```bash
+#!/bin/sh
+# .git/hooks/pre-commit — block a commit the review finds a real bug in.
+reply=$(git diff --cached | cortex -p "Review this staged diff for real bugs only (not style).
+End with one last line, exactly VERDICT: BUG or VERDICT: OK." 2>>.git/cortex-review.log)
+status=$?
+if [ "$status" -ne 0 ]; then
+  echo "pre-commit: the review did not run (exit $status); see .git/cortex-review.log" >&2
+  exit 1                       # fail closed: no review, no commit
+fi
+printf '%s\n' "$reply"
+case "$(printf '%s\n' "$reply" | tail -n 1)" in
+  "VERDICT: OK") exit 0 ;;
+  *) echo "pre-commit: the review found a problem (commit with --no-verify to skip it)" >&2; exit 1 ;;
+esac
+```
+
+It fails closed: without a key or a model the review exits `2`, and the commit is stopped with the reason in the log, instead of going through unreviewed.
 
 Examples:
 

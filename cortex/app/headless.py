@@ -96,12 +96,38 @@ def _diff_text(diff: dict) -> str:
     return "\n".join(lines)
 
 
-def _headless_wording(message: str) -> str:
-    """A model refusal as a headless run says it: /login is a command of the
-    interactive app."""
-    return message.replace(
-        "Add a key with /login", "Add a key with /login in the interactive app (cortex)"
+def _refusal(selection: dict) -> str:
+    """Why a model cannot be used, as a headless run says it: a missing key is
+    saved with `cortex login` here, where /login is not at hand."""
+    missing = selection.get("missing_key")
+    if not isinstance(missing, dict):
+        return str(selection.get("message", ""))
+    login = f"cortex login {missing['provider']}"
+    if missing.get("url"):
+        login = f"{login} {missing['url']}"
+    return (
+        f"{missing['provider']} is not authenticated. Save a key with `{login}`, "
+        f"or set {missing['variables']}."
     )
+
+
+def _rules_elsewhere(manager, commands: list[str]) -> list[str]:
+    """For each refused command a saved rule allows when Cortex starts in
+    another directory, a note saying where: a rule applies only there."""
+    notes = []
+    for command in dict.fromkeys(commands):
+        for rule in manager.persisted_rules:
+            if (
+                rule.permission == "bash"
+                and rule.action == PermissionAction.ALLOW
+                and rule.repo not in ("", manager.repo)
+                and _GLOB_ESCAPE.sub(r"\1", rule.pattern) == command
+            ):
+                notes.append(
+                    f"note: a saved rule allows `{command}` when Cortex starts in {rule.repo}; "
+                    f"this run started in {manager.repo}"
+                )
+    return notes
 
 
 def _example_model(runtime) -> str:
@@ -141,6 +167,8 @@ class _Printer:
         self.line_open = False
         self.after_tool = False
         self.denied = 0  # tool calls the headless permission policy refused
+        self.refused_commands: list[str] = []  # the bash commands among them
+        self.inputs: dict[str, dict] = {}  # each call's arguments, by call id
         self.answer_only = not sys.stdout.isatty()
         self.pending: list[str] = []  # answer_only: text since the last tool call
 
@@ -187,11 +215,17 @@ class _Printer:
                 state = str(part.get("state", ""))
                 tool = str(part.get("tool", ""))
                 if state == "running":
-                    print(f"[tool] {tool} {_call_summary(tool, part.get('input', {}))}", file=sys.stderr)
+                    arguments = part.get("input") or {}
+                    self.inputs[str(part.get("call_id", ""))] = arguments
+                    summary = _call_summary(tool, arguments)
+                    print(f"[tool] {tool} {summary}".rstrip(), file=sys.stderr)
                 elif state == "error" or part.get("ok") is False:
                     error = str(part.get("error", ""))
                     if error.startswith(_REFUSED):
                         self.denied += 1
+                        command = self.inputs.get(str(part.get("call_id", "")), {}).get("command")
+                        if tool == "bash" and isinstance(command, str):
+                            self.refused_commands.append(command)
                         print(f"[tool] {tool} refused (needs --full-auto)", file=sys.stderr)
                     elif _EXIT_CODE.fullmatch(error):
                         code = error.split("=", 1)[1]
@@ -283,7 +317,7 @@ def run_headless(
             session_id=session_id, command=f"/model {model}"
         )
         if not bool(selection.get("ok")):
-            message = _headless_wording(str(selection.get("message", model)))
+            message = _refusal(selection) or model
             if message.startswith("Usage: /model"):
                 message = f"pass --model provider:model, for example {_example_model(runtime)}"
             print(f"error: {message}", file=sys.stderr)
@@ -295,7 +329,7 @@ def run_headless(
             # Remembered, but not usable now (most often: its key is not set here).
             provider, _, model_id = saved.partition(":")
             reason = runtime.model_service.select_cloud_model(provider=provider, model_id=model_id)
-            message = _headless_wording(str(reason.get("message", "")))
+            message = _refusal(reason)
             print(f"error: {saved} cannot be used: {message}", file=sys.stderr)
             return 2
         print(
@@ -315,10 +349,6 @@ def run_headless(
         emit_event=printer.event,
     )
     printer.finish()
-    served = runtime.model_service.last_turn_provenance
-    if served:
-        check = "verified" if served.get("verified") else "unverified"
-        print(f"answered by {served.get('label')} ({check})", file=sys.stderr)
     ok = bool(result.get("ok", True))
     if model and not ok and not (printer.wrote_text or printer.after_tool):
         for key, value in saved_state.items():
@@ -329,5 +359,12 @@ def run_headless(
             "pass --full-auto to allow edits and shell commands",
             file=sys.stderr,
         )
+        for note in _rules_elsewhere(manager, printer.refused_commands):
+            print(note, file=sys.stderr)
+    # Last, as the docs say: the model the answer came from.
+    served = runtime.model_service.last_turn_provenance
+    if served:
+        check = "verified" if served.get("verified") else "unverified"
+        print(f"answered by {served.get('label')} ({check})", file=sys.stderr)
 
     return 0 if ok else 1

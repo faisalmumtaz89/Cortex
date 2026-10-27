@@ -31,7 +31,7 @@ Runs on macOS (Apple Silicon or Intel), Linux (x86_64 or arm64), and Windows thr
 - In the interactive app, edits render as green/red diffs before they land.
 - Every reply is provenance-verified: it must come from the provider you picked — the model shown is the model that answered.
 - Skills give the model step-by-step instructions for kinds of task. Cortex ships five (`map-and-plan`, `reproduce-and-fix`, `safe-refactor`, `review-changes`, `commit-and-pr`), and you can add your own in `~/.cortex/skills/` or the project's `.cortex/skills/`. The model loads one when a request matches it, or you run one with `/<skill> request`. See [Skills](docs/cli.md#skills).
-- Headless mode for scripts and CI: `cortex -p "fix the failing test" --model openai:gpt-5.5 --full-auto` (the model is remembered for later runs on the same machine; in CI, pass `--model` every time).
+- Headless mode for scripts and CI: `cortex -p "fix the failing test" --model openai:gpt-5.5 --full-auto` (the model is remembered for later runs on the same machine; in CI, pass `--model` every time). Save a key there without the interactive app with `cortex login PROVIDER`.
 
 ## Commands
 
