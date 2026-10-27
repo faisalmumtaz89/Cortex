@@ -70,7 +70,6 @@ auto_update_check: true      # false: no daily check for a new release
   - `edit`: read-only + `edit_file`, `write_file` (the legacy value `patch` is accepted as an alias)
   - `full`: edit + `bash`
 - `tools_max_iterations` (default: `100`, at most `1000`) — model requests one turn may make while it uses tools. A turn that reaches the limit stops with a message naming it; its tool calls and results stay in the conversation, so a new message lets the model continue.
-- `tools_continue_on_reject` (default: `false`) — not read.
 
 ### Inference
 
@@ -91,23 +90,21 @@ auto_update_check: true      # false: no daily check for a new release
 - `auto_save` (default: `true`) — persist conversations to `~/.cortex/conversations/conversations.db`.
 - `save_directory` (default: `~/.cortex/conversations`)
 - `max_conversation_history` (default: `100`).
-- `save_format` (default: `json`) and `enable_branching` (default: `true`) — not read.
 
 ### Logging
 
 - `log_level` (default: `INFO`)
 - `log_file` (default: `~/.cortex/cortex.log`)
-- `log_rotation`, `max_log_size`, `performance_logging` — accepted, advisory.
 
 ### Updates
 
 - `auto_update_check` (default: `true`) — once a day, the worker checks GitHub for a new Cortex release (a single redirect probe, in a background thread that never blocks startup) and posts a one-line notice at session start when an update exists. Set `auto_update_check: false` to opt out. `/update` always works regardless of this setting. The last check result is cached in `~/.cortex/update-check.json`.
 
-### UI / System / Developer / Paths
+### Developer
 
-Accepted but not read: `ui_theme`, `markdown_rendering`, `syntax_highlighting`, `show_performance_metrics`, `auto_scroll`, `copy_on_select`, `mouse_support`, `shutdown_timeout`, `crash_recovery`, `templates_dir`, `plugins_dir`.
+- `debug_mode` (default: `false`) — also writes the log to stderr.
 
-`debug_mode: true` also writes the log to stderr.
+A setting earlier versions accepted without acting on it (`ui_theme`, `save_format`, `log_rotation`, `tools_continue_on_reject` and others) is named in the startup notice as having no effect, so you can delete it from `config.yaml`.
 
 ## Notes
 

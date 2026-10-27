@@ -35,39 +35,21 @@ class ToolsConfig(BaseModel):
     tools_enabled: bool = True
     tools_profile: Literal["off", "read_only", "edit", "full"] = "full"
     tools_max_iterations: int = Field(default=100, ge=1, le=1000)
-    tools_continue_on_reject: bool = False
 
-
-class UIConfig(BaseModel):
-    """UI configuration."""
-    ui_theme: str = Field(default="default")
-    syntax_highlighting: bool = True
-    markdown_rendering: bool = True
-    show_performance_metrics: bool = True
-    auto_scroll: bool = True
-    copy_on_select: bool = True
-    mouse_support: bool = True
 
 class LoggingConfig(BaseModel):
     """Logging configuration."""
     log_level: str = Field(default="INFO")
     log_file: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "cortex.log")
-    log_rotation: str = Field(default="daily")
-    max_log_size: str = Field(default="100MB")
-    performance_logging: bool = True
 
 class ConversationConfig(BaseModel):
     """Conversation settings."""
     auto_save: bool = True
-    save_format: str = Field(default="json")
     save_directory: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "conversations")
     max_conversation_history: int = Field(default=100, ge=1)
-    enable_branching: bool = True
 
 class SystemConfig(BaseModel):
     """System settings."""
-    shutdown_timeout: int = Field(default=5, ge=1)
-    crash_recovery: bool = True
     # Daily release check for Cortex (opt-out). Consumed by the
     # worker runtime; failures are silent and startup never waits on it.
     auto_update_check: bool = True
@@ -76,28 +58,29 @@ class DeveloperConfig(BaseModel):
     """Developer settings."""
     debug_mode: bool = False
 
-class PathsConfig(BaseModel):
-    """Path configuration."""
-    templates_dir: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "templates")
-    plugins_dir: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "plugins")
-
 _SECTIONS: Dict[str, Type[BaseModel]] = {
     "inference": InferenceConfig,
     "cloud": CloudConfig,
     "tools": ToolsConfig,
-    "ui": UIConfig,
     "logging": LoggingConfig,
     "conversation": ConversationConfig,
     "system": SystemConfig,
     "developer": DeveloperConfig,
-    "paths": PathsConfig,
 }
 
 
-# Settings Cortex does not read, with what to use instead.
+# Settings earlier versions accepted without acting on them: one still in a
+# config file is named once at startup, so it can be deleted.
+_NO_EFFECT = frozenset({
+    "auto_scroll", "copy_on_select", "crash_recovery", "enable_branching", "log_rotation",
+    "markdown_rendering", "max_log_size", "mouse_support", "performance_logging",
+    "plugins_dir", "save_format", "show_performance_metrics", "shutdown_timeout",
+    "syntax_highlighting", "templates_dir", "tools_continue_on_reject", "ui_theme",
+})
 _RETIRED = {
-    "tools_idle_timeout_seconds": "not read; cloud_timeout_seconds sets the request "
+    "tools_idle_timeout_seconds": "it has no effect; cloud_timeout_seconds sets the request "
     "timeout, and a permission prompt waits for your answer",
+    **{key: "it has no effect in Cortex, and can be deleted" for key in _NO_EFFECT},
 }
 
 
@@ -119,12 +102,10 @@ class Config:
         self.inference: InferenceConfig
         self.cloud: CloudConfig
         self.tools: ToolsConfig
-        self.ui: UIConfig
         self.logging: LoggingConfig
         self.conversation: ConversationConfig
         self.system: SystemConfig
         self.developer: DeveloperConfig
-        self.paths: PathsConfig
 
         self.load()
         self._load_state()

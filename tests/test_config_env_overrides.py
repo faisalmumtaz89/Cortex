@@ -79,3 +79,19 @@ def test_retired_and_meaningless_settings_are_reported(tmp_path: Path) -> None:
     assert config.tools.tools_enabled is True
     assert any("cloud_timeout_seconds sets the request" in warning for warning in config.warnings)
     assert any("Ignored tools_enabled: 'maybe'" in warning for warning in config.warnings)
+
+
+def test_a_setting_that_does_nothing_is_named_so_it_can_be_deleted(tmp_path: Path) -> None:
+    """Settings earlier versions accepted without acting on them are gone;
+    a config file that still sets one keeps working and says which."""
+    path = tmp_path / "config.yaml"
+    path.write_text("ui_theme: dark\nsave_format: json\nmax_tokens: 1000\n")
+
+    config = Config(config_path=path)
+
+    assert config.inference.max_tokens == 1000
+    assert sorted(config.warnings) == [
+        f"Ignored save_format in {path}: it has no effect in Cortex, and can be deleted",
+        f"Ignored ui_theme in {path}: it has no effect in Cortex, and can be deleted",
+    ]
+    assert not hasattr(config, "ui") and not hasattr(config, "paths")
