@@ -44,6 +44,7 @@ Runs one agent turn through the same worker wiring the TUI uses:
 - Without `--model`, the model last selected (in the TUI or by an earlier `--model`) is used; the first run needs `--model`. If that model cannot be used now (most often: its key is not set in this terminal), the run says why and exits `2`, and the model stays selected for the next run. A `--model` the provider refuses outright (an unknown model name, for example) is not remembered. `-p` is also available as `--print`.
 - `-p` needs a prompt: an empty one, or `--model`/`--full-auto` without `-p`, is a usage error (exit `2`) rather than starting the interactive app.
 - Each run is a new conversation: it does not see earlier `-p` runs, so say everything the task needs in the prompt.
+- Input piped to the run is sent after the prompt, so `git diff | cortex -p "summarize this diff"` works (up to 512 KB). `cortex -p -` reads the whole prompt from stdin. A stdin left open with nothing in it is ignored after 3 seconds, with a note on stderr; run with `< /dev/null` to skip that wait.
 - Text the model writes after a tool call starts a new paragraph.
 - Slash commands are not run in headless mode, except `/<skill> request`. A prompt that starts with a command of the interactive app (`/model`, `/login`, `/update`, ...) is refused with exit code `2` and not sent to the model; any other text, `/` or not, is sent to the model as written.
 

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Callable, Dict, cast
 
 from cortex.app.command_output import format_auth_status, format_status_summary
 from cortex.app.model_service import LOGIN_URL_ARGUMENT
 from cortex.cloud.types import CloudProvider
+
+logger = logging.getLogger(__name__)
 
 _CLOUD_LOGIN_PROVIDERS = {"openai", "anthropic", "azure", "openai-compatible"}
 _MODEL_USAGE = "Usage: /model <provider>:<model> (example: /model openai:gpt-5.5)"
@@ -96,10 +99,12 @@ class CommandService:
         if action in {"", "status"}:
             return cast(Dict[str, object], self.update_service.status_report())
         if action == "cortex":
-            return cast(
+            result = cast(
                 Dict[str, object],
                 self.update_service.update_cortex(progress_callback=progress_callback),
             )
+            logger.info("/update cortex: %s", result.get("message", ""))
+            return result
         return {"ok": False, "message": "Usage: /update [cortex]"}
 
     # ---- dispatch ---------------------------------------------------------------

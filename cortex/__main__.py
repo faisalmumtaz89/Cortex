@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import select
 import stat
 import sys
 import tempfile
@@ -68,12 +69,52 @@ def _run_worker_stdio() -> None:
     runtime.run()
 
 
+# How long a run waits for piped input to start, and how much it takes.
+_STDIN_WAIT_SECONDS = 3.0
+_STDIN_LIMIT = 512 * 1024
+
+
+def _piped_input() -> str:
+    """What was piped to this run ("" if nothing). A pipe left open with
+    nothing in it is not waited for past _STDIN_WAIT_SECONDS."""
+    stream = sys.stdin
+    if stream is None or stream.isatty():
+        return ""
+    try:
+        ready = select.select([stream], [], [], _STDIN_WAIT_SECONDS)[0]
+    except (OSError, ValueError):
+        return ""
+    if not ready:
+        sys.stderr.write(
+            f"note: stdin sent nothing for {_STDIN_WAIT_SECONDS:g}s; not reading it "
+            "(run with < /dev/null to skip the wait)\n"
+        )
+        return ""
+    data = stream.buffer.read(_STDIN_LIMIT + 1)
+    if len(data) > _STDIN_LIMIT:
+        print(f"note: only the first {_STDIN_LIMIT // 1024} KB of stdin are sent", file=sys.stderr)
+        data = data[:_STDIN_LIMIT]
+    return data.decode("utf-8", errors="replace")
+
+
 def _run_headless(args) -> None:
     from cortex.app.headless import run_headless
 
+    piped = _piped_input()
+    if args.print == "-":
+        # `cortex -p -`: the prompt itself comes from stdin.
+        prompt = piped
+        if not prompt.strip():
+            sys.stderr.write('error: -p - reads the prompt from stdin, and stdin was empty\n')
+            raise SystemExit(2)
+    elif piped.strip():
+        prompt = f"{args.print}\n\nInput piped to this run:\n{piped}"
+    else:
+        prompt = args.print
+
     components = _build_components()
     exit_code = run_headless(
-        prompt=args.print,
+        prompt=prompt,
         components=components,
         model=args.model,
         full_auto=args.full_auto,
@@ -130,7 +171,8 @@ def main() -> None:
                 "  openai:gpt-5.5\n"
                 "  openai-compatible:deepseek/deepseek-v4.1-flash\n"
                 "\n"
-                "Each -p run is a new conversation."
+                "Each -p run is a new conversation. Input piped to it is sent after\n"
+                "the prompt: git diff | cortex -p \"summarize this diff\"."
             ),
         )
         parser.add_argument(

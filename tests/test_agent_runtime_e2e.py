@@ -1761,6 +1761,7 @@ def test_headless_shows_why_the_provider_refused_and_keeps_the_saved_model(
 
     assert refused.returncode == 1, refused.stderr
     assert "model not allowed: 'typo-model'" in refused.stderr, refused.stderr
+    assert "Check the model name" in refused.stderr, refused.stderr
     assert "(key from OPENAI_COMPATIBLE_API_KEY)" in refused.stderr, refused.stderr
     # A model the provider refused is not remembered for the next run.
     assert later.returncode == 2, later.stderr
@@ -1802,6 +1803,71 @@ def test_headless_asks_only_for_the_key_once_the_base_url_is_saved(
     assert "OPENAI_COMPATIBLE_API_KEY" in process.stderr, process.stderr
     assert "OPENAI_COMPATIBLE_BASE_URL" not in process.stderr, process.stderr
     assert "<base_url>" not in process.stderr, process.stderr
+
+
+def _gateway_run(tmp_path: Path, repo: Path, args: list, **popen) -> tuple:
+    server = ChatCompletionsServer([{"text": "Summary."}])
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    command = [sys.executable, "-P", "-m", "cortex", *args,
+               "--model", "openai-compatible:test-model"]
+    try:
+        process = subprocess.run(command, cwd=repo, env=env, capture_output=True, text=True,
+                                 timeout=120, **popen)
+    finally:
+        server.close()
+    user = [m for m in server.requests[0]["messages"] if m["role"] == "user"] if server.requests else []
+    return process, str(user[-1]["content"]) if user else ""
+
+
+def test_headless_reports_a_command_that_exits_non_zero_as_such(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """Failing tests are the command's result, not a Cortex failure."""
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": "exit 3"}}]},
+          {"text": "The tests failed."}]],
+    )
+    process = _run_headless(cwd=scratch_repo, env=_worker_env(tmp_path, script),
+                            prompt="run the tests", extra_args=["--full-auto"])
+    assert process.returncode == 0, process.stderr
+    assert "[tool] bash exited with code 3" in process.stderr, process.stderr
+    assert "failed: exit_code" not in process.stderr, process.stderr
+
+
+def test_headless_reads_what_is_piped_to_it(tmp_path: Path, scratch_repo: Path) -> None:
+    """`git diff | cortex -p "summarize this"` sends the diff with the prompt."""
+    piped = "diff --git a/src/app.py b/src/app.py\n-    return 1\n+    return 2\n"
+    process, sent = _gateway_run(tmp_path, scratch_repo, ["-p", "summarize this diff"],
+                                 input=piped)
+    assert process.returncode == 0, process.stderr
+    assert sent.startswith("summarize this diff"), sent
+    assert "+    return 2" in sent, sent
+
+
+def test_headless_prompt_dash_reads_the_prompt_from_stdin(tmp_path: Path, scratch_repo: Path) -> None:
+    process, sent = _gateway_run(tmp_path, scratch_repo, ["-p", "-"],
+                                 input="explain src/app.py\n")
+    assert process.returncode == 0, process.stderr
+    assert sent.strip() == "explain src/app.py", sent
+
+
+def test_headless_does_not_wait_for_an_open_stdin_that_sends_nothing(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A script that leaves stdin open (an unused pipe) must not hang the run."""
+    read_fd, write_fd = os.pipe()
+    try:
+        process, sent = _gateway_run(tmp_path, scratch_repo, ["-p", "say hi"], stdin=read_fd)
+    finally:
+        os.close(write_fd)
+        os.close(read_fd)
+    assert process.returncode == 0, process.stderr
+    assert sent == "say hi", sent
+    assert "stdin" in process.stderr, process.stderr
 
 
 def test_login_works_without_a_system_keyring(tmp_path: Path, scratch_repo: Path) -> None:

@@ -184,4 +184,8 @@ def _describe_failure(exc: Exception) -> str:
         standard = ""
     if reason and reason != standard and reason.lower() not in text.lower():
         text = f"{text} ({reason})"
+    if getattr(response, "status_code", None) in (403, 404):
+        # The usual cause: a model name the provider does not know, or one
+        # this key may not use.
+        text = f"{text}. Check the model name and that your key may use it."
     return text

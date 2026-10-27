@@ -24,6 +24,7 @@ _REFUSED = (
     "Not allowed: this headless run (cortex -p) allows edits and shell commands only "
     "with --full-auto."
 )
+_EXIT_CODE = re.compile(r"exit_code=-?\d+")  # a command that ran and exited non-zero
 _GLOB_ESCAPE = re.compile(r"\[([*?\[])\]")  # how "Allow always" escapes a wildcard
 _MODEL_STATE_KEYS = ("last_used_cloud_provider", "last_used_cloud_model", "selected_models")
 
@@ -115,6 +116,9 @@ class _Printer:
                     if error.startswith(_REFUSED):
                         self.denied += 1
                         print(f"[tool] {tool} refused (needs --full-auto)", file=sys.stderr)
+                    elif _EXIT_CODE.fullmatch(error):
+                        code = error.split("=", 1)[1]
+                        print(f"[tool] {tool} exited with code {code}", file=sys.stderr)
                     else:
                         print(f"[tool] {tool} failed: {error}", file=sys.stderr)
                 elif state == "completed":
