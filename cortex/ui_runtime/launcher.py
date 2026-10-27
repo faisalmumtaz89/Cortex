@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -159,16 +160,44 @@ def launch_tui() -> int:
     env[USER_TMPDIR_VARIABLE] = os.environ.get("TMPDIR", "")
     env["TMPDIR"] = str(sidecar_tmp)
     try:
-        return _run_sidecar(command, env)
+        for attempt in (1, 2):
+            started = time.monotonic()
+            # The screen belongs to the app; what the sidecar writes to stderr
+            # is shown only when it fails for good.
+            with tempfile.TemporaryFile(dir=sidecar_tmp) as errors:
+                code = _run_sidecar(command, env, stderr=errors)
+                errors.seek(0)
+                output = errors.read().decode("utf-8", errors="replace")
+            crashed_at_start = (
+                code > 0
+                and code not in _SIGNAL_EXITS
+                and time.monotonic() - started < _STARTUP_SECONDS
+            )
+            if attempt == 1 and crashed_at_start:
+                continue
+            if code != 0 and output:
+                sys.stderr.write(output)
+                sys.stderr.flush()
+            return code
+        return code
     finally:
         shutil.rmtree(sidecar_tmp, ignore_errors=True)
 
 
-def _run_sidecar(command: list[str], env: dict) -> int:
+# Now and then the bundled runtime fails while it loads (a WebAssembly trap
+# in OpenTUI's layout engine), before drawing anything: a sidecar that fails
+# this soon after starting is started once more.
+_STARTUP_SECONDS = 5.0
+# Exits that mean the user or the terminal ended it: never retried.
+_SIGNAL_EXITS = frozenset({129, 130, 143})
+
+
+def _run_sidecar(command: list[str], env: dict, stderr=None) -> int:
     process = subprocess.Popen(
         command,
         cwd=str(_repo_root()),
         env=env,
+        stderr=stderr,
     )
     try:
         return process.wait()

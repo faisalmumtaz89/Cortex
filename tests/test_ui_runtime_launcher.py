@@ -176,3 +176,56 @@ def test_sidecar_temp_folders_of_dead_launchers_are_removed(tmp_path, monkeypatc
     assert not dead.exists()
     assert live.exists()
     assert created.parent == tmp_path and created.name.startswith(f"cortex-tui-{os.getpid()}-")
+
+
+def _flaky_sidecar(tmp_path: Path, *, fails: int, delay: float = 0.0) -> Path:
+    """A stand-in sidecar that crashes the first `fails` times it starts."""
+    runs = tmp_path / "runs"
+    return _make_executable(
+        tmp_path / "sidecar.sh",
+        (
+            "#!/bin/sh\n"
+            f"echo run >> {runs}\n"
+            f"sleep {delay}\n"
+            f'[ "$(wc -l < {runs})" -gt {fails} ] && exit 0\n'
+            'echo "RuntimeError: access to a null reference" >&2\n'
+            "exit 1\n"
+        ).encode(),
+    )
+
+
+def _launch(tmp_path, monkeypatch, sidecar: Path) -> int:
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(launcher, "_candidate_command", lambda: [str(sidecar)])
+    return launcher.launch_tui()
+
+
+def _runs(tmp_path: Path) -> int:
+    return len((tmp_path / "runs").read_text().splitlines())
+
+
+def test_a_sidecar_that_crashes_at_startup_is_started_once_more(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Now and then the bundled runtime fails while it loads; the user should
+    get the app, not that runtime's stack trace."""
+    assert _launch(tmp_path, monkeypatch, _flaky_sidecar(tmp_path, fails=1)) == 0
+    assert _runs(tmp_path) == 2
+    assert "null reference" not in capsys.readouterr().err
+
+
+def test_a_sidecar_that_keeps_failing_shows_its_error(tmp_path, monkeypatch, capsys) -> None:
+    assert _launch(tmp_path, monkeypatch, _flaky_sidecar(tmp_path, fails=5)) == 1
+    assert _runs(tmp_path) == 2
+    assert "null reference" in capsys.readouterr().err
+
+
+def test_a_sidecar_that_fails_after_starting_is_not_started_again(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(launcher, "_STARTUP_SECONDS", 0.2)
+    assert _launch(tmp_path, monkeypatch, _flaky_sidecar(tmp_path, fails=5, delay=0.5)) == 1
+    assert _runs(tmp_path) == 1
+    assert "null reference" in capsys.readouterr().err
