@@ -54,6 +54,9 @@ def iter_rel_entries(root: Path, target: Path) -> Iterable[str]:
         yield f"{rel}{suffix}"
 
 
+_NOT_WALKED = frozenset({".git"})
+
+
 def walk_rel_entries(root: Path, target: Path, *, max_depth: int):
     base_depth = len(target.relative_to(root).parts)
     for dirpath, dirnames, filenames in os.walk(target):
@@ -66,6 +69,8 @@ def walk_rel_entries(root: Path, target: Path, *, max_depth: int):
         for dirname in sorted(dirnames):
             rel = (current / dirname).relative_to(root)
             yield f"{rel}/"
+        # Named, not walked: git's own objects and hooks.
+        dirnames[:] = [name for name in dirnames if name not in _NOT_WALKED]
 
         for filename in sorted(filenames):
             rel = (current / filename).relative_to(root)

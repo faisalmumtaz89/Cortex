@@ -3,6 +3,7 @@ import { For, Show } from "solid-js"
 import type { DiffData } from "../context/store"
 import { createFadeIn, createMinDwell, mixRgba } from "../lib/animation"
 import { displayPath } from "../lib/paths"
+import { shellSummary } from "../lib/shell_summary"
 import { spinnerFrame } from "../lib/spinner"
 import { terminalColumns } from "../lib/terminal_size"
 import { DiffView } from "./diff_view"
@@ -39,37 +40,6 @@ function truncatePath(path: string, max: number): string {
   return path.length > max ? `…${path.slice(path.length - max + 1)}` : path
 }
 
-/** First pipeline stage of a shell command, quote-aware: `git status && …`
- * reads as `git status …`. Chains of &&/|/; are execution detail — the first
- * stage identifies the action without the punctuation soup. */
-function firstShellStage(command: string): string {
-  let quote: string | undefined
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i]
-    if (quote) {
-      if (ch === quote) {
-        quote = undefined
-      } else if (ch === "\\" && quote === '"') {
-        i += 1 // escapes only apply inside double quotes
-      }
-      continue
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch
-      continue
-    }
-    if (ch === "\\") {
-      i += 1
-      continue
-    }
-    if (ch === "|" || ch === ";" || ch === "&") {
-      const stage = command.slice(0, i).trim()
-      return stage ? `${stage} …` : command
-    }
-  }
-  return command
-}
-
 /** Path budget for the headline, derived from the live terminal width (minus
  * the ◆/verb/()/·hint/rail overhead) and capped so it stays compact when wide. */
 function pathBudget(): number {
@@ -85,7 +55,7 @@ export function toolCallSummary(tool: string, input?: Record<string, unknown>): 
   const budget = pathBudget()
   switch (tool) {
     case "bash":
-      return truncate(firstShellStage(String(args.command ?? "")))
+      return truncate(shellSummary(String(args.command ?? "")))
     case "read_file":
       return truncatePath(path, budget)
     case "list_dir":

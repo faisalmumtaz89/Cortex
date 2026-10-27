@@ -576,6 +576,19 @@ def test_edits_keep_the_owner_and_hard_links_and_refuse_read_only_files(
         assert locked.read_text() == "one\n"
 
 
+def test_a_recursive_listing_does_not_go_into_git_internals(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """`.git` holds hooks and objects the model never needs: the listing names
+    it but does not walk into it."""
+    subprocess.run(["git", "init", "-q"], cwd=scratch_repo, check=True)
+    [result] = _tool_results(tmp_path, scratch_repo, [("list_dir", {"path": ".", "recursive": True})])
+    output = str(result.get("output", ""))
+    assert ".git/" in output, output
+    assert "src/app.py" in output, output
+    assert ".git/hooks" not in output and ".git/HEAD" not in output, output
+
+
 def test_read_file_reads_only_up_to_the_range(tmp_path: Path, scratch_repo: Path) -> None:
     (scratch_repo / "log.txt").write_bytes(b"l1\nl2\nl3\n\xffbroken later\n")
     (result,) = _tool_results(
