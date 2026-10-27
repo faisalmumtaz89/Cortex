@@ -135,7 +135,7 @@ export function CommandResultPanel(props: { command: string; ok: boolean; text: 
         <box flexDirection="column" flexShrink={0} marginTop={1}>
           <For each={shown()}>{(line) => <text fg={UI_PALETTE.text}>{line}</text>}</For>
           <Show when={overflow() > 0}>
-            <text fg={UI_PALETTE.textMuted}>{`… (+${overflow()} lines)`}</text>
+            <text fg={UI_PALETTE.textMuted}>{`… +${overflow()} more lines: make the window taller to see them`}</text>
           </Show>
         </box>
       </Show>

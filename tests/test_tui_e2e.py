@@ -748,8 +748,10 @@ def test_openai_compatible_login_takes_the_base_url_and_needs_no_restart(tui_pro
     assert "❯ openai-compatible:… type a model name" in picker, picker
     session.send_key("Enter")
     session.wait_until(
-        lambda frame: "Select a model" not in frame and "/model openai-compatible:" in frame,
-        description="the prompt prefilled with /model openai-compatible:",
+        lambda frame: "Select a model" not in frame
+        and "/model openai-compatible:" in frame
+        and "Type the model name as your endpoint calls it" in frame,
+        description="the prompt prefilled with /model openai-compatible: and what to type",
         timeout=10,
     )
     session.send_line("deepseek/deepseek-v4.1-flash")
@@ -767,6 +769,17 @@ def test_openai_compatible_login_takes_the_base_url_and_needs_no_restart(tui_pro
     )
     assert "openai-compatible:deepseek/deepseek-v4.1-flash" in picker
     assert "/model provider:model" in picker  # how to pick a model the list lacks
+    session.send_key("Escape")
+    time.sleep(0.8)
+
+    # Logging in again: the saved URL is used, so only the key is asked for.
+    session.send_key("/login openai-compatible ")
+    hint = session.wait_until(
+        lambda frame: "[base_url]" in frame and "the saved URL is used" in frame,
+        description="the /login hint with the base URL optional",
+        timeout=10,
+    )
+    assert "<base_url>" not in hint
 
 
 def test_bare_login_opens_provider_picker_and_prefills_key_prompt(tui_project) -> None:
@@ -961,6 +974,27 @@ def test_permission_modal_shows_every_line_of_a_command(tui_project) -> None:
     assert not (project / "HIDDEN.txt").exists()
 
 
+def test_permission_modal_shows_a_long_command_whole_when_it_fits(tui_project) -> None:
+    """A command of a few hundred characters fills the free rows instead of
+    hiding its middle; seen in full, the prompt starts on Allow once."""
+    project, start = tui_project
+    command = "python3 -c \"" + "".join(f"x{i} = {i}; " for i in range(80)) + "print('END')\""
+    session = start(
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+          {"text": "DONE_MARKER"}]]
+    )
+    _select_scripted_model(session)
+    session.send_line("run it")
+
+    modal = session.wait_for("Permission required")
+    assert "characters not shown" not in modal, modal
+    flat = "".join(line.strip().lstrip("┃").strip() for line in modal.splitlines())
+    assert "x40 = 40;" in flat and "print('END')" in flat, modal
+    assert "❯ Allow once" in modal
+    session.send_key("Escape")
+    session.wait_for("DONE_MARKER")
+
+
 def test_permission_modal_for_a_command_too_long_to_show_starts_on_reject(tui_project) -> None:
     project, start = tui_project
     command = "echo " + "A" * 9000 + "; touch LONG.txt"
@@ -974,7 +1008,9 @@ def test_permission_modal_for_a_command_too_long_to_show_starts_on_reject(tui_pr
     session.send_line("run it")
 
     modal = session.wait_for("Permission required")
-    assert "characters not shown⟩" in modal
+    # The kept text fills the free rows, so the marker can wrap.
+    flat = "".join(line.strip().lstrip("┃").strip() for line in modal.splitlines())
+    assert "characters not shown⟩" in flat, modal
     assert "touch LONG.txt" in modal
     assert "❯ Reject" in modal
     session.send_key("Enter")
@@ -1439,3 +1475,10 @@ def test_help_with_a_long_transcript_keeps_the_prompt_and_every_row_readable(
     assert not [line for line in frame.splitlines() if "◆" in line and "⎿" in line], frame
     # A skill shows one sentence, not the paragraph written for the model.
     assert "Not for only explaining an error" not in frame, frame
+
+    # On a small window the rows that do not fit are counted, with the way to
+    # see them, and the prompt stays.
+    subprocess.run(["tmux", "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
+                   check=True)
+    small = session.wait_for("make the window taller to see them", timeout=10)
+    assert "Ask Cortex" in small, small

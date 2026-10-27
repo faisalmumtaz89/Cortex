@@ -76,12 +76,40 @@ const LOGIN_URL_ARGUMENT: Record<string, { hint: string; example: string }> = {
 }
 
 /** The arg hint for an input in ARG-HINT mode; /login's depends on the provider typed. */
-export function argHintFor(command: SlashCommand, input: string): SlashCommand {
+// What to type after "/model <provider>:" for providers whose models you name.
+const NAMED_MODEL_HINT: Record<string, { argHint: string; description: string }> = {
+  "openai-compatible": {
+    argHint: "openai-compatible:<model>",
+    description: "Type the model name as your endpoint calls it, e.g. deepseek/deepseek-v4.1-flash",
+  },
+  azure: {
+    argHint: "azure:<deployment>",
+    description: "Type the name of your Azure OpenAI deployment",
+  },
+}
+
+export function argHintFor(
+  command: SlashCommand,
+  input: string,
+  urlSaved: (provider: string) => boolean = () => false,
+): SlashCommand {
+  if (command.name === "model") {
+    const provider = (input.trim().split(/\s+/)[1] ?? "").toLowerCase().split(":")[0] ?? ""
+    const hint = NAMED_MODEL_HINT[provider]
+    return hint ? { ...command, ...hint } : command
+  }
   if (command.name !== "login") {
     return command
   }
   const provider = input.trim().split(/\s+/)[1]?.toLowerCase() ?? ""
   const url = LOGIN_URL_ARGUMENT[provider]
+  if (url && urlSaved(provider)) {
+    return {
+      ...command,
+      argHint: `${provider} <api_key> [${url.hint.replace(/[<>]/g, "")}]`,
+      description: "Paste the key and press Enter: the saved URL is used (add one to change it)",
+    }
+  }
   if (url) {
     return {
       ...command,

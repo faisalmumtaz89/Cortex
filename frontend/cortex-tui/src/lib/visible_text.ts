@@ -8,9 +8,10 @@
  *   function's own markers become escapes like `\n` or `\u{202e}`.
  * - A run of 8 or more whitespace, invisible or combining characters becomes
  *   a count.
- * - Text longer than SHOWN_CHARS keeps its start and end, cut at whole
- *   characters, with a count of the characters in between; `shownInFull`
- *   then returns false, and the prompt starts on Reject. */
+ * - Text longer than `limit` characters (SHOWN_CHARS unless the screen has
+ *   room for more) keeps its start and end, cut at whole characters, with a
+ *   count of the characters in between; `shownInFull` then returns false,
+ *   and the prompt starts on Reject. */
 const BLANK = String.raw`\s\p{Zs}\p{Zl}\p{Zp}\p{Cf}\p{M}\p{Default_Ignorable_Code_Point}ᅟᅠ⠀ㅤﾠ`
 const ESCAPE = String.raw`\\\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Zs}\p{Default_Ignorable_Code_Point}ᅟᅠ⠀ㅤﾠ⟨⟩`
 const TOKEN = new RegExp(`([${BLANK}]{8,})|([${ESCAPE}])`, "gu")
@@ -32,15 +33,15 @@ function escaped(text: string): string[] {
   return [...shown]
 }
 
-/** Whether `visibleText(text)` shows all of `text`. */
-export function shownInFull(text: string): boolean {
-  return escaped(text).length <= SHOWN_CHARS
+/** Whether `visibleText(text, limit)` shows all of `text`. */
+export function shownInFull(text: string, limit = SHOWN_CHARS): boolean {
+  return escaped(text).length <= limit
 }
 
-export function visibleText(text: string): string {
+export function visibleText(text: string, limit = SHOWN_CHARS): string {
   const chars = escaped(text)
-  if (chars.length <= SHOWN_CHARS) return chars.join("")
-  const half = SHOWN_CHARS / 2
+  if (chars.length <= limit) return chars.join("")
+  const half = Math.floor(limit / 2)
   const hidden = chars.length - 2 * half
   return `${chars.slice(0, half).join("")} ⟨${hidden} characters not shown⟩ ${chars.slice(-half).join("")}`
 }

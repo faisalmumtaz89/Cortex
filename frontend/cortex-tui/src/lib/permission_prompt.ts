@@ -2,7 +2,7 @@
 // store decides the prompt's starting choice from exactly these lines, so
 // Enter never approves a call whose text the user could not see.
 import { displayPath } from "./paths"
-import { shownInFull, visibleText } from "./visible_text"
+import { SHOWN_CHARS, shownInFull, visibleText } from "./visible_text"
 
 export type PermissionPrompt = {
   permission: string
@@ -70,20 +70,40 @@ function columnsAtMost(text: string): number {
   return count
 }
 
-/** Whether the prompt shows all of the call and fits on screen, with
- * `extraRows` taken by other lines (queued messages). */
+/** The prompt's lines as drawn on a screen this size, with `extraRows`
+ * taken by other lines (queued messages), and whether they show all of the
+ * call and fit. A long command keeps as much as the free rows hold, never
+ * less than SHOWN_CHARS characters. */
+export function permissionShown(
+  pending: PermissionPrompt,
+  columns: number,
+  rows: number,
+  extraRows = 0,
+): { lines: string[]; full: boolean } {
+  const raw = permissionLines(pending)
+  const width = Math.max(10, columns - 4)
+  const rowsPerLine = Math.floor((rows - PROMPT_ROWS - RESERVED_ROWS - extraRows) / raw.length)
+  let full = true
+  const lines = raw.map((line) => {
+    // A wide character can take two columns: plan for it when there are any.
+    const perColumn = columnsAtMost(line) > [...line].length ? 2 : 1
+    const limit = Math.max(SHOWN_CHARS, Math.floor(((rowsPerLine - 1) * width) / perColumn))
+    full &&= shownInFull(line, limit)
+    return visibleText(line, limit)
+  })
+  const textRows = lines
+    // One row more per line: wrapping at word breaks can leave rows short.
+    .map((line) => Math.ceil(columnsAtMost(line) / width) + 1)
+    .reduce((sum, count) => sum + count, 0)
+  return { lines, full: full && textRows + PROMPT_ROWS + RESERVED_ROWS + extraRows <= rows }
+}
+
+/** Whether the prompt shows all of the call and fits on screen. */
 export function permissionShownInFull(
   pending: PermissionPrompt,
   columns: number,
   rows: number,
   extraRows = 0,
 ): boolean {
-  const lines = permissionLines(pending)
-  if (!lines.every(shownInFull)) return false
-  const width = Math.max(10, columns - 4)
-  const textRows = lines
-    // One row more per line: wrapping at word breaks can leave rows short.
-    .map((line) => Math.ceil(columnsAtMost(visibleText(line)) / width) + 1)
-    .reduce((sum, count) => sum + count, 0)
-  return textRows + PROMPT_ROWS + RESERVED_ROWS + extraRows <= rows
+  return permissionShown(pending, columns, rows, extraRows).full
 }

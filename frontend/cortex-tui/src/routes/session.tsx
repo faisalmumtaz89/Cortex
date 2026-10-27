@@ -20,8 +20,7 @@ import {
 import { useStore } from "../context/store"
 import { readGitBranch } from "../lib/git_branch"
 import { spinnerFrame } from "../lib/spinner"
-import { permissionLines } from "../lib/permission_prompt"
-import { visibleText } from "../lib/visible_text"
+import { permissionShown } from "../lib/permission_prompt"
 import { turnRunning } from "../protocol"
 import { terminalColumns, terminalRows } from "../lib/terminal_size"
 import { parseDiff } from "../context/session_store"
@@ -154,7 +153,9 @@ export function SessionRoute(props: {
       return undefined
     }
     const command = findCommand(commandToken(value))
-    return command && commandTakesArgs(command.name) ? argHintFor(command, value) : undefined
+    const urlSaved = (provider: string) =>
+      Boolean(store.state.models.providers.find((row) => row.provider === provider)?.url_saved)
+    return command && commandTakesArgs(command.name) ? argHintFor(command, value, urlSaved) : undefined
   })
   const argMode = createMemo(() => Boolean(argCommand()))
   const matches = createMemo(() => (paletteOpen() ? matchCommands(promptValue()) : []))
@@ -611,7 +612,9 @@ export function SessionRoute(props: {
 
   const permissionText = () => {
     const pending = store.state.pendingPermission
-    return pending ? permissionLines(pending).map(visibleText) : []
+    if (!pending) return []
+    return permissionShown(pending, terminalColumns(), terminalRows(), store.state.queuedInputs.length)
+      .lines
   }
   // The change an edit would make, shown before it is approved.
   const permissionDiff = createMemo(() => parseDiff(store.state.pendingPermission?.metadata))
