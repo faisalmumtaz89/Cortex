@@ -21,12 +21,13 @@ import {
 import { useStore } from "../context/store"
 import { readGitBranch } from "../lib/git_branch"
 import { spinnerFrame } from "../lib/spinner"
-import { permissionShown } from "../lib/permission_prompt"
+import { permissionLayout } from "../lib/permission_prompt"
 import { promptHasDraft, registerPromptDraft } from "../lib/prompt_draft"
+import { applyEdit, masked } from "../lib/secret_input"
 import { turnRunning } from "../protocol"
-import { terminalColumns, terminalRows } from "../lib/terminal_size"
+import { terminalColumns } from "../lib/terminal_size"
 import { parseDiff } from "../context/session_store"
-import { DiffView } from "../components/diff_view"
+import { PermissionCall, PermissionPosition } from "../components/permission_view"
 
 class CustomSpeedScroll implements ScrollAcceleration {
   constructor(private speed: number) {}
@@ -127,6 +128,13 @@ export function SessionRoute(props: {
 
   // ---- Slash command palette (derived from the prompt contents) ----
   const [promptValue, setPromptValue] = createSignal("")
+  // The command Enter runs for what is typed: a command name typed alone
+  // ("help"), or, while a prompt waits and the palette is closed, a slash command.
+  const commandWord = createMemo(() => {
+    const value = promptValue().trim()
+    if (!value.startsWith("/")) return slashCommandFor(value) ?? undefined
+    return hasPendingPermission() && isSlashCommandLike(value) ? value.split(/\s/)[0].toLowerCase() : undefined
+  })
   const [selectedIndex, setSelectedIndex] = createSignal(0)
 
   createEffect(() => store.setPromptHasText(promptValue().trim().length > 0))
@@ -199,21 +207,30 @@ export function SessionRoute(props: {
   // when the wheel is scrolled over the prompt row; strip any such fragment
   // (full or prefix-truncated, e.g. "8;40M") so it never becomes typed text.
   const MOUSE_FRAGMENT = /(?:\x1b\[<|\[<|<)?\d{1,4}(?:;\d{1,4}){1,2}[Mm]/g
+  // What was typed, and how the input shows it: the same, except a key
+  // typed after /login, shown as bullets (lib/secret_input.ts).
+  let typedText = ""
+  let shownText = ""
+  const promptText = () => {
+    if (!input || input.isDestroyed) return ""
+    return input.plainText === shownText ? typedText : input.plainText
+  }
   const syncPromptValue = () => {
     if (!input || input.isDestroyed) {
       return
     }
     const raw = input.plainText
-    const cleaned = raw.replace(MOUSE_FRAGMENT, "")
-    if (cleaned !== raw) {
-      input.setText(cleaned)
-      input.gotoBufferEnd()
-      setPromptValue(cleaned)
-      updateCommandHighlight()
-      return
+    const shown = raw.replace(MOUSE_FRAGMENT, "")
+    const cursor = shown === raw ? input.cursorOffset : shown.length
+    typedText = shown === shownText ? typedText : applyEdit(typedText, shownText, shown, cursor)
+    shownText = masked(typedText)
+    if (shownText !== raw) {
+      input.setText(shownText)
+      input.cursorOffset = cursor // a bullet per character: the cursor stays where it was
     }
-    setPromptValue(raw)
+    setPromptValue(typedText)
     updateCommandHighlight()
+    store.setPromptRows(Math.min(6, Math.max(1, input.virtualLineCount)))
   }
 
   const closePaletteAndClearInput = () => {
@@ -276,6 +293,7 @@ export function SessionRoute(props: {
     // Selection lands on the active model, else the first row.
     setModelPickerIndex(Math.max(modelPickerEntries().findIndex((entry) => entry.active), 0))
     closePaletteAndClearInput()
+    store.clearCommandResult() // an earlier command's result is not what the picker is about
     setModelPickerOpen(true)
   }
   const closeModelPicker = () => setModelPickerOpen(false)
@@ -311,6 +329,7 @@ export function SessionRoute(props: {
   const openLoginPicker = () => {
     setLoginPickerIndex(0)
     closePaletteAndClearInput()
+    store.clearCommandResult()
     setLoginPickerOpen(true)
   }
   const closeLoginPicker = () => setLoginPickerOpen(false)
@@ -518,7 +537,7 @@ export function SessionRoute(props: {
       return ""
     }
     if (hasPendingPermission()) {
-      return "Waiting for your answer to the prompt above"
+      return "" // the prompt says what the turn waits for
     }
     const frame = spinnerFrame()
     const since = store.state.busySinceMs
@@ -540,8 +559,17 @@ export function SessionRoute(props: {
   const hasActiveModel = createMemo(() => activeModelLabel() !== "No model loaded")
 
   // ---- Single-line header: "⎇ branch ~/path         model · status" ----
+  // Read again when a turn starts or ends, and after each of its tool calls:
+  // one of them (git switch) may have changed the branch.
+  const finishedTools = createMemo(() => {
+    const list = messages()
+    const last = list[list.length - 1]
+    if (last?.role !== "assistant") return 0
+    return last.parts.filter((part) => part.type === "tool" && (part.state === "completed" || part.state === "error")).length
+  })
   const gitBranch = createMemo(() => {
-    void store.state.status // re-check on turn transitions (branch switches are rare)
+    void store.state.status
+    void finishedTools()
     return readGitBranch(process.env.CORTEX_PROJECT_DIR || process.cwd())
   })
   const headerModel = createMemo(() => {
@@ -605,18 +633,14 @@ export function SessionRoute(props: {
     }, 50)
   }
 
-  const permissionText = () => {
-    const pending = store.state.pendingPermission
-    if (!pending) return []
-    return permissionShown(pending, terminalColumns(), terminalRows(), store.state.queuedInputs.length)
-      .lines
-  }
-  // The change an edit would make, shown before it is approved.
+  // The call a prompt asks about (an edit with the change it makes), laid
+  // out for this screen from the row the prompt is scrolled to.
   const permissionDiff = createMemo(() => parseDiff(store.state.pendingPermission?.metadata))
-  // Diff rows that fit: the rest of the screen keeps its header, input and
-  // status rows, and the prompt its title, lines, options and footer.
-  const permissionDiffRows = () =>
-    Math.max(3, terminalRows() - 24 - store.state.queuedInputs.length)
+  const permissionView = createMemo(() => {
+    const pending = store.state.pendingPermission
+    if (!pending) return undefined
+    return permissionLayout(pending, permissionDiff(), store.permissionScreen(), store.state.permissionScroll)
+  })
 
 
   const submitFromPrompt = async () => {
@@ -627,7 +651,7 @@ export function SessionRoute(props: {
     if (paletteVisible()) {
       return
     }
-    const value = input.plainText
+    const value = promptText()
     const fingerprint = value.trim()
     if (!fingerprint) {
       return
@@ -645,8 +669,8 @@ export function SessionRoute(props: {
     historyDraft = ""
     // Bare /login or /model typed with Enter in one burst (fast typing, a
     // paste) arrives before the palette opens: open the picker, as the
-    // palette does.
-    const bare = fingerprint.toLowerCase()
+    // palette does. The command word alone ("model") does the same.
+    const bare = (slashCommandFor(fingerprint) ?? fingerprint).toLowerCase()
     if (bare === "/login" || bare === "/model") {
       input.clear()
       setPromptValue("")
@@ -786,7 +810,7 @@ export function SessionRoute(props: {
         event.preventDefault()
         if (key === "up") {
           if (!navigating) {
-            historyDraft = input.plainText
+            historyDraft = promptText()
             historyIndex = inputHistory.length - 1
           } else if (historyIndex > 0) {
             historyIndex -= 1
@@ -815,6 +839,19 @@ export function SessionRoute(props: {
     // arrows, Enter and Esc. Other keys type a message, which Enter queues.
     const key = String(event.name ?? "").toLowerCase()
     const shift = Boolean((event as { shift?: boolean }).shift)
+    if (key === "pageup" || key === "pagedown") {
+      event.preventDefault()
+      const layout = permissionView()
+      if (layout && layout.window < layout.rows.length) {
+        // The call's rows, a window less one at a time, so a row stays in view.
+        const step = Math.max(1, layout.window - 1)
+        store.setPermissionScroll(Math.max(0, Math.min(layout.rows.length - layout.window,
+          layout.offset + (key === "pageup" ? -step : step))))
+      } else if (transcriptScroll && !transcriptScroll.isDestroyed) {
+        transcriptScroll.scrollBy({ x: 0, y: key === "pageup" ? -10 : 10 })
+      }
+      return
+    }
     if (key.includes("enter") || key === "return" || key === "linefeed") {
       if (shift) {
         return // a newline in the message
@@ -910,8 +947,9 @@ export function SessionRoute(props: {
   const TranscriptBody = () => (
     <>
       <Show when={!hasConversation()}>
-        {/* marginBottom keeps the first system notice from touching the help text. */}
-        <box flexDirection="column" flexShrink={0} gap={1} marginBottom={1}>
+        {/* marginBottom keeps the first system notice from touching the help text;
+            with none below, the gap under the transcript is the only blank row. */}
+        <box flexDirection="column" flexShrink={0} gap={1} marginBottom={messages().length > 0 ? 1 : 0}>
           <text fg={UI_PALETTE.text}>Ask anything about this repository, or give Cortex a task.</text>
           <text fg={UI_PALETTE.textMuted}>
             It can read, search, edit files, and run commands here — edits and commands ask first.
@@ -1027,28 +1065,21 @@ export function SessionRoute(props: {
             customBorderChars={OVERLAY_BORDER}
           >
             <text fg={UI_PALETTE.statusBusy}>Permission required</text>
-            <text fg={UI_PALETTE.text}>{permissionText()[0] ?? ""}</text>
-            <Show when={permissionText()[1]}>
-              <text fg={UI_PALETTE.textMuted}>{permissionText()[1]}</text>
+            <Show when={permissionView()}>
+              {(layout) => (
+                <>
+                  <PermissionCall layout={layout()} diff={Boolean(permissionDiff())} />
+                  {/* Blank above the options, or where the call is scrolled to. */}
+                  <PermissionPosition layout={layout()} />
+                </>
+              )}
             </Show>
-            <Show when={permissionDiff()}>
-              {(diff) => <DiffView diff={diff()} expanded={false} maxRows={permissionDiffRows()} />}
-            </Show>
-            {/* Blank row above the options and above the footer (menu rhythm). */}
-            <box flexShrink={0} marginTop={1}>
-              <SelectionRows
-                items={PERMISSION_OPTIONS}
-                selectedIndex={store.state.permissionChoiceIndex}
-                getPrimary={(option) => option.label}
-                getDanger={(option) => Boolean(option.danger)}
-              />
-            </box>
-            {/* Width-adaptive so the footer never wraps mid-word on narrow terminals. */}
-            <box flexShrink={0} marginTop={1}>
-              <text fg={UI_PALETTE.textMuted}>
-                {terminalColumns() < 56 ? "↑↓ · Enter confirm · Esc reject" : "↑↓ select · Enter confirm · Esc reject"}
-              </text>
-            </box>
+            <SelectionRows
+              items={PERMISSION_OPTIONS}
+              selectedIndex={store.state.permissionChoiceIndex}
+              getPrimary={(option) => option.label}
+              getDanger={(option) => Boolean(option.danger)}
+            />
           </box>
         </Show>
 
@@ -1111,11 +1142,12 @@ export function SessionRoute(props: {
         <PromptPanel
           hasPendingPermission={hasPendingPermission()}
           hasText={store.state.promptHasText}
+          commandWord={commandWord()}
           status={store.state.status}
           statusColor={statusColor()}
           setInputRef={(r: TextareaRenderable) => {
             input = r
-            registerPromptDraft(() => (r.isDestroyed ? "" : r.plainText))
+            registerPromptDraft(promptText)
             attachCommandHighlighter(r)
             if (!hasPendingPermission() && !r.isDestroyed) {
               r.focus()

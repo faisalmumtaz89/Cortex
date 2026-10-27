@@ -19,7 +19,7 @@ function plural(count: number): string {
 
 /** Green/red file-edit diff (GitHub/Claude-Code style): a "⎿ Added N, removed
  * M" connector then per-row colored bands with a single line-number gutter. */
-export function DiffView(props: { diff: DiffData; expanded: boolean; maxRows?: number }) {
+export function DiffView(props: { diff: DiffData; expanded: boolean }) {
   const diff = createMemo(() => props.diff)
 
   const gutterWidth = createMemo(() => {
@@ -42,13 +42,13 @@ export function DiffView(props: { diff: DiffData; expanded: boolean; maxRows?: n
     return rows
   })
 
-  // The rows shown: all when expanded, else as many as fit, starting just
+  // The rows shown: all when expanded, else COLLAPSED_ROWS, starting just
   // before the first change so the change is never the part cut off.
   const window = createMemo(() => {
     const rows = flatRows()
     if (props.expanded) return { start: 0, end: rows.length }
     const kinds = rows.map((entry) => (entry.sep ? "sep" : entry.row.kind))
-    return diffWindow(kinds, props.maxRows ?? COLLAPSED_ROWS)
+    return diffWindow(kinds, COLLAPSED_ROWS)
   })
   const visibleRows = createMemo<DisplayRow[]>(() => flatRows().slice(window().start, window().end))
   const rowsAbove = createMemo(() => flatRows().slice(0, window().start).filter((entry) => !entry.sep).length)
@@ -96,11 +96,12 @@ export function DiffView(props: { diff: DiffData; expanded: boolean; maxRows?: n
             }
             const row = entry.row
             const code = () => row.text.replace(/\t/g, "    ")
+            // The gutter has its own column, so a long line wraps under its code.
             if (row.kind === "add") {
               return (
-                <box flexShrink={0} backgroundColor={UI_PALETTE.diffAddBg}>
-                  <text>
-                    <span style={{ fg: UI_PALETTE.diffAddGutter }}>{`${pad(row.newNo)} + `}</span>
+                <box flexDirection="row" flexShrink={0} backgroundColor={UI_PALETTE.diffAddBg}>
+                  <text flexShrink={0} fg={UI_PALETTE.diffAddGutter}>{`${pad(row.newNo)} + `}</text>
+                  <text flexGrow={1} flexShrink={1}>
                     <For each={highlightLine(code(), diff().language)}>
                       {(token) => <span style={{ fg: token.color }}>{token.text}</span>}
                     </For>
@@ -110,18 +111,16 @@ export function DiffView(props: { diff: DiffData; expanded: boolean; maxRows?: n
             }
             if (row.kind === "del") {
               return (
-                <box flexShrink={0} backgroundColor={UI_PALETTE.diffDelBg}>
-                  <text>
-                    <span style={{ fg: UI_PALETTE.diffDelGutter }}>{`${pad(row.oldNo)} - `}</span>
-                    <span style={{ fg: UI_PALETTE.diffDelFg }}>{code()}</span>
-                  </text>
+                <box flexDirection="row" flexShrink={0} backgroundColor={UI_PALETTE.diffDelBg}>
+                  <text flexShrink={0} fg={UI_PALETTE.diffDelGutter}>{`${pad(row.oldNo)} - `}</text>
+                  <text flexGrow={1} flexShrink={1} fg={UI_PALETTE.diffDelFg}>{code()}</text>
                 </box>
               )
             }
             return (
-              <box flexShrink={0}>
-                <text>
-                  <span style={{ fg: UI_PALETTE.textMuted }}>{`${pad(row.newNo)}   `}</span>
+              <box flexDirection="row" flexShrink={0}>
+                <text flexShrink={0} fg={UI_PALETTE.textMuted}>{`${pad(row.newNo)}   `}</text>
+                <text flexGrow={1} flexShrink={1}>
                   <For each={highlightLine(code(), diff().language)}>
                     {(token) => <span style={{ fg: token.color }}>{token.text}</span>}
                   </For>
@@ -132,10 +131,7 @@ export function DiffView(props: { diff: DiffData; expanded: boolean; maxRows?: n
         </For>
 
         <Show when={hiddenRows() > 0}>
-          {/* With maxRows (a permission prompt) Ctrl+O does not expand it. */}
-          <text fg={UI_PALETTE.textMuted}>
-            {`  … +${hiddenRows()} more line${plural(hiddenRows())}${props.maxRows === undefined ? " (Ctrl+O)" : ""}`}
-          </text>
+          <text fg={UI_PALETTE.textMuted}>{`  … +${hiddenRows()} more line${plural(hiddenRows())} (Ctrl+O)`}</text>
         </Show>
         <Show when={props.expanded && diff().truncated}>
           <text fg={UI_PALETTE.textMuted}>{`  … +${diff().truncatedRows} more — open ${diff().path} to view`}</text>

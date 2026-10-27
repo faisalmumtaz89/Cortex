@@ -7,7 +7,7 @@
  *   lookalikes, spaces other than U+0020, lone surrogates and the ⟨ ⟩ of this
  *   function's own markers become escapes like `\n` or `\u{202e}`.
  * - A run of 8 or more whitespace, invisible or combining characters becomes
- *   a count.
+ *   a count, except spaces that indent a line: those stay as they are.
  * - Text longer than `limit` characters (SHOWN_CHARS unless the screen has
  *   room for more) keeps its start and end, cut at whole characters, with a
  *   count of the characters in between; `shownInFull` then returns false,
@@ -28,8 +28,13 @@ function escape(ch: string): string {
 }
 
 function escaped(text: string): string[] {
-  const shown = text.replace(TOKEN, (_match, run: string | undefined, ch: string | undefined) =>
-    run ? `⟨${[...run].length} blank or invisible characters⟩` : escape(ch!),
+  const shown = text.replace(
+    TOKEN,
+    (_match, run: string | undefined, ch: string | undefined, offset: number) => {
+      if (!run) return escape(ch!)
+      const indent = (offset === 0 || text[offset - 1] === "\n") && /^ +$/.test(run)
+      return indent ? run : `⟨${[...run].length} blank or invisible characters⟩`
+    },
   )
   return [...shown]
 }
@@ -72,4 +77,17 @@ export function rowsAtLineBreaks(shown: string): string[] {
   }
   rows.push(row)
   return rows
+}
+
+// What a diff row escapes: control and invisible characters, so nothing in
+// the text an edit writes is hidden. Spaces and backslashes are code, as written.
+const CODE_ESCAPE = new RegExp(
+  String.raw`[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}ᅟᅠ⠀ㅤﾠ]|(?! )\p{Zs}`,
+  "gu",
+)
+
+/** A line of code as a permission prompt shows it: `visibleText` without
+ * the backslash and whitespace rules, which only a command needs. */
+export function visibleCode(text: string): string {
+  return text.replace(CODE_ESCAPE, (ch) => `\\u{${ch.codePointAt(0)!.toString(16)}}`)
 }

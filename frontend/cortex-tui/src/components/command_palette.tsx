@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js"
 import type { SlashCommand } from "../commands"
 import { terminalColumns, terminalRows } from "../lib/terminal_size"
-import { SelectionRows, padPrimary } from "./selection_list"
+import { SelectionRows, nameColumn, padPrimary } from "./selection_list"
 import { UI_PALETTE } from "./ui_palette"
 
 const SPINE_BORDER = {
@@ -18,9 +18,13 @@ const SPINE_BORDER = {
   rightT: "",
 }
 
+// Columns a palette row loses besides its name: the screen's side padding
+// (2 + 2), the panel's rail and padding (1 + 2 + 1), and the "❯ " marker (2).
+const ROW_CHROME = 10
+
 /** A description cut to the row, so a skill's long one stays on one line. */
-function fitDescription(command: SlashCommand): string {
-  const room = Math.max(10, terminalColumns() - padPrimary(`/${command.name}`).length - 8)
+function fitDescription(command: SlashCommand, column: number): string {
+  const room = Math.max(10, terminalColumns() - padPrimary(`/${command.name}`, column).length - ROW_CHROME)
   const text = command.description.replace(/\s+/g, " ")
   return text.length > room ? `${text.slice(0, room - 1)}…` : text
 }
@@ -34,6 +38,7 @@ export function CommandPalette(props: {
   argMode: boolean
   argCommand?: SlashCommand
 }) {
+  const column = () => nameColumn(props.matches.map((command) => `/${command.name}`))
   return (
     <box
       flexDirection="column"
@@ -64,8 +69,8 @@ export function CommandPalette(props: {
           <SelectionRows
             items={props.matches}
             selectedIndex={props.selectedIndex}
-            getPrimary={(command) => padPrimary(`/${command.name}`)}
-            getSecondary={(command) => fitDescription(command)}
+            getPrimary={(command) => padPrimary(`/${command.name}`, column())}
+            getSecondary={(command) => fitDescription(command, column())}
           />
         </Show>
       </Show>

@@ -20,13 +20,13 @@ Type a message to run an agent turn with the active model, or a slash command to
 
 | Key | Action |
 |---|---|
-| `Enter` | Submit input (a command name typed alone, such as `quit`, runs that command; any longer text is a message) |
+| `Enter` | Submit input (a command name typed alone, such as `quit`, runs that command, as the hint under the input says; any longer text is a message) |
 | `Shift+Enter` | Insert newline |
 | `↑` / `↓`, `Enter` / `Esc` | Choose an answer to a pending permission prompt / reject it. With a message typed in the input, `Enter` queues the message and the prompt stays open |
 | `↑` / `↓` (empty input) | Recall earlier prompts |
 | `Esc` | Close the palette or result panel; otherwise interrupt the running turn |
 | `Ctrl+O` | Show or hide tool details |
-| `PageUp` / `PageDown` | Scroll the transcript |
+| `PageUp` / `PageDown` | Scroll the transcript, or a permission prompt's call when it has more rows than it shows |
 | `Ctrl+C` | Exit Cortex at once, without asking |
 
 ## Headless Mode
@@ -129,6 +129,10 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 /login openai                 # show auth status for a provider
 ```
 
+While you type the key, the input shows a `•` for each of its characters, and
+the result shows it masked: the key itself is never drawn on screen, where a
+recording, a screen reader or a copy of the terminal would keep it.
+
 `/login` saves the key in the system keyring (service `cortex-llm`), such as the
 macOS Keychain. Where no keyring works (common on Linux servers, containers and
 WSL), it saves the key in `~/.cortex/credentials.json` instead, readable only by
@@ -172,9 +176,11 @@ File tools work only inside the directory Cortex was started in (a call for a fi
 - **Allow always** — allows this exact command, run in the same directory (for `bash`), or this file (for edits) from now on, only in the directory Cortex was started in; saved in `~/.cortex/tool_permissions.yaml`. A call with no command or file to name is allowed this once only.
 - **Reject** (or `Esc`) — the model continues without the tool result
 
-An edit's prompt shows the change it would make, as a diff with line numbers, before anything is written (as many rows as fit the screen, starting at the change, with a count of the rows above and below).
+An edit's prompt shows the file and the size of the change (`+3 -2`), and the change itself as a diff with line numbers before anything is written, starting just before the first changed line; a long line wraps under its code. Invisible and control characters in the new text show as escapes such as `\u{202e}`.
 
-The prompt shows a command with backslashes, line breaks, tabs and invisible or blank-looking characters as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count (a line break is always shown, as `\n`). Each line of a command starts a row, after the `\n` that ends the line before it; a command whose lines do not fit is shown on one line. A long command fills the rows free on screen; one longer than they hold keeps its start and end, with a count of the characters not shown, and the prompt then starts on **Reject**.
+The prompt shows a command with backslashes, line breaks, tabs and invisible or blank-looking characters as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count, except spaces that indent a line. Each line of a command starts a row, after the `\n` that ends the line before it.
+
+The call takes at most half the rows the screen has free, so the transcript keeps the rest. When it has more rows than that, a row under it says which rows are shown (`rows 9–16 of 61 · PgUp/PgDn to scroll`), PgUp/PgDn scroll through all of it, and the prompt starts on **Reject**: Enter approves only a call that was on screen whole. So does a diff Cortex had to cut (a line over 2000 characters, or more than 400 rows), and an edit of a file too large to compare. While the call fits, PgUp/PgDn scroll the transcript.
 
 Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds `edit_file`/`write_file`), `full` (adds `bash`). See the [Configuration Guide](configuration.md) for the `tools_*` keys.
 

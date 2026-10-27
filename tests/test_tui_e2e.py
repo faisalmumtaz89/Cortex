@@ -33,6 +33,19 @@ pytestmark = [
     pytest.mark.skipif(not SIDECAR.exists(), reason="sidecar binary not built"),
 ]
 
+# The suite's own tmux server, apart from any the user runs. It stays up while
+# no session is open (exit-empty off): a server that exits as one test closes
+# its last session makes the next test's new-session fail.
+TMUX_SOCKET = f"cortex-e2e-{os.getpid()}"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _tmux_server():
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "start-server", ";",
+                    "set-option", "-g", "exit-empty", "off"], check=True)
+    yield
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "kill-server"], capture_output=True)
+
 
 class TuiSession:
     """Drives the real TUI inside a detached tmux session."""
@@ -73,29 +86,29 @@ class TuiSession:
         # remain-on-exit keeps a pane whose TUI exited, with its last output
         # and exit status, so a failing wait can say why instead of showing "".
         subprocess.run(
-            ["tmux", "new-session", "-d", "-s", self.name, "-x", "130", "-y", "40", launch,
+            ["tmux", "-L", TMUX_SOCKET, "new-session", "-d", "-s", self.name, "-x", "130", "-y", "40", launch,
              ";", "set-option", "-t", self.name, "remain-on-exit", "on"],
             check=True,
         )
 
     def capture(self, *, ansi: bool = False) -> str:
         # -e preserves ANSI escapes so tests can assert on color/attributes.
-        args = ["tmux", "capture-pane", "-t", self.name, "-p"]
+        args = ["tmux", "-L", TMUX_SOCKET, "capture-pane", "-t", self.name, "-p"]
         if ansi:
             args.append("-e")
         result = subprocess.run(args, capture_output=True, text=True)
         return result.stdout if result.returncode == 0 else ""
 
     def send_line(self, text: str) -> None:
-        subprocess.run(["tmux", "send-keys", "-t", self.name, text, "Enter"], check=True)
+        subprocess.run(["tmux", "-L", TMUX_SOCKET, "send-keys", "-t", self.name, text, "Enter"], check=True)
 
     def send_key(self, key: str) -> None:
-        subprocess.run(["tmux", "send-keys", "-t", self.name, key], check=True)
+        subprocess.run(["tmux", "-L", TMUX_SOCKET, "send-keys", "-t", self.name, key], check=True)
 
     def exited(self) -> bool:
         """True once the launched `python -m cortex` has exited (or the session is gone)."""
         result = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", self.name, "#{pane_dead}"],
+            ["tmux", "-L", TMUX_SOCKET, "display-message", "-p", "-t", self.name, "#{pane_dead}"],
             capture_output=True,
             text=True,
         )
@@ -103,7 +116,7 @@ class TuiSession:
 
     def _failure(self, waiting_for: str, frame: str) -> AssertionError:
         status = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", self.name, "#{pane_dead} #{pane_dead_status}"],
+            ["tmux", "-L", TMUX_SOCKET, "display-message", "-p", "-t", self.name, "#{pane_dead} #{pane_dead_status}"],
             capture_output=True,
             text=True,
         )
@@ -150,7 +163,7 @@ class TuiSession:
     def process_tree(self) -> set[int]:
         """PIDs of every process started in the pane (launcher, sidecar, worker)."""
         result = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", self.name, "#{pane_pid}"],
+            ["tmux", "-L", TMUX_SOCKET, "display-message", "-p", "-t", self.name, "#{pane_pid}"],
             capture_output=True,
             text=True,
             check=True,
@@ -168,7 +181,7 @@ class TuiSession:
         return tree
 
     def close(self) -> None:
-        subprocess.run(["tmux", "kill-session", "-t", self.name], capture_output=True)
+        subprocess.run(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", self.name], capture_output=True)
 
 
 @pytest.fixture()
@@ -608,13 +621,20 @@ def test_slash_palette_login_masks_api_key(tui_project) -> None:
     session.wait_for("Session ready")
 
     # /login with a space enters arg-hint mode; type a fake secret and run it.
-    session.send_key("/login openai sk-supersecret123")
-    time.sleep(1)
+    session.send_key("/login openai sk-supersecX")
+    session.send_key("BSpace")
+    session.send_key("ret123")
+    # While it is typed, the screen holds a bullet per character, not the key.
+    typed = session.wait_for("/login openai " + "•" * 17, timeout=10)
+    assert "sk-supersec" not in typed, typed
     session.send_key("Enter")
     result = session.wait_for("Esc to dismiss", timeout=10)
     # The key must be masked and never rendered.
     assert "sk-supersecret123" not in result
     assert "****" in result
+    # What was saved is the key typed, not the bullets shown.
+    saved = (project.parent / "home" / ".cortex" / "credentials.json")
+    assert '"sk-supersecret123"' in saved.read_text(encoding="utf-8")
 
 
 def test_login_picker_shows_each_provider_auth_status(tui_project) -> None:
@@ -882,9 +902,10 @@ def test_a_message_that_starts_with_a_command_name_goes_to_the_model(tui_project
     session.wait_for("Esc to dismiss", timeout=15)
 
 
-def test_a_small_screen_edit_prompt_shows_the_change_itself(tui_project) -> None:
-    """At 80x24 there is room for a few diff rows: they must be the change,
-    not the unchanged lines above it."""
+def test_a_small_screen_edit_prompt_shows_the_change_and_scrolls_to_the_rest(tui_project) -> None:
+    """At 80x24 there is room for a few diff rows: they start just before the
+    change, the file stays in view, and PgUp/PgDn reach every other row. Not
+    all of it on screen at once, the prompt starts on Reject."""
     project, start = tui_project
     lines = [f"line_{n} = {n}" for n in range(1, 9)]
     (project / "values.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -898,12 +919,25 @@ def test_a_small_screen_edit_prompt_shows_the_change_itself(tui_project) -> None
         ]
     )
     _select_scripted_model(session)
-    subprocess.run(["tmux", "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
                    check=True)
     session.send_line("edit the file")
     prompt = session.wait_for("Permission required")
+    assert "Edit file: values.py  +1 -1" in prompt, prompt
     assert "6 + line_6 = 60" in prompt, prompt
-    assert "unchanged lines above" in prompt, prompt
+    assert "rows 3–5 of 7 · PgUp/PgDn to scroll" in prompt, prompt
+    assert "❯ Reject" in prompt, prompt
+    assert "Waiting for your answer" not in prompt, prompt
+    session.send_key("PageDown")
+    end = session.wait_for("rows 5–7 of 7")
+    assert " 8   line_8 = 8" in end and "Edit file: values.py" in end, end
+    session.send_key("PageUp")
+    session.send_key("PageUp")
+    top = session.wait_for("rows 1–3 of 7")
+    assert " 3   line_3 = 3" in top, top
+    session.send_key("Escape")
+    session.wait_for("EDIT_DONE_MARKER")
+    assert (project / "values.py").read_text(encoding="utf-8").count("line_6 = 6\n") == 1
 
 
 def test_a_wide_table_fits_the_screen_and_shows_no_markup(tui_project) -> None:
@@ -1028,9 +1062,13 @@ def test_enter_after_typing_a_message_queues_it_and_leaves_the_prompt_open(tui_p
     )
     _select_scripted_model(session)
     session.send_line("create the proof file")
-    modal = session.wait_for("Waiting for your answer to the prompt above")
-    assert "Permission required" in modal and "Working…" not in modal, modal
-    assert "Enter answer prompt" in modal, modal
+    modal = session.wait_for("Permission required")
+    assert "Working…" not in modal, modal  # the prompt is what the turn waits for
+    assert "↑↓ select · Enter confirm · Esc reject" in modal, modal
+    session.send_key("also update")
+    typing = session.wait_for("Enter queue message", timeout=10)
+    assert "Permission required" in typing, typing
+    session.send_key("C-u")  # clear it again: the line below types the message whole
 
     session.send_line("also update the README")
     frame = session.wait_for("↳ queued: also update the README", timeout=10)
@@ -1138,17 +1176,21 @@ def test_permission_modal_for_a_command_too_long_to_show_starts_on_reject(tui_pr
         [[{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
           {"text": "DONE_MARKER"}]]
     )
-    subprocess.run(["tmux", "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
                    check=True)
     _select_scripted_model(session)
     session.send_line("run it")
 
     modal = session.wait_for("Permission required")
-    # The kept text fills the free rows, so the marker can wrap.
-    rows = [line.strip().lstrip("┃").strip() for line in modal.splitlines()]
-    assert "characters not shown⟩" in "".join(rows), modal
-    assert "touch LONG.txt" in " ".join(rows), modal  # the end of the command is shown
+    # Its 124 rows scroll in a window of 4: none of the command is left out.
+    assert "rows 1–4 of 124 · PgUp/PgDn to scroll" in modal, modal
+    assert "touch LONG.txt" not in modal, modal
     assert "❯ Reject" in modal
+    for _ in range(45):
+        session.send_key("PageDown")
+    end = session.wait_for("rows 121–124 of 124")
+    assert "A; touch LONG.txt" in end, end
+    assert "❯ Reject" in end  # seeing it all does not change the choice
     session.send_key("Enter")
     session.wait_for("DONE_MARKER")
     assert not (project / "LONG.txt").exists()
@@ -1599,7 +1641,7 @@ def test_help_with_a_long_transcript_keeps_the_prompt_and_every_row_readable(
     assert "Rejected at the permission prompt: the command was not carried out." in frame
     assert "patterns=" not in frame
 
-    subprocess.run(["tmux", "resize-window", "-t", session.name, "-x", "120", "-y", "40"],
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "120", "-y", "40"],
                    check=True)
     session.send_line("/help")
     session.wait_for("Esc to dismiss", timeout=15)
@@ -1614,7 +1656,7 @@ def test_help_with_a_long_transcript_keeps_the_prompt_and_every_row_readable(
 
     # On a small window the rows that do not fit are counted, with the way to
     # see them, and the prompt stays.
-    subprocess.run(["tmux", "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
                    check=True)
     small = session.wait_for("make the window taller to see them", timeout=10)
     assert "Ask Cortex" in small, small
@@ -1647,3 +1689,141 @@ def test_a_new_message_brings_the_transcript_back_to_the_bottom(tui_project) -> 
     assert "OLD_LINE_40" not in frame, frame
     session.send_key("Enter")
     session.wait_for("NEW_TURN_DONE", timeout=20)
+
+
+def _frame_is_whole(frame: str) -> None:
+    """Every row of the screen where it belongs: the header first, the input
+    hint last, and the fold line of earlier steps intact (B9 saw a frame one
+    row too tall overprint it with an old diff row)."""
+    rows = [row for row in frame.splitlines() if row.strip()]
+    assert "azure:scripted" in rows[0], frame
+    assert "Ctrl+C quit" in rows[-1], frame
+    folds = [row for row in rows if "earlier steps" in row]
+    assert all(re.fullmatch(r"\s*⋮ \d+ earlier steps \(Ctrl\+O to expand\)\s*", row) for row in folds), frame
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+def test_a_tall_edit_prompt_after_many_steps_keeps_the_screen_whole(tui_project, size) -> None:
+    project, start = tui_project
+    for i in range(8):
+        (project / f"part_{i}.py").write_text(f"PART = {i}\n", encoding="utf-8")
+    old = "\n".join(f'    """Line {n} of a docstring long enough to wrap on a narrow screen, as prose does."""'
+                    for n in range(30))
+    (project / "doc.py").write_text(f"def f():\n{old}\n    return 1\n", encoding="utf-8")
+    new = old.replace("as prose does", "as long prose in a docstring always does, line after line")
+    reads = [{"name": "read_file", "arguments": {"path": f"part_{i}.py"}} for i in range(8)]
+    session = start([[
+        {"tool_calls": reads},
+        {"tool_calls": [{"name": "edit_file", "arguments": {
+            "path": "doc.py", "old_text": old, "new_text": new}}]},
+        {"text": "EDIT_DONE_MARKER"},
+    ]])
+    _select_scripted_model(session)
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", str(size[0]), "-y", str(size[1])],
+                   check=True)
+    session.send_line("tidy the docstring")
+    session.wait_for("Permission required")
+    time.sleep(1.5)  # the corruption was a steady state
+    frame = session.capture()
+    _frame_is_whole(frame)
+    assert "❯ Reject" in frame, frame  # 60 diff rows do not fit at once
+    session.send_key("PageDown")
+    time.sleep(1)
+    _frame_is_whole(session.capture())
+    session.send_key("Escape")
+    session.wait_for("EDIT_DONE_MARKER")
+
+
+def test_a_command_of_indented_lines_reads_as_typed(tui_project) -> None:
+    """A heredoc shows line by line, its indentation as spaces, not counted
+    as blank or invisible characters."""
+    project, start = tui_project
+    command = ("python3 - <<'PY'\nfails = []\ndef check(name, got, want):\n    if got != want:\n"
+               "        fails.append(name)\nPY")
+    session = start([[{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+                      {"text": "DONE_MARKER"}]])
+    _select_scripted_model(session)
+    session.send_line("run it")
+    modal = session.wait_for("Permission required")
+    rows = [line.split("┃", 1)[-1][2:].rstrip() for line in modal.splitlines() if "┃" in line]
+    assert "    if got != want:\\n" in rows, modal
+    assert "        fails.append(name)\\n" in rows, modal
+    assert "blank or invisible" not in modal, modal
+    assert "❯ Allow once" in modal, modal
+    session.send_key("Escape")
+    session.wait_for("DONE_MARKER")
+
+
+def test_a_command_word_alone_runs_its_command_and_says_so(tui_project) -> None:
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]])
+    session.wait_for("Session ready")
+    session.send_key("help")
+    session.wait_for("Enter runs /help", timeout=10)
+    session.send_key("C-u")
+    session.send_line("Model")  # what /model does: the picker, not the text list
+    picker = session.wait_for("Select a model", timeout=10)
+    assert "Open the picker with /model" not in picker, picker
+
+
+def test_the_header_branch_follows_a_switch_made_during_the_turn(tui_project) -> None:
+    project, start = tui_project
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@x", "PATH": os.environ["PATH"], "HOME": str(project)}
+    for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-qm", "start"]):
+        subprocess.run(["git", *args], cwd=project, env=env, check=True)
+    session = start([[
+        {"tool_calls": [{"name": "bash", "arguments": {"command": "git switch -q -c fix/median"}}]},
+        {"tool_calls": [{"name": "bash", "arguments": {"command": "echo hold"}}]},
+        {"text": "DONE_MARKER"},
+    ]])
+    _select_scripted_model(session)
+    assert "⎇ main" in session.wait_for("⎇ main")
+    session.send_line("make a branch")
+    session.wait_for("git switch -q -c fix/median")
+    session.send_key("Enter")  # Allow once
+    # The next prompt keeps the turn running: the header already shows the new branch.
+    frame = session.wait_for("Run command: echo hold")
+    assert "⎇ fix/median" in frame, frame
+    session.send_key("Escape")
+    session.wait_for("DONE_MARKER")
+
+
+def test_help_and_the_palette_keep_their_columns_on_a_small_screen(tui_project) -> None:
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]])
+    session.wait_for("Session ready")
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "40"],
+                   check=True)
+    time.sleep(0.5)
+    session.send_line("/help")
+    panel = session.wait_for("Skills:", timeout=15)
+    rows = [line.split("┃", 1)[1][2:] for line in panel.splitlines() if "┃" in line]
+    skills = rows[[row.startswith("Skills:") for row in rows].index(True) + 1:]
+    skills = skills[:[not row.strip() for row in skills].index(True)]  # the panel ends at a blank row
+    column = len("/reproduce-and-fix") + 2
+    wrapped = [row for row in skills if row.strip() and not row.startswith(("/", "…"))]
+    assert wrapped, panel  # at 80 columns some descriptions take two rows
+    # A wrapped description goes on under its own column.
+    assert all(row[:column].strip() == "" and row[column] != " " for row in wrapped), panel
+    session.send_key("Escape")
+
+    session.send_key("/re")
+    palette = session.wait_for("/review-changes", timeout=10)
+    entries = [line for line in palette.splitlines() if "/reproduce-and-fix" in line or "/review-changes" in line]
+    assert len(entries) == 2, palette
+    # One row each, the descriptions starting in one column.
+    starts = {re.search(r"/\S+\s+", line).end() for line in entries}
+    assert len(starts) == 1, palette
+    assert not [line for line in palette.splitlines() if re.match(r"\s*┃\s+(tr|work)", line)], palette
+
+
+def test_status_names_the_version_and_the_directory(tui_project) -> None:
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]])
+    session.wait_for("Session ready")
+    session.send_line("/status")
+    panel = session.wait_for("Directory:", timeout=15)
+    import cortex
+
+    assert f"Cortex: {cortex.__version__}" in panel, panel

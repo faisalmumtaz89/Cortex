@@ -1,6 +1,8 @@
 import { createContext, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
 import { SLASH_COMMANDS, isSkillInput, setSkills, skills, slashCommandFor } from "../commands"
 import { exitCortex, registerWorkerKill } from "../lib/exit"
+import { wrapCell } from "../lib/table_layout"
+import { terminalColumns } from "../lib/terminal_size"
 import { RpcClient } from "../protocol"
 import { useStore } from "./store"
 
@@ -16,9 +18,15 @@ export function buildHelpText(): string {
     name: `/${skill.name}`,
     description: skill.description.split(/(?<=\.)\s/)[0],
   }))
-  // One column for every name, two spaces wider than the longest.
+  // One column for every name, two spaces wider than the longest; a long
+  // description wraps under its own column. The panel's text is the screen
+  // less its side padding (2 + 2) and the panel's rail and padding (1 + 2 + 1).
   const width = Math.max(...[...commands, ...skillList].map((row) => row.name.length)) + 2
-  const format = (row: { name: string; description: string }) => `${row.name.padEnd(width)}${row.description}`
+  const room = Math.max(20, terminalColumns() - 8 - width)
+  const format = (row: { name: string; description: string }) =>
+    wrapCell(row.description, room)
+      .map((line, index) => `${(index === 0 ? row.name : "").padEnd(width)}${line}`)
+      .join("\n")
   const rows = commands.map(format)
   return skillList.length ? [...rows, "", "Skills:", ...skillList.map(format)].join("\n") : rows.join("\n")
 }

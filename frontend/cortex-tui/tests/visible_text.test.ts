@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { SHOWN_CHARS, rowsAtLineBreaks, shownInFull, visibleText } from "../src/lib/visible_text"
+import { SHOWN_CHARS, rowsAtLineBreaks, shownInFull, visibleCode, visibleText } from "../src/lib/visible_text"
 
 describe("visibleText", () => {
   test("keeps ordinary text, accents included", () => {
@@ -29,10 +29,10 @@ describe("visibleText", () => {
     expect(visibleText("a" + "́".repeat(400) + "b")).toBe("a⟨400 blank or invisible characters⟩b")
   })
 
-  test("a line break stays visible before an indented line", () => {
-    expect(visibleText("for x in y:\n         c = x")).toBe(
-      "for x in y:\\n⟨9 blank or invisible characters⟩c = x",
-    )
+  test("spaces that indent a line stay as they are, its line break still shown", () => {
+    expect(visibleText("for x in y:\n         c = x")).toBe("for x in y:\\n         c = x")
+    expect(visibleText("         c = x")).toBe("         c = x")
+    expect(visibleText("a =\n\t\t\t\t\t\t\t\tb")).toBe("a =\\n⟨8 blank or invisible characters⟩b")
   })
 
   test("escapes its own markers so they cannot be faked", () => {
@@ -61,5 +61,15 @@ describe("rowsAtLineBreaks", () => {
 
   test("a backslash before an n is not a line break", () => {
     expect(rowsAtLineBreaks(visibleText("printf 'a\\nb'"))).toEqual(["printf 'a\\\\nb'"])
+  })
+})
+
+describe("visibleCode", () => {
+  test("keeps code as written, backslashes and spaces included", () => {
+    expect(visibleCode('print("a\\nb")        # x')).toBe('print("a\\nb")        # x')
+  })
+
+  test("shows control and invisible characters as escapes", () => {
+    expect(visibleCode("ok\u202e = 1\u200b\u00a0\u001b")).toBe("ok\\u{202e} = 1\\u{200b}\\u{a0}\\u{1b}")
   })
 })

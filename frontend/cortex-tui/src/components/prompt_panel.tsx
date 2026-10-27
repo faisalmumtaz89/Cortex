@@ -5,22 +5,31 @@ import { UI_PALETTE } from "./ui_palette"
 
 // Hint segments in display order; `drop` is the order they are shed when width
 // is tight (lowest first). Enter's segment survives longest (primary action).
-const ENTER_SEGMENT = "Enter send"
-const HINT_SEGMENTS: { text: string; drop: number }[] = [
-  { text: ENTER_SEGMENT, drop: 3 },
+type Segment = { text: string; drop: number }
+const HINT_SEGMENTS: Segment[] = [
+  { text: "Enter send", drop: 3 },
   { text: "Shift+Enter newline", drop: 1 },
   { text: "/help commands", drop: 0 },
   { text: "Ctrl+C quit", drop: 2 },
 ]
+// While a permission prompt waits: how to answer it. Enter answers it, or
+// queues a message being typed.
+const PROMPT_SEGMENTS = (enter: string): Segment[] => [
+  { text: "↑↓ select", drop: 2 },
+  { text: enter, drop: 4 },
+  { text: "Esc reject", drop: 3 },
+  { text: "Shift+Enter newline", drop: 0 },
+  { text: "Ctrl+C quit", drop: 1 },
+]
 
 /** Build the widest hint string that fits `available` columns, dropping the
  * least-important segments first so it never collides with the status. */
-function buildHint(available: number, enter: string): string {
-  const dropOrder = [...HINT_SEGMENTS].sort((a, b) => a.drop - b.drop)
+function buildHint(available: number, segments: Segment[]): string {
+  const dropOrder = [...segments].sort((a, b) => a.drop - b.drop)
   const removed = new Set<string>()
   const render = () =>
-    HINT_SEGMENTS.filter((segment) => !removed.has(segment.text))
-      .map((segment) => (segment.text === ENTER_SEGMENT ? enter : segment.text))
+    segments.filter((segment) => !removed.has(segment.text))
+      .map((segment) => segment.text)
       .join(" · ")
   for (const candidate of dropOrder) {
     if (render().length <= available) {
@@ -67,6 +76,7 @@ const EMPTY_BORDER = {
 export function PromptPanel(props: {
   hasPendingPermission: boolean
   hasText: boolean
+  commandWord?: string
   status: string
   statusColor: RGBA
   onPromptKeyDown: (event: KeyEvent) => void
@@ -123,8 +133,15 @@ export function PromptPanel(props: {
         <text fg={UI_PALETTE.textMuted}>
           {buildHint(
             terminalColumns() - 4 - (props.status !== "idle" ? props.status.length + 2 : 0),
-            // While a prompt waits, Enter answers it, or queues a typed message.
-            props.hasPendingPermission ? (props.hasText ? "Enter queue message" : "Enter answer prompt") : ENTER_SEGMENT,
+            props.hasPendingPermission
+              ? PROMPT_SEGMENTS(
+                  props.commandWord
+                    ? `Enter runs ${props.commandWord}`
+                    : props.hasText ? "Enter queue message" : "Enter confirm",
+                )
+              : props.commandWord
+                ? [{ text: `Enter runs ${props.commandWord}`, drop: 3 }, ...HINT_SEGMENTS.slice(1)]
+                : HINT_SEGMENTS,
           )}
         </text>
         <Show when={props.status !== "idle"}>

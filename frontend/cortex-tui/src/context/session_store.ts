@@ -7,7 +7,7 @@ import { batch, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { isOutOfBandNotice } from "../lib/notices"
 import type { EventEnvelope, SessionStatus } from "../protocol"
-import { permissionShownInFull } from "../lib/permission_prompt"
+import { permissionLayout } from "../lib/permission_prompt"
 import { terminalColumns, terminalRows } from "../lib/terminal_size"
 
 type MessageRole = "user" | "assistant" | "system"
@@ -145,6 +145,7 @@ type State = {
   // Slash command palette + ephemeral command result (never enters the transcript).
   paletteOpen: boolean
   promptHasText: boolean // whether the input holds a message being typed
+  promptRows: number // rows the typed text takes in the input
   commandInFlight: boolean
   commandResult?: { command: string; ok: boolean; text: string; background?: boolean }
   // Full model lists (for the interactive /model picker) + permission-menu highlight.
@@ -153,6 +154,7 @@ type State = {
     providers: Record<string, unknown>[]
   }
   permissionChoiceIndex: number
+  permissionScroll: number // the first row of the call a prompt shows
 }
 
 
@@ -173,9 +175,11 @@ function freshState(): State {
     lastInterrupted: false,
     paletteOpen: false,
     promptHasText: false,
+    promptRows: 1,
     commandInFlight: false,
     models: { cloud: [], providers: [] },
     permissionChoiceIndex: 0,
+    permissionScroll: 0,
   }
 }
 
@@ -246,6 +250,14 @@ export function createSessionStore() {
   let queue: EventEnvelope[] = []
   let timer: ReturnType<typeof setTimeout> | undefined
   let lastFlushMs = 0
+
+  // The screen a permission prompt is laid out for.
+  const permissionScreen = () => ({
+    columns: terminalColumns(),
+    rows: terminalRows(),
+    queued: state.queuedInputs.length,
+    inputRows: state.promptRows,
+  })
 
   const flush = () => {
     if (queue.length === 0) {
@@ -528,11 +540,11 @@ export function createSessionStore() {
           metadata,
         })
         // Default highlight = Allow once, or Reject when the prompt cannot show
-        // the whole call: Enter must not approve what the user could not see.
+        // the whole call at once: Enter must not approve what the user could not see.
         const pending = { permission: String(event.payload.permission ?? ""), patterns, metadata }
-        const queued = state.queuedInputs.length
-        const full = permissionShownInFull(pending, terminalColumns(), terminalRows(), queued)
-        setState("permissionChoiceIndex", full ? 0 : 2)
+        const layout = permissionLayout(pending, parseDiff(metadata), permissionScreen())
+        setState("permissionChoiceIndex", layout.full ? 0 : 2)
+        setState("permissionScroll", layout.offset)
         return
       }
       case "permission.replied": {
@@ -667,6 +679,14 @@ export function createSessionStore() {
 
   const setPermissionChoice = (index: number) => {
     setState("permissionChoiceIndex", index)
+  }
+
+  const setPromptRows = (rows: number) => {
+    setState("promptRows", rows)
+  }
+
+  const setPermissionScroll = (row: number) => {
+    setState("permissionScroll", row)
   }
 
   const setCommandResult = (result: { command: string; ok: boolean; text: string; background?: boolean }) => {
@@ -810,6 +830,9 @@ export function createSessionStore() {
       setPaletteOpen,
       setPromptHasText,
       setPermissionChoice,
+      setPromptRows,
+      setPermissionScroll,
+      permissionScreen,
       setCommandResult,
       clearCommandResult,
       armCommandInFlight,

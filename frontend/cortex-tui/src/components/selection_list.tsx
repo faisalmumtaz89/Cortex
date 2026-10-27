@@ -48,9 +48,15 @@ const SPINE_BORDER = {
 
 const NAME_COLUMN = 12
 
-/** Left-pad a primary label to the shared name column so descriptions align. */
-export function padPrimary(label: string): string {
-  return label.length >= NAME_COLUMN ? `${label} ` : label + " ".repeat(NAME_COLUMN - label.length)
+/** Left-pad a primary label to the name column (the shared one, or a wider
+ * one that fits every label of a list) so descriptions align. */
+export function padPrimary(label: string, column = NAME_COLUMN): string {
+  return label.length >= column ? `${label} ` : label + " ".repeat(column - label.length)
+}
+
+/** The name column for these labels: the shared one, or two wider than the longest. */
+export function nameColumn(labels: string[]): number {
+  return Math.max(NAME_COLUMN, ...labels.map((label) => label.length + 2))
 }
 
 interface RowProps<T> {

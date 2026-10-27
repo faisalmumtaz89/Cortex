@@ -54,7 +54,7 @@ def test_prompt_panel_contract_is_bottom_anchor_stable() -> None:
     assert "maxHeight={6}" in source
     # Hint bar is adaptive (sheds segments to never overlap the status at narrow
     # widths) rather than a single fixed string.
-    assert 'const ENTER_SEGMENT = "Enter send"' in source
+    assert '{ text: "Enter send", drop: 3 }' in source
     assert '{ text: "Ctrl+C quit"' in source
     assert "buildHint(" in source
     assert 'vertical: "┃"' in source
