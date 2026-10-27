@@ -39,7 +39,7 @@ jobs:
       - name: Frontend typecheck, tests and sidecar build
         run: |
           cd frontend/cortex-tui
-          bun install
+          bun install --frozen-lockfile
           bun run typecheck
           bun test
           bun run build

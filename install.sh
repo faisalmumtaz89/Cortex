@@ -530,7 +530,7 @@ ensure_source_sidecar() {
   fi
   (
     cd "${frontend_dir}"
-    "${bun_bin}" install >/dev/null
+    "${bun_bin}" install --frozen-lockfile >/dev/null
     "${bun_bin}" run build >/dev/null
   )
 

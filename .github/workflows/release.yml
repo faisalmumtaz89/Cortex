@@ -87,7 +87,7 @@ jobs:
       - name: Build TUI sidecar (for this runner's platform)
         run: |
           cd frontend/cortex-tui
-          bun install
+          bun install --frozen-lockfile
           bun run build
 
       - name: Build wheel

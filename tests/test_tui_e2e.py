@@ -201,20 +201,10 @@ def tui_project(tmp_path: Path):
 
     for session in sessions:
         session.close()
-    # Any error the TUI hit, even one it drew past, fails the test, except
-    # one known in OpenTUI 0.1.107: now and then a frame's call into its
-    # WebAssembly layout engine (Yoga) traps with "access to a null
-    # reference". The frame is dropped and the next one draws; OpenTUI 0.5
-    # and later do not use Yoga.
+    # Any error the TUI hit, even one it drew past, fails the test.
     log = home / ".cortex" / "cortex-tui.log"
     if log.exists():
-        text = log.read_text(encoding="utf-8", errors="replace")
-        entries = re.split(r"\n(?=\d{4}-\d\d-\d\dT)", text.strip())
-        unknown = [
-            entry for entry in entries
-            if not ("access to a null reference" in entry and "activateFrame" in entry)
-        ]
-        assert not unknown, "\n".join(unknown)
+        assert not log.read_text(encoding="utf-8", errors="replace").strip(), log.read_text()
 
 
 def _picker_rows() -> list[str]:
@@ -1155,9 +1145,9 @@ def test_permission_modal_for_a_command_too_long_to_show_starts_on_reject(tui_pr
 
     modal = session.wait_for("Permission required")
     # The kept text fills the free rows, so the marker can wrap.
-    flat = "".join(line.strip().lstrip("┃").strip() for line in modal.splitlines())
-    assert "characters not shown⟩" in flat, modal
-    assert "touch LONG.txt" in modal
+    rows = [line.strip().lstrip("┃").strip() for line in modal.splitlines()]
+    assert "characters not shown⟩" in "".join(rows), modal
+    assert "touch LONG.txt" in " ".join(rows), modal  # the end of the command is shown
     assert "❯ Reject" in modal
     session.send_key("Enter")
     session.wait_for("DONE_MARKER")
