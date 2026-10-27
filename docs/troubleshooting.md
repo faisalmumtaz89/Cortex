@@ -19,7 +19,8 @@ Cortex uses a split runtime:
 | `/update` | Show installed vs latest version, or update Cortex |
 | `/save` | Save current conversation |
 | `/clear` | Clear conversation history |
-| `/quit` | Exit Cortex |
+| `/quit` or `/exit` | Exit Cortex |
+| `/<skill> [request]` | Run a skill on a request (see [Skills](cli.md#skills)) |
 
 ---
 

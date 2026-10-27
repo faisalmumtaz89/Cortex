@@ -55,6 +55,29 @@ for system_dir in /usr/local/bin /opt/homebrew/bin; do
     exit 1
   fi
 done
+# In HOME, install.sh writes ~/.cortex, the cortex link and the PATH lines:
+# nothing else (a private Python must not leave links or caches around).
+extra="$(cd "${work}/home" && find . -path ./.cortex -prune -o -print \
+  | grep -vxE '\.|\./\.local|\./\.local/bin|\./\.local/bin/cortex|\./\.bashrc|\./\.bash_profile|\./\.profile' || true)"
+[[ -z "${extra}" ]] || { echo "install.sh wrote outside ~/.cortex:"; echo "${extra}"; exit 1; }
+
+base_prefix() { "$1" -c 'import os, sys; print(os.path.realpath(sys.base_prefix))'; }
+if [[ "${CORTEX_MANAGED_PYTHON:-0}" == "1" ]]; then
+  step "install.sh again, on the system Python: the runtime moves to it"
+  (
+    cd "${work}"
+    HOME="${work}/home" SHELL=/bin/bash CORTEX_MANAGED_PYTHON=0 CORTEX_PYTHON="${python}" \
+      CORTEX_RELEASE_BASE="http://127.0.0.1:${port}/faisalmumtaz89/Cortex" \
+      CORTEX_ALLOW_INSECURE_BASE=1 \
+      bash "${repo}/install.sh" "${version}"
+  ) | tee "${work}/reinstall.txt"
+  runtime="${work}/home/.cortex/install/venv/bin/python"
+  [[ "$(base_prefix "${runtime}")" == "$(base_prefix "${python}")" ]] \
+    || { echo "the reinstall kept the runtime on the private Python"; exit 1; }
+  [[ ! -e "${work}/home/.cortex/install/python" ]] \
+    || { echo "the reinstall left the private Python, which nothing runs on now"; exit 1; }
+  grep -q "Reinstalled Cortex ${version}" "${work}/reinstall.txt"
+fi
 
 step "cortex --version"
 HOME="${work}/home" "${cortex}" --version | tee "${work}/version.txt"

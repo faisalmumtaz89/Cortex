@@ -252,7 +252,12 @@ install_managed_python() {
     rm -rf "${tmp}"
   fi
   log "Installing a private Python 3.12 in ${UV_PYTHON_INSTALL_DIR}" >&2
-  "${uv_bin}" python install 3.12 >&2 || die "Could not install Python 3.12 with uv."
+  # Everything uv writes stays under INSTALL_ROOT: no python3.12 link in
+  # ~/.local/bin (it would shadow the system one), no cache in ~/.cache, and
+  # no uv settings of the user's read.
+  export UV_CACHE_DIR="${uv_dir}/cache" UV_NO_CONFIG=1
+  "${uv_bin}" python install --no-bin 3.12 >&2 || die "Could not install Python 3.12 with uv."
+  rm -rf "${UV_CACHE_DIR}"
   UV_PYTHON_PREFERENCE=only-managed "${uv_bin}" python find 3.12 \
     || die "uv installed Python 3.12 but could not find it."
 }
@@ -580,18 +585,30 @@ if [[ -z "${PYTHON_BIN}" ]]; then
 fi
 log "Using Python $("${PYTHON_BIN}" -c 'import platform, sys; print(platform.python_version(), "at", sys.executable)')"
 
-if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+RUNTIME_PYTHON="${VENV_DIR}/bin/python"
+# The version this install replaces, if any, to say what changes.
+PREVIOUS_VERSION="$("${RUNTIME_PYTHON}" -c 'from importlib.metadata import version; print(version("cortex-llm"))' 2>/dev/null || true)"
+
+# A runtime from an earlier install is kept only when it runs on this Python;
+# one built on another Python (or one whose Python is gone) is built again.
+base_prefix() { "$1" -c 'import os, sys; print(os.path.realpath(sys.base_prefix))' 2>/dev/null; }
+if [[ -e "${VENV_DIR}" ]] && [[ "$(base_prefix "${RUNTIME_PYTHON}")" != "$(base_prefix "${PYTHON_BIN}")" ]]; then
+  log "The runtime at ${VENV_DIR} was built on another Python: building it again"
+  rm -rf "${VENV_DIR}"
+fi
+if [[ ! -x "${RUNTIME_PYTHON}" ]]; then
   log "Creating isolated runtime at ${VENV_DIR}"
   "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+fi
+# A private Python left by an earlier install is removed once nothing runs on it.
+if [[ "$(base_prefix "${PYTHON_BIN}")" != "$(cd "${INSTALL_ROOT}" && pwd -P)"/python/* ]]; then
+  rm -rf "${INSTALL_ROOT}/python" "${INSTALL_ROOT}/uv"
 fi
 
 PIP="${VENV_DIR}/bin/pip"
 # Downloads go straight into the runtime: no pip cache left in ~/.cache, and
 # no package-index call for pip's own version.
 export PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
-RUNTIME_PYTHON="${VENV_DIR}/bin/python"
-# The version this install replaces, if any, to say what changes.
-PREVIOUS_VERSION="$("${RUNTIME_PYTHON}" -c 'from importlib.metadata import version; print(version("cortex-llm"))' 2>/dev/null || true)"
 
 log "Upgrading installer tooling"
 "${PIP}" install --quiet --disable-pip-version-check --upgrade pip setuptools wheel >/dev/null
@@ -676,29 +693,28 @@ else
 fi
 ok "Launcher: ${LOCAL_LINK}"
 
-NEW_SHELL_NEEDED="0"
+# How to start Cortex: "cortex" once BIN_DIR is on PATH, else the full path.
+RUN_HINT="Run: cortex"
 if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
   # CORTEX_NO_MODIFY_PATH=1 leaves shell profiles alone.
   if [[ "${CORTEX_NO_MODIFY_PATH:-0}" == "1" ]]; then
     warn "${BIN_DIR} is not on PATH. Add it with: export PATH=\"${BIN_DIR}:\$PATH\""
+    RUN_HINT="Run: ${LOCAL_LINK}"
   else
     add_to_path
-    NEW_SHELL_NEEDED="1"
+    RUN_HINT="Open a new terminal (or run: export PATH=\"${BIN_DIR}:\$PATH\"), then run: cortex"
   fi
 fi
 
 echo
 echo "${BOLD}Installation complete.${RESET}"
-if [[ "${NEW_SHELL_NEEDED}" == "1" ]]; then
-  echo "Open a new terminal (or run: export PATH=\"${BIN_DIR}:\$PATH\"), then run: cortex"
-else
-  echo "Run: cortex"
-fi
+echo "${RUN_HINT}"
 if [[ -f "${HOME}/.cortex/state.yaml" ]]; then
   # Reinstalled over a Cortex that was already used: nothing to set up again.
   echo "Your settings, keys and conversations in ~/.cortex are kept."
 else
-  echo "Then add a key with /login (or set OPENAI_API_KEY, ANTHROPIC_API_KEY, or"
-  echo "OPENAI_COMPATIBLE_API_KEY with OPENAI_COMPATIBLE_BASE_URL) and pick a model with /model."
+  echo "Then add a key with /login (or set OPENAI_API_KEY, ANTHROPIC_API_KEY,"
+  echo "AZURE_OPENAI_API_KEY with AZURE_OPENAI_ENDPOINT, or OPENAI_COMPATIBLE_API_KEY"
+  echo "with OPENAI_COMPATIBLE_BASE_URL) and pick a model with /model."
 fi
 echo

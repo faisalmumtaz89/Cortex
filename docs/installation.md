@@ -8,7 +8,7 @@
 | Linux x86_64 or arm64 with glibc 2.28 or later | Debian 10, Ubuntu 20.04, RHEL 8, Fedora, Arch, or newer. Not musl distributions such as Alpine. |
 | Windows 10 or 11 | Through WSL (Windows Subsystem for Linux); the PowerShell installer sets it up. |
 
-The installer needs only `curl`. It uses a Python 3.11+ from your system when one is there (the first of `python3.13`, `python3.12`, `python3.11` and `python3` that has `venv`; set `CORTEX_PYTHON` to choose one); otherwise it downloads `uv` (checksum-verified) and installs a private Python 3.12 under `~/.cortex/install`, without admin rights or a package manager. Source installs also need Git, and Bun (which the installer installs when missing).
+The installer needs only `curl`. It uses a Python 3.11+ from your system when one is there (the first of `python3.13`, `python3.12`, `python3.11` and `python3` that has `venv`; set `CORTEX_PYTHON` to choose one); otherwise it downloads `uv` (checksum-verified) and installs a private Python 3.12 under `~/.cortex/install`, without admin rights or a package manager (set `CORTEX_MANAGED_PYTHON=1` to use the private one even when your system has a Python). The private Python and `uv` stay in `~/.cortex/install`: nothing is added to `~/.local/bin` or `~/.cache`. Running the installer again keeps the runtime it built while it runs on the Python picked this time; otherwise it builds the runtime again on that Python and removes a private Python nothing uses any more. Source installs also need Git, and Bun (which the installer installs when missing).
 
 ## Recommended Install
 
@@ -148,6 +148,14 @@ stay in `~/.cortex`. To remove them too:
 rm -rf ~/.cortex
 ```
 
+That also deletes a `~/.cortex/config.yaml` you wrote. To keep it and remove
+the rest (saved keys, logs, conversations, the remembered model, and the
+"Allow always" answers in `tool_permissions.yaml`):
+
+```bash
+find ~/.cortex -mindepth 1 -maxdepth 1 ! -name config.yaml -exec rm -rf {} +
+```
+
 Keys `/login` saved to `~/.cortex/credentials.json` go with `~/.cortex`. If
 it said it saved a key to the system keyring instead, that key stays there
 (service `cortex-llm`); delete it with your keyring tool: Keychain Access on
@@ -157,12 +165,11 @@ macOS, or on Linux Passwords and Keys (Seahorse) or, where it is installed,
 
 The installer may have put `~/.local/bin` on your `PATH`: a line under
 `# Added by the Cortex installer` in `~/.zshrc`, `~/.bashrc`, `~/.bash_profile`
-or `~/.profile`, or the file `~/.config/fish/conf.d/cortex.fish`. These
-commands remove what it added, keep your own lines, and delete a profile file
-the installer created once nothing else is in it (skip them if other programs
-you use live in `~/.local/bin`):
-
-These use `perl`, which macOS and most Linux systems have.
+or `~/.profile`, or the file `~/.config/fish/conf.d/cortex.fish`. The commands
+below remove only what it added: your own lines stay, and a profile file goes
+only if nothing else is left in it. Skip them if other programs you run from
+`~/.local/bin` need it on your `PATH`. They use `perl`, which macOS and most
+Linux systems have.
 
 ```bash
 for f in ~/.zshrc ~/.bashrc ~/.bash_profile ~/.profile; do
