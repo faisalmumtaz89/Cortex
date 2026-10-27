@@ -64,6 +64,21 @@ extra="$(ls -A "${work}/home/.local/bin" | grep -vx cortex || true)"
 
 base_prefix() { "$1" -c 'import os, sys; print(os.path.realpath(sys.base_prefix))'; }
 if [[ "${CORTEX_MANAGED_PYTHON:-0}" == "1" ]]; then
+  private="$(base_prefix "${work}/home/.cortex/install/venv/bin/python")"
+  step "install.sh again, with no choice made: it keeps the private Python"
+  (
+    cd "${work}"
+    env -u CORTEX_MANAGED_PYTHON -u CORTEX_PYTHON HOME="${work}/home" SHELL=/bin/bash \
+      CORTEX_RELEASE_BASE="http://127.0.0.1:${port}/faisalmumtaz89/Cortex" \
+      CORTEX_ALLOW_INSECURE_BASE=1 \
+      bash "${repo}/install.sh" "${version}"
+  ) | tee "${work}/upgrade.txt"
+  [[ "$(base_prefix "${work}/home/.cortex/install/venv/bin/python")" == "${private}" ]] \
+    || { echo "a plain re-run moved the runtime off the private Python"; exit 1; }
+  grep -q "(the runtime's;" "${work}/upgrade.txt"
+  ! grep -q "building it again" "${work}/upgrade.txt" \
+    || { echo "a plain re-run rebuilt the runtime"; exit 1; }
+
   step "install.sh again, on the system Python: the runtime moves to it"
   (
     cd "${work}"
@@ -78,6 +93,7 @@ if [[ "${CORTEX_MANAGED_PYTHON:-0}" == "1" ]]; then
   [[ ! -e "${work}/home/.cortex/install/python" ]] \
     || { echo "the reinstall left the private Python, which nothing runs on now"; exit 1; }
   grep -q "Reinstalled Cortex ${version}" "${work}/reinstall.txt"
+  grep -q "Removing the private Python and uv" "${work}/reinstall.txt"
 fi
 
 step "cortex --version"

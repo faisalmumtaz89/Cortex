@@ -245,6 +245,7 @@ install_managed_python() {
     got="$(sha256_of "${tmp}/${archive}")"
     [[ "${want}" =~ ^[0-9a-f]{64}$ ]] && [[ "${want}" == "${got}" ]] \
       || die "Checksum mismatch for ${archive} — installing nothing."
+    ok "Checksum verified: uv ${UV_VERSION}" >&2
     tar -xzf "${tmp}/${archive}" -C "${tmp}"
     mkdir -p "${uv_dir}"
     cp "${tmp}/uv-${UV_TRIPLE}/uv" "${uv_bin}"
@@ -574,18 +575,39 @@ mkdir -p "${HOME}/.cortex"
 chmod 700 "${HOME}/.cortex" 2>/dev/null || true
 mkdir -p "${INSTALL_ROOT}" "${BIN_DIR}"
 
-# A system Python 3.11+ with venv support, or else a private one (no admin
-# rights, no package manager). CORTEX_MANAGED_PYTHON=1 always uses the private one.
-PYTHON_BIN=""
-if [[ "${CORTEX_MANAGED_PYTHON:-0}" != "1" ]]; then
-  PYTHON_BIN="$(pick_python || true)"
-fi
-if [[ -z "${PYTHON_BIN}" ]]; then
-  PYTHON_BIN="$(install_managed_python)"
-fi
-log "Using Python $("${PYTHON_BIN}" -c 'import platform, sys; print(platform.python_version(), "at", sys.executable)')"
-
 RUNTIME_PYTHON="${VENV_DIR}/bin/python"
+
+runtime_base_python() {
+  # The Python the runtime from an earlier install runs on, while it still
+  # runs and is 3.11 or later.
+  [[ -x "${RUNTIME_PYTHON}" ]] || return 1
+  "${RUNTIME_PYTHON}" -c 'import sys; assert sys.version_info >= (3, 11); print(sys._base_executable)' 2>/dev/null
+}
+
+# Which Python the runtime uses. A choice made for this run wins:
+# CORTEX_MANAGED_PYTHON=1 for the private one, CORTEX_MANAGED_PYTHON=0 or
+# CORTEX_PYTHON for one from the system. Otherwise a re-run (an upgrade)
+# keeps the Python the runtime already runs on, and a first install takes a
+# system Python 3.11+ with venv support, or else a private one (no admin
+# rights, no package manager).
+PYTHON_BIN=""
+PYTHON_WHY=""
+if [[ "${CORTEX_MANAGED_PYTHON:-}" == "1" ]]; then
+  PYTHON_BIN="$(install_managed_python)"
+elif [[ -n "${CORTEX_MANAGED_PYTHON:-}${CORTEX_PYTHON:-}" ]]; then
+  PYTHON_BIN="$(pick_python || true)"
+  [[ -n "${PYTHON_BIN}" ]] \
+    || die "No Python 3.11+ with venv support on this system, which CORTEX_MANAGED_PYTHON=0 or CORTEX_PYTHON asks for."
+else
+  PYTHON_BIN="$(runtime_base_python || true)"
+  if [[ -n "${PYTHON_BIN}" ]]; then
+    PYTHON_WHY=" (the runtime's; CORTEX_MANAGED_PYTHON or CORTEX_PYTHON picks another)"
+  else
+    PYTHON_BIN="$(pick_python || true)"
+  fi
+  [[ -n "${PYTHON_BIN}" ]] || PYTHON_BIN="$(install_managed_python)"
+fi
+log "Using Python $("${PYTHON_BIN}" -c 'import platform, sys; print(platform.python_version(), "at", sys.executable)')${PYTHON_WHY}"
 # The version this install replaces, if any, to say what changes.
 PREVIOUS_VERSION="$("${RUNTIME_PYTHON}" -c 'from importlib.metadata import version; print(version("cortex-llm"))' 2>/dev/null || true)"
 
@@ -601,7 +623,9 @@ if [[ ! -x "${RUNTIME_PYTHON}" ]]; then
   "${PYTHON_BIN}" -m venv "${VENV_DIR}"
 fi
 # A private Python left by an earlier install is removed once nothing runs on it.
-if [[ "$(base_prefix "${PYTHON_BIN}")" != "$(cd "${INSTALL_ROOT}" && pwd -P)"/python/* ]]; then
+if [[ "$(base_prefix "${PYTHON_BIN}")" != "$(cd "${INSTALL_ROOT}" && pwd -P)"/python/* ]] \
+  && [[ -e "${INSTALL_ROOT}/python" || -e "${INSTALL_ROOT}/uv" ]]; then
+  log "Removing the private Python and uv in ${INSTALL_ROOT}, which nothing runs on now"
   rm -rf "${INSTALL_ROOT}/python" "${INSTALL_ROOT}/uv"
 fi
 

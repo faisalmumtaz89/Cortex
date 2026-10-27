@@ -10,6 +10,7 @@ Any flat key can also be overridden with a `CORTEX_<KEY>` environment variable (
 
 Files Cortex writes outside the project (the folder `~/.cortex` opens only for you, so the files in it are private too):
 
+- `~/.cortex/install/` — the program: its Python runtime (`venv`), and the private Python and `uv` when the installer added them. The uninstall steps in the [Installation Guide](installation.md#uninstallation) remove it.
 - `~/.cortex/state.yaml` — runtime state, kept separate from `config.yaml` so Cortex never rewrites your configuration: the last-used model, and the Azure endpoint and OpenAI-compatible base URL last used to select a model, so later sessions work without setting them again. `AZURE_OPENAI_ENDPOINT`/`OPENAI_COMPATIBLE_BASE_URL` and the `config.yaml` keys take precedence over the saved ones.
 - `~/.cortex/credentials.json` — API keys saved with `/login` where no system keyring works, readable only by you.
 - `~/.cortex/cortex.log` — the log; `~/.cortex/cortex-tui.log` — errors the interactive app hit, if any; `~/.cortex/update-check.json` — when Cortex last checked for a new release.

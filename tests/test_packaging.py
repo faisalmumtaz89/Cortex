@@ -145,3 +145,47 @@ def test_the_documented_uninstall_removes_what_the_installer_added_to_profiles(
 
     assert (tmp_path / ".bashrc").read_text() == "alias ll=ls\nexport KEEP=1\n"
     assert not (tmp_path / ".profile").exists()
+
+
+def _docs_block(pattern: str) -> str:
+    docs = (REPO_ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
+    block = re.search(r"```bash\n(" + pattern + r"[^`]*)```", docs)
+    assert block, f"{pattern!r} not found in docs/installation.md"
+    return block.group(1)
+
+
+def test_the_documented_program_removal_succeeds_and_keeps_the_users_files(
+    tmp_path: Path,
+) -> None:
+    """The uninstall block exits 0 (a script that stops on errors goes on),
+    also when ~/.local/bin holds the user's own tools, which stay."""
+    import subprocess
+
+    (tmp_path / ".cortex" / "install" / "venv").mkdir(parents=True)
+    (tmp_path / ".cortex" / "config.yaml").write_text("tools_max_iterations: 80\n")
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "cortex").symlink_to(tmp_path / ".cortex" / "install" / "venv" / "cortex")
+    (bin_dir / "mytool").write_text("#!/bin/sh\n")
+
+    subprocess.run(["bash", "-ec", _docs_block("# Remove the isolated runtime")],
+                   env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}, check=True)
+    assert not (tmp_path / ".cortex" / "install").exists()
+    assert not (bin_dir / "cortex").is_symlink()
+    assert (bin_dir / "mytool").exists()
+    assert (tmp_path / ".cortex" / "config.yaml").exists()
+
+
+def test_the_documented_data_removal_keeps_config_and_the_program(tmp_path: Path) -> None:
+    import subprocess
+
+    home = tmp_path / ".cortex"
+    for name in ("conversations", "install/venv"):
+        (home / name).mkdir(parents=True)
+    for name in ("config.yaml", "state.yaml", "credentials.json", "cortex.log",
+                 "tool_permissions.yaml", ".tool_permissions.yaml.lock", "update-check.json"):
+        (home / name).write_text("x\n")
+
+    subprocess.run(["bash", "-ec", _docs_block("find ~/.cortex")],
+                   env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}, check=True)
+    assert sorted(path.name for path in home.iterdir()) == ["config.yaml", "install"]

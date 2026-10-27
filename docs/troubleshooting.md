@@ -16,7 +16,7 @@ Cortex uses a split runtime:
 | `/status` | Show the active model and the model that answered the last turn |
 | `/model` | List and switch models |
 | `/login` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials |
-| `/update` | Show installed vs latest version, or update Cortex |
+| `/update` | Show the installed version and any newer one, or update Cortex |
 | `/save` | Save current conversation |
 | `/clear` | Clear conversation history |
 | `/quit` or `/exit` | Exit Cortex |
@@ -48,17 +48,24 @@ bun run build
 .venv/bin/python -P -m cortex --worker-stdio                     # source checkout
 ```
 
-If the worker handshake fails, check protocol version compatibility between frontend and backend (`1.0.0`). See `docs/protocol-debugging.md`.
+If the worker starts but the app still cannot reach it, its two halves are probably from different versions (a source checkout's TUI with an installed worker, for example): reinstall Cortex. `docs/protocol-debugging.md` shows how to talk to the worker by hand.
 
 ---
 
 ## Installation Issues
 
+### `cortex: command not found`
+
+- **Right after installing:** the installer added `~/.local/bin` to your `PATH` in your shell's profile, which only new terminals read. Open a new terminal, or run the `export PATH=...` line the installer printed. With `CORTEX_NO_MODIFY_PATH=1` it changed no profile: run Cortex by the full path it printed, or add `~/.local/bin` to your `PATH` yourself.
+- **It worked before:** check that `~/.local/bin/cortex` still points at an existing file (`ls -lL ~/.local/bin/cortex`). If `~/.cortex/install` was removed, the link is left dangling: run the installer again.
+
 ### Python version
 
 The installer needs nothing from you here: it uses a Python 3.11 or later
-from your system, or installs a private one when there is none (set
-`CORTEX_MANAGED_PYTHON=1` to always use the private one).
+from your system, or installs a private one when there is none, and a
+re-run keeps the one the runtime uses. To change it, run the installer
+with `CORTEX_MANAGED_PYTHON=1` (the private one) or `CORTEX_PYTHON=/path/to/python3`
+(see the [Installation Guide](installation.md)).
 
 A source checkout (`pip install -e .`) needs Python 3.11 or later
 (`python3 --version`). If yours is older:

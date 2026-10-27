@@ -100,7 +100,7 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 | `/status` | Active model and the model that answered the last turn |
 | `/model [provider:model]` | Pick a model interactively, or switch by `provider:model` |
 | `/login <provider> [api_key] [url]` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials (Azure and OpenAI-compatible also take the URL) |
-| `/update [cortex]` | Show installed vs latest version, or update Cortex |
+| `/update [cortex]` | Show the installed version and any newer one, or update Cortex |
 | `/clear` | Clear conversation history |
 | `/save` | Save the conversation as JSON |
 | `/quit` or `/exit` | Exit Cortex |

@@ -8,7 +8,9 @@
 | Linux x86_64 or arm64 with glibc 2.28 or later | Debian 10, Ubuntu 20.04, RHEL 8, Fedora, Arch, or newer. Not musl distributions such as Alpine. |
 | Windows 10 or 11 | Through WSL (Windows Subsystem for Linux); the PowerShell installer sets it up. |
 
-The installer needs only `curl`. It uses a Python 3.11+ from your system when one is there (the first of `python3.13`, `python3.12`, `python3.11` and `python3` that has `venv`; set `CORTEX_PYTHON` to choose one); otherwise it downloads `uv` (checksum-verified) and installs a private Python 3.12 under `~/.cortex/install`, without admin rights or a package manager (set `CORTEX_MANAGED_PYTHON=1` to use the private one even when your system has a Python). The private Python and `uv` stay in `~/.cortex/install`: nothing is added to `~/.local/bin` or `~/.cache`. Running the installer again keeps the runtime it built while it runs on the Python picked this time; otherwise it builds the runtime again on that Python and removes a private Python nothing uses any more. Source installs also need Git, and Bun (which the installer installs when missing).
+The installer needs only `curl`. It uses a Python 3.11+ from your system when one is there (the first of `python3.13`, `python3.12`, `python3.11` and `python3` that has `venv`; set `CORTEX_PYTHON` to choose one); otherwise it downloads `uv` (checksum-verified) and installs a private Python 3.12 under `~/.cortex/install`, without admin rights or a package manager. The private Python and `uv` stay in `~/.cortex/install`: nothing is added to `~/.local/bin` or `~/.cache`.
+
+Running the installer again (to upgrade, say) keeps the Python the runtime already runs on, while it still works. To change it, choose for that run: `CORTEX_MANAGED_PYTHON=1` for the private Python, `CORTEX_MANAGED_PYTHON=0` or `CORTEX_PYTHON=/path/to/python3` for one from your system. The installer then builds the runtime again on that Python, and removes the private Python and `uv` once nothing runs on them, saying so. Its first line names the Python it uses and, when it kept the runtime's, says so. Source installs also need Git, and Bun (which the installer installs when missing).
 
 ## Recommended Install
 
@@ -42,7 +44,7 @@ The installer:
 
 1. Detects your system and processor, and picks the matching wheel (each release has one per supported platform, with the TUI built for it)
 2. Uses a system Python 3.11+ (see above), or installs a private one with `uv`
-3. Creates an isolated runtime under `~/.cortex/install`
+3. Creates an isolated runtime under `~/.cortex/install`, and makes `~/.cortex` readable only by you (it will hold your keys and conversations)
 4. Downloads the `cortex-llm` wheel from the GitHub release (the single distribution channel), verifies it against the release's `.sha256` asset, and installs the verified wheel — or installs the source checkout when run from a clone
 5. Builds the OpenTUI sidecar when missing or stale (installing Bun if needed; release wheels already bundle it)
 6. Links the `cortex` launcher into `~/.local/bin` and, when that folder is not on your `PATH`, adds it in your shell's profile (`~/.zshrc`; for bash both `~/.bashrc` and the login profile, `~/.bash_profile` or `~/.profile`; fish's `conf.d`; otherwise `~/.profile`); set `CORTEX_NO_MODIFY_PATH=1` to leave profiles alone
@@ -102,7 +104,7 @@ To go back to an earlier release, run the installer with that version
 `/update cortex` only ever moves to a newer release.
 
 ```text
-/update            # inside Cortex: installed vs latest version
+/update            # inside Cortex: the installed version, and a newer one if there is one
 /update cortex     # install the latest published Cortex release (restart to apply)
 ```
 
@@ -139,7 +141,7 @@ rm -f ~/.local/bin/cortex
 for link in /opt/homebrew/bin/cortex /usr/local/bin/cortex; do
   if [ "$(readlink "$link")" = "$HOME/.local/bin/cortex" ]; then rm -f "$link"; fi
 done
-rmdir ~/.local/bin ~/.local 2>/dev/null  # only if nothing else is in them
+rmdir ~/.local/bin ~/.local 2>/dev/null || true  # only if nothing else is in them
 ```
 
 That removes the program; your settings, saved keys, logs and conversations
@@ -149,12 +151,13 @@ stay in `~/.cortex`. To remove them too:
 rm -rf ~/.cortex
 ```
 
-That also deletes a `~/.cortex/config.yaml` you wrote. To keep it and remove
-the rest (saved keys, logs, conversations, the remembered model, and the
-"Allow always" answers in `tool_permissions.yaml`):
+That also deletes a `~/.cortex/config.yaml` you wrote. To keep it, and
+the program in `~/.cortex/install`, and remove the rest (saved keys, logs,
+conversations, the remembered model, and the "Allow always" answers in
+`tool_permissions.yaml`):
 
 ```bash
-find ~/.cortex -mindepth 1 -maxdepth 1 ! -name config.yaml -exec rm -rf {} +
+find ~/.cortex -mindepth 1 -maxdepth 1 ! -name config.yaml ! -name install -exec rm -rf {} +
 ```
 
 Keys `/login` saved to `~/.cortex/credentials.json` go with `~/.cortex`. If
