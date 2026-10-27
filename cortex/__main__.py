@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import stat
 import sys
 import tempfile
 from io import TextIOBase
+from pathlib import Path
 from typing import Any
 
 from cortex.ui_runtime.launcher import USER_TMPDIR_VARIABLE, launch_tui
@@ -93,7 +95,22 @@ def _has_terminal() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def _private_home_folder() -> None:
+    """~/.cortex holds conversations, logs, settings and maybe keys: only its
+    owner may open it. A folder that is a link, or not the user's, is left
+    as it is."""
+    folder = Path.home() / ".cortex"
+    try:
+        folder.mkdir(mode=0o700, exist_ok=True)
+        info = folder.lstat()
+        if stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and info.st_mode & 0o077:
+            folder.chmod(0o700)
+    except OSError:
+        pass  # Cortex still runs; the files say why they cannot be written.
+
+
 def main() -> None:
+    _private_home_folder()
     try:
         parser = argparse.ArgumentParser(
             prog="cortex",

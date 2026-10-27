@@ -8,11 +8,11 @@ A setting that is unknown or not valid (for example a number above its maximum) 
 
 Any flat key can also be overridden with a `CORTEX_<KEY>` environment variable (values parsed as YAML): `CORTEX_TOOLS_MAX_ITERATIONS=80` overrides `tools_max_iterations`, `CORTEX_TOOLS_ENABLED=false` disables tooling. Env overrides beat `config.yaml`. Unknown `CORTEX_*` variables are ignored.
 
-Files Cortex writes outside the project:
+Files Cortex writes outside the project (`~/.cortex` is readable only by you):
 
 - `~/.cortex/state.yaml` — runtime state, kept separate from `config.yaml` so Cortex never rewrites your configuration: the last-used model, and the Azure endpoint and OpenAI-compatible base URL last used to select a model, so later sessions work without setting them again. `AZURE_OPENAI_ENDPOINT`/`OPENAI_COMPATIBLE_BASE_URL` and the `config.yaml` keys take precedence over the saved ones.
 - `~/.cortex/credentials.json` — API keys saved with `/login` where no system keyring works, readable only by you.
-- `~/.cortex/cortex.log` — the log; `~/.cortex/update-check.json` — when Cortex last checked for a new release.
+- `~/.cortex/cortex.log` — the log; `~/.cortex/cortex-tui.log` — errors the interactive app hit, if any; `~/.cortex/update-check.json` — when Cortex last checked for a new release.
 - `~/.cortex/conversations/` — conversation history (`conversations.db`) and conversations saved with `/save`.
 - A temporary folder `cortex-tui-<pid>-…` in your temp directory, where the TUI unpacks its native library; it is removed when Cortex exits (or at the next start, after a crash).
 - `~/.cortex/tool_permissions.yaml` — persisted tool permission rules. "Allow always" adds a rule for one exact command or one file, in the directory Cortex was started in (`repo:`). A command run in another directory is saved with it, as `cd ./<dir> || exit 1` (the directory quoted when its name needs it) and the command on the next line. File patterns are paths relative to the start directory, such as `src/app.py`. Saved patterns escape wildcard characters, so `ls *.py` is saved as `ls [*].py` and matches only itself. A call with no command or file to name is never saved. Changes to the file apply at once, also in running sessions; while the file cannot be parsed, sessions keep the rules they last read. A rule you write without `repo:` applies everywhere; `repo:` takes an absolute path (or one starting with `~`). When several rules match, the last one in the file wins. "Allow always" answers this session could not save still apply until it ends. Its `pattern` may use the wildcards `*`, `?` and `[...]`, but a wildcard in a `bash` pattern matches anything, including further commands: `git *` also allows `git log; rm -rf ~`. Files with `version: 1` were written by older Cortex versions, whose "Allow always" covered every command or file in every repository: their allow rules for `bash` and edits are ignored and removed at the next save, so those tools ask again. A lock file, `.tool_permissions.yaml.lock`, sits next to it. For example, to let `cortex -p` run the tests and `git diff` in one repository without `--full-auto`:
@@ -29,7 +29,7 @@ Files Cortex writes outside the project:
       action: allow
       repo: ~/code/myproject
   ```
-- `~/.cortex/cloud_models.json` — optional models to add to the `/model` picker, by provider, such as `{"openai-compatible": ["deepseek/deepseek-v4.1-flash"], "azure": ["my-deployment"]}`. `openai-compatible` has no built-in models, so this file is how its models appear in the picker.
+- `~/.cortex/cloud_models.json` — optional models to add to the `/model` picker, by provider, such as `{"openai-compatible": ["deepseek/deepseek-v4.1-flash"], "azure": ["my-deployment"]}`. `openai-compatible` has no built-in models: a model you select by name is listed from then on, and this file lists models before you have used them.
 
 ## Template
 

@@ -122,3 +122,26 @@ def test_install_sh_verifies_wheel_checksum_before_pip() -> None:
     assert INSTALL_SH.index("Checksum mismatch") < INSTALL_SH.index('"${WHEEL_PATH}"')
     # The private Python's uv is verified the same way before it runs.
     assert INSTALL_SH.index('[[ "${want}" == "${got}" ]]') < INSTALL_SH.index('"${uv_bin}" python install')
+
+
+def test_the_documented_uninstall_removes_what_the_installer_added_to_profiles(
+    tmp_path: Path,
+) -> None:
+    """The profile commands in docs/installation.md undo install.sh's PATH
+    lines: a user's own lines stay, and a profile the installer created goes."""
+    import subprocess
+
+    # install.sh appends a blank line, its marker and the PATH line.
+    assert "printf '\\n# Added by the Cortex installer\\n%s\\n'" in INSTALL_SH
+    added = '\n# Added by the Cortex installer\ncase ":$PATH:" in *) ;; esac\n'
+    (tmp_path / ".bashrc").write_text("alias ll=ls\n" + added + "export KEEP=1\n")
+    (tmp_path / ".profile").write_text(added)
+
+    docs = (REPO_ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
+    block = re.search(r"```bash\n(for f in ~/\.zshrc[^`]*)```", docs)
+    assert block, "uninstall profile commands not found in docs/installation.md"
+    subprocess.run(["bash", "-c", block.group(1)], env={"HOME": str(tmp_path),
+                   "PATH": "/usr/bin:/bin"}, check=True)
+
+    assert (tmp_path / ".bashrc").read_text() == "alias ll=ls\nexport KEEP=1\n"
+    assert not (tmp_path / ".profile").exists()

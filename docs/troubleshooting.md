@@ -167,7 +167,8 @@ chmod -R u+rwX ~/.cortex/
 | "No model loaded" | No model selected | `/login <provider> <key>`, then `/model` |
 | "No API key configured for <provider>" | Model selected without credentials | `/login <provider> <key>` or the environment variable named in the message |
 | "Unsupported provider" | `/model` selector without a known provider | `/model <provider>:<model>` with openai, anthropic, azure, or openai-compatible |
-| "Permission denied by rule" / rejected tool calls | Headless without `--full-auto`, or a persisted deny rule | Pass `--full-auto`, or edit `~/.cortex/tool_permissions.yaml` |
+| `[tool] bash refused (needs --full-auto)` in a headless run | Headless runs refuse edits and commands without `--full-auto` | Pass `--full-auto`, or allow chosen commands in `~/.cortex/tool_permissions.yaml` (see the [Configuration Guide](configuration.md)) |
+| "Not allowed: a rule in ~/.cortex/tool_permissions.yaml denies this ..." | A deny rule you saved | Edit `~/.cortex/tool_permissions.yaml` |
 | "Unknown command" | Typo in slash command | `/help` |
 
 ---
@@ -191,5 +192,5 @@ Logs are written to `~/.cortex/cortex.log`.
 ## Getting Help
 
 - **Inside Cortex:** `/help` lists all commands.
-- **GitHub Issues:** report bugs at the project's GitHub Issues page.
+- **GitHub Issues:** report bugs at https://github.com/faisalmumtaz89/Cortex/issues. Include `cortex --version`, and the end of `~/.cortex/cortex.log` (and `~/.cortex/cortex-tui.log` if it exists).
 - **Source code:** in the repository, the entry point is `cortex/__main__.py` and the worker runtime is `cortex/app/worker_runtime.py`.

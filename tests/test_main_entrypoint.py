@@ -42,3 +42,22 @@ def test_the_app_without_a_terminal_says_to_use_headless_mode(tmp_path: Path) ->
     assert process.returncode == 2, process.stderr
     assert "needs a terminal" in process.stderr
     assert "cortex -p" in process.stderr
+
+
+def test_cortex_keeps_its_home_folder_private(tmp_path: Path) -> None:
+    """~/.cortex holds conversations, logs and settings: only its owner may
+    read it, also when the installer created it with the usual 0755."""
+    repo_root = Path(__file__).resolve().parents[1]
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "PYTHONPATH": str(repo_root)}
+    folder = tmp_path / ".cortex"
+    folder.mkdir(mode=0o755)
+    folder.chmod(0o755)
+    subprocess.run([sys.executable, "-P", "-m", "cortex", "--version"], env=env, check=True,
+                   capture_output=True, timeout=60)
+    assert folder.stat().st_mode & 0o777 == 0o700
+
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    subprocess.run([sys.executable, "-P", "-m", "cortex", "--version"],
+                   env={**env, "HOME": str(fresh)}, check=True, capture_output=True, timeout=60)
+    assert (fresh / ".cortex").stat().st_mode & 0o777 == 0o700

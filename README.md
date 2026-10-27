@@ -41,16 +41,9 @@ Runs on macOS (Apple Silicon or Intel), Linux (x86_64 or arm64), and Windows thr
 
 [Installation](docs/installation.md) · [CLI & tools](docs/cli.md) · [Configuration](docs/configuration.md) · [Conversations](docs/conversation-management.md) · [Troubleshooting](docs/troubleshooting.md) · [Architecture](docs/architecture-runtime.md) · [Protocol debugging](docs/protocol-debugging.md) · [Development](docs/development.md)
 
-## Development
+## Contributing
 
-```bash
-pip install -e ".[dev]"
-python -m pytest tests/ -q          # full suite — must be green before and after any change
-./scripts/typecheck.sh              # mypy
-cd frontend/cortex-tui && bun run typecheck && bun run build   # TUI sidecar
-```
-
-Behavioral changes are gated empirically: e2e suites drive the real worker over JSON-RPC and the real TUI in tmux with a deterministic scripted model, asserting observable effects. If a change cannot be observed through the suite, add the E2E scenario first. See [Development](docs/development.md).
+Working on Cortex itself: set up a source checkout and run the test suites as [Development](docs/development.md) describes.
 
 ## License
 

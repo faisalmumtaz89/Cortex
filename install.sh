@@ -291,8 +291,10 @@ add_to_path() {
   local profile
   for profile in "${profiles[@]}"; do
     if ! grep -qsF "${BIN_DIR}" "${profile}"; then
+      local created=""
+      [[ -e "${profile}" ]] || created=" (a new file)"
       printf '\n# Added by the Cortex installer\n%s\n' "${line}" >> "${profile}"
-      ok "Added ${BIN_DIR} to PATH in ${profile}"
+      ok "Added ${BIN_DIR} to PATH in ${profile}${created}"
     fi
   done
 }
@@ -681,5 +683,11 @@ if [[ "${NEW_SHELL_NEEDED}" == "1" ]]; then
 else
   echo "Run: cortex"
 fi
-echo "Then add a key with /login (or set OPENAI_API_KEY, ANTHROPIC_API_KEY, ...) and pick a model with /model."
+if [[ -f "${HOME}/.cortex/state.yaml" ]]; then
+  # Reinstalled over a Cortex that was already used: nothing to set up again.
+  echo "Your settings, keys and conversations in ~/.cortex are kept."
+else
+  echo "Then add a key with /login (or set OPENAI_API_KEY, ANTHROPIC_API_KEY, or"
+  echo "OPENAI_COMPATIBLE_API_KEY with OPENAI_COMPATIBLE_BASE_URL) and pick a model with /model."
+fi
 echo

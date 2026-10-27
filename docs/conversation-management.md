@@ -2,7 +2,7 @@
 
 ## Overview
 
-Cortex keeps each session's conversation and, by default, saves it to `~/.cortex/conversations/conversations.db`; `/save` also writes it as a JSON file, and `/clear` starts over. In the interactive app a session's conversation continues across turns; each headless `-p` run starts a new one. (For contributors: the implementation is in `cortex/conversation_manager.py`, and `cortex/app/session_service.py` maps sessions to conversations.)
+Cortex keeps each session's conversation and, by default, saves it to `~/.cortex/conversations/conversations.db`; `/save` also writes it as a JSON file, and `/clear` starts over. In the interactive app a session's conversation continues across turns; each headless `-p` run starts a new one.
 
 ## Storage and Autosave
 

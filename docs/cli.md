@@ -27,7 +27,7 @@ Type a message to run an agent turn with the active model, or a slash command to
 | `Esc` | Close the palette or result panel; otherwise interrupt the running turn |
 | `Ctrl+O` | Show or hide tool details |
 | `PageUp` / `PageDown` | Scroll the transcript |
-| `Ctrl+C` | Exit Cortex |
+| `Ctrl+C` | Exit Cortex at once, without asking |
 
 ## Headless Mode
 
@@ -39,8 +39,8 @@ Runs one agent turn through the same worker wiring the TUI uses:
 
 - The assistant reply streams to **stdout**; tool activity and errors go to **stderr**, so stdout stays pipeable.
 - `--model` accepts the same `provider:model` selectors as `/model`.
-- Permission policy: reads (`read_file`, `list_dir`, `search`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt): the model is told so, stderr shows `[tool] bash refused (needs --full-auto)`, and the run ends with a note saying how many calls were refused. Persisted rules from `~/.cortex/tool_permissions.yaml` still apply, so a command you allowed with "Allow always" in the app runs without `--full-auto` (see `tool_permissions.yaml` in the [Configuration Guide](configuration.md)).
-- Exit codes: `0` success, `1` turn error (the provider refused the request, the reply was cut off, ...), `2` setup error (no model selected, or model selection failed). A turn whose edits or commands were refused still exits `0`; check stderr for the refusal note.
+- Permission policy: reads (`read_file`, `list_dir`, `search`) are allowed; `edit_file`, `write_file`, and `bash` are denied unless `--full-auto` is passed (there is no interactive prompt): the model is told so, along with the commands your saved rules allow, stderr shows `[tool] bash refused (needs --full-auto)`, and the run ends with a note saying how many calls were refused. Persisted rules from `~/.cortex/tool_permissions.yaml` still apply, so a command you allowed with "Allow always" in the app runs without `--full-auto` (see `tool_permissions.yaml` in the [Configuration Guide](configuration.md)).
+- Exit codes: `0` success, `1` turn error (the provider refused the request, for example an unknown model name; the reply was cut off; ...), `2` setup error (no model selected, or model selection failed). A turn whose edits or commands were refused still exits `0`; check stderr for the refusal note.
 - Without `--model`, the model last selected (in the TUI or by an earlier `--model`) is used; the first run needs `--model`. If that model cannot be used now (most often: its key is not set in this terminal), the run says why and exits `2`, and the model stays selected for the next run. A `--model` the provider refuses outright (an unknown model name, for example) is not remembered. `-p` is also available as `--print`.
 - `-p` needs a prompt: an empty one, or `--model`/`--full-auto` without `-p`, is a usage error (exit `2`) rather than starting the interactive app.
 - Each run is a new conversation: it does not see earlier `-p` runs, so say everything the task needs in the prompt.
@@ -108,7 +108,8 @@ provider. Give its key and base URL with
 `/login openai-compatible <api_key> <base_url>` (for example
 `/login openai-compatible sk-... https://api.deepseek.com/v1`), and select the
 model as `/model openai-compatible:<model>`; the model you select is listed in
-the `/model` picker from then on. Outside the app, set `OPENAI_COMPATIBLE_API_KEY`
+the `/model` picker from then on. Once you are logged in, the picker also has a
+row `openai-compatible:… type a model name` that starts that command for you. Outside the app, set `OPENAI_COMPATIBLE_API_KEY`
 and `OPENAI_COMPATIBLE_BASE_URL` instead (or `cloud_openai_compatible_base_url` in
 `~/.cortex/config.yaml`); these take precedence over what `/login` saved. A base URL in use is also saved in `~/.cortex/state.yaml`, so a later session needs only the key. The reasoning such models stream
 (`reasoning_content` or `reasoning`) is sent back with the reply step it belongs
@@ -133,7 +134,7 @@ File tools work only inside the directory Cortex was started in, and `bash` runs
 
 An edit's prompt shows the change it would make, as a diff with line numbers, before anything is written (as many rows as fit the screen, then a count of the rest).
 
-The prompt shows a command on one line: backslashes, line breaks, tabs and invisible or blank-looking characters appear as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count. A command too long to show in full keeps its start and end, with a count of the characters not shown, and the prompt then starts on **Reject**.
+The prompt shows a command on one line: backslashes, line breaks, tabs and invisible or blank-looking characters appear as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count. A long command fills the rows free on screen; one longer than they hold keeps its start and end, with a count of the characters not shown, and the prompt then starts on **Reject**.
 
 Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds `edit_file`/`write_file`), `full` (adds `bash`). See `docs/configuration.md` for the `tools_*` keys.
 

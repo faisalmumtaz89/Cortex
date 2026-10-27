@@ -154,12 +154,14 @@ Keys saved to `~/.cortex/credentials.json` go with `~/.cortex`.
 The installer may have put `~/.local/bin` on your `PATH`: a line under
 `# Added by the Cortex installer` in `~/.zshrc`, `~/.bashrc`, `~/.bash_profile`
 or `~/.profile`, or the file `~/.config/fish/conf.d/cortex.fish`. If nothing
-else of yours lives in `~/.local/bin`, remove them (the installer created a
-profile file that did not exist; delete it once it is empty):
+else of yours lives in `~/.local/bin`, remove them. This also deletes a
+profile file left empty, which the installer created:
 
 ```bash
 for f in ~/.zshrc ~/.bashrc ~/.bash_profile ~/.profile; do
-  [ -f "$f" ] && sed -i.bak -e '/# Added by the Cortex installer/{N;d;}' "$f" && rm -f "$f.bak"
+  [ -f "$f" ] || continue
+  perl -0pi -e 's/\n?# Added by the Cortex installer\n[^\n]*\n?//g' "$f"
+  grep -q '[^[:space:]]' "$f" || rm -f "$f"
 done
 rm -f ~/.config/fish/conf.d/cortex.fish
 ```
