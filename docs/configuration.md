@@ -4,9 +4,9 @@
 
 Cortex reads configuration from `~/.cortex/config.yaml` when it starts: restart Cortex after changing it. It never reads a `config.yaml` from the project it runs in, so a cloned repository's `config.yaml` cannot change Cortex's settings, such as where requests and API keys are sent. The file uses a flat key structure (no nested sections) and **every key is optional** — anything omitted falls back to its default. The [Template](#template) below lists the most useful keys.
 
-A setting that is unknown or not valid (for example a number above its maximum) is ignored, and the others still apply: it falls back to its default, or, for a `CORTEX_*` variable that is not valid, to the value in `config.yaml`. Cortex lists what it ignored in the notice when a session starts (on stderr for a headless `-p` run) and in `~/.cortex/cortex.log`. `tools_idle_timeout_seconds` is not read: `cloud_timeout_seconds` sets the request timeout, and a permission prompt waits for your answer.
+A setting that is unknown or not valid (for example a number above its maximum) is ignored, and the others still apply: it falls back to its default, or, for a `CORTEX_*` variable that is not valid, to the value in `config.yaml`. Cortex lists what it ignored in the notice when a session starts (on stderr for a headless `-p` run) and in `~/.cortex/cortex.log`.
 
-Any flat key can also be overridden with a `CORTEX_<KEY>` environment variable (values parsed as YAML): `CORTEX_TOOLS_MAX_ITERATIONS=80` overrides `tools_max_iterations`, `CORTEX_TOOLS_ENABLED=false` disables tooling. Env overrides beat `config.yaml`. Unknown `CORTEX_*` variables are ignored.
+Any flat key can also be overridden with a `CORTEX_<KEY>` environment variable (values parsed as YAML): `CORTEX_TOOLS_MAX_ITERATIONS=80` overrides `tools_max_iterations`, `CORTEX_TOOLS_ENABLED=false` disables tooling. Env overrides beat `config.yaml`. Unknown `CORTEX_*` variables are ignored; the installer's own, such as `CORTEX_MANAGED_PYTHON`, are in the [Installation Guide](installation.md#installer-variables).
 
 Files Cortex writes outside the project (the folder `~/.cortex` opens only for you, so the files in it are private too):
 
@@ -104,7 +104,7 @@ auto_update_check: true      # false: no daily check for a new release
 
 - `debug_mode` (default: `false`) — also writes the log to stderr.
 
-A setting earlier versions accepted without acting on it (`ui_theme`, `save_format`, `log_rotation`, `tools_continue_on_reject` and others) is named in the startup notice as having no effect, so you can delete it from `config.yaml`.
+A setting earlier versions accepted without acting on it (`ui_theme`, `save_format`, `log_rotation`, `tools_continue_on_reject`, `tools_idle_timeout_seconds` and others) is named in the startup notice as having no effect, so you can delete it from `config.yaml`. For `tools_idle_timeout_seconds`, the notice adds that `cloud_timeout_seconds` sets the request timeout and that a permission prompt waits for your answer.
 
 ## Notes
 

@@ -48,7 +48,7 @@ bun run build
 .venv/bin/python -P -m cortex --worker-stdio                     # source checkout
 ```
 
-If the worker starts but the app still cannot reach it, its two halves are probably from different versions (a source checkout's TUI with an installed worker, for example): reinstall Cortex. `docs/protocol-debugging.md` shows how to talk to the worker by hand.
+If the worker starts but the app still cannot reach it, its two halves are probably from different versions (a source checkout's TUI with an installed worker, for example): reinstall Cortex. [Protocol Debugging](protocol-debugging.md) shows how to talk to the worker by hand.
 
 ---
 
@@ -64,8 +64,9 @@ If the worker starts but the app still cannot reach it, its two halves are proba
 The installer needs nothing from you here: it uses a Python 3.11 or later
 from your system, or installs a private one when there is none, and a
 re-run keeps the one the runtime uses. To change it, run the installer
-with `CORTEX_MANAGED_PYTHON=1` (the private one) or `CORTEX_PYTHON=/path/to/python3`
-(see the [Installation Guide](installation.md)).
+with `CORTEX_MANAGED_PYTHON=1` for the private Python, or `CORTEX_MANAGED_PYTHON=0`
+or `CORTEX_PYTHON=/path/to/python3` for one from your system, set after the pipe:
+`curl ... | CORTEX_MANAGED_PYTHON=0 bash` (see [Installer Variables](installation.md#installer-variables)).
 
 A source checkout (`pip install -e .`) needs Python 3.11 or later
 (`python3 --version`). If yours is older:
@@ -173,6 +174,7 @@ chmod -R u+rwX ~/.cortex/
 | Error | Cause | Solution |
 |-------|-------|----------|
 | "No model loaded" | No model selected | `/login <provider> <key>`, then `/model` |
+| `error: no model selected` from `cortex -p` (exit 2) | No `--model`, and no remembered model (it lives in `~/.cortex/state.yaml`) | Pass `--model provider:model`; the model a run uses is remembered for the next |
 | "No API key configured for <provider>" | Model selected without credentials | `/login <provider> <key>` or the environment variable named in the message |
 | "Unsupported provider" | `/model` selector without a known provider | `/model <provider>:<model>` with openai, anthropic, azure, or openai-compatible |
 | `[tool] bash refused (needs --full-auto)` in a headless run | Headless runs refuse edits and commands without `--full-auto` | Pass `--full-auto`, or allow chosen commands in `~/.cortex/tool_permissions.yaml` (see the [Configuration Guide](configuration.md)) |

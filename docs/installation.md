@@ -6,11 +6,11 @@
 |---|---|
 | macOS 13 or later, Apple Silicon or Intel | |
 | Linux x86_64 or arm64 with glibc 2.28 or later | Debian 10, Ubuntu 20.04, RHEL 8, Fedora, Arch, or newer. Not musl distributions such as Alpine. |
-| Windows 10 or 11 | Through WSL (Windows Subsystem for Linux); the PowerShell installer sets it up. |
+| Windows 10 or 11 | Through WSL (Windows Subsystem for Linux) with a Linux distribution such as Ubuntu; the PowerShell installer installs Cortex into it. |
 
-The installer needs only `curl`. It uses a Python 3.11+ from your system when one is there (the first of `python3.13`, `python3.12`, `python3.11` and `python3` that has `venv`; set `CORTEX_PYTHON` to choose one); otherwise it downloads `uv` (checksum-verified) and installs a private Python 3.12 under `~/.cortex/install`, without admin rights or a package manager. The private Python and `uv` stay in `~/.cortex/install`: nothing is added to `~/.local/bin` or `~/.cache`.
+The installer needs only `curl`. It uses a Python 3.11+ from your system when one is there (the first of `python3.13`, `python3.12`, `python3.11` and `python3` that has `venv`; set `CORTEX_PYTHON` to choose one); otherwise it downloads `uv` (checksum-verified) and installs a private Python 3.12 under `~/.cortex/install`, without admin rights or a package manager. The private Python and `uv` stay in `~/.cortex/install`: neither adds anything to `~/.local/bin` or `~/.cache`.
 
-Running the installer again (to upgrade, say) keeps the Python the runtime already runs on, while it still works. To change it, choose for that run: `CORTEX_MANAGED_PYTHON=1` for the private Python, `CORTEX_MANAGED_PYTHON=0` or `CORTEX_PYTHON=/path/to/python3` for one from your system. The installer then builds the runtime again on that Python, and removes the private Python and `uv` once nothing runs on them, saying so. Its first line names the Python it uses and, when it kept the runtime's, says so. Source installs also need Git, and Bun (which the installer installs when missing).
+Running the installer again (to upgrade, say) keeps the Python the runtime already runs on, while it still works. To change it, choose for that run: `CORTEX_MANAGED_PYTHON=1` for the private Python, `CORTEX_MANAGED_PYTHON=0` or `CORTEX_PYTHON=/path/to/python3` for one from your system (see [Installer Variables](#installer-variables)). The installer then builds the runtime again on that Python, and removes the private Python and `uv` once nothing runs on them, saying so. Its `→ Using Python …` line names the Python it uses and, when it kept the runtime's, says so. Source installs also need Git, and Bun (which the installer installs when missing).
 
 ## Recommended Install
 
@@ -22,6 +22,9 @@ curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.
 
 # Install release X.Y.Z, newer or older than the one you have (the vX.Y.Z GitHub release's wheel)
 curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash -s -- X.Y.Z
+
+# Install on the private Python: an installer variable goes after the pipe, before bash
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | CORTEX_MANAGED_PYTHON=1 bash
 
 # Or clone and run locally (installs from the source checkout)
 git clone https://github.com/faisalmumtaz89/Cortex.git
@@ -50,6 +53,20 @@ The installer:
 6. Links the `cortex` launcher into `~/.local/bin` and, when that folder is not on your `PATH`, adds it in your shell's profile (`~/.zshrc`; for bash both `~/.bashrc` and the login profile, `~/.bash_profile` or `~/.profile`; fish's `conf.d`; otherwise `~/.profile`); set `CORTEX_NO_MODIFY_PATH=1` to leave profiles alone
 
 A checksum mismatch or a missing `.sha256` asset aborts the install — nothing is installed. If no release has been published yet, the installer says so and points at the source-checkout install instead. Prerelease versions are not installable via `install.sh` — pins are stable `X.Y.Z` only (`vX.Y.Z` works too).
+
+### Installer Variables
+
+Each applies to the run it is set for. With `curl ... | bash`, set it on `bash`, the side of the pipe that runs the installer (`curl ... | CORTEX_MANAGED_PYTHON=1 bash -s -- X.Y.Z`): set before `curl`, it reaches only `curl`, and the installer runs without it.
+
+| Variable | Effect |
+|---|---|
+| `CORTEX_MANAGED_PYTHON=1` | Use the private Python, installing it when missing. |
+| `CORTEX_MANAGED_PYTHON=0` | Use a Python from your system; stop if there is none. |
+| `CORTEX_PYTHON=/path/to/python3` | Use this Python; stop, with the reason, if it is not 3.11 or later with `venv`. |
+| `CORTEX_NO_MODIFY_PATH=1` | Change no shell profile; the installer prints the full path to run Cortex by. |
+
+A choice that cannot be met, or a value other than `1` or `0`, stops the installer before it changes anything.
+| `$env:CORTEX_VERSION = "X.Y.Z"` | Windows (`install.ps1`): install that release instead of the latest. |
 
 ## Development Install
 
@@ -99,20 +116,24 @@ Typing `/login` alone opens a picker of the providers. Provider keys can also co
 
 Cortex checks once a day (in the background, never blocking startup) whether a newer Cortex release exists and posts a one-line notice at session start when one does. Opt out with `auto_update_check: false` in `~/.cortex/config.yaml`.
 
-To go back to an earlier release, run the installer with that version
-(`... | bash -s -- X.Y.Z`, as above): settings, keys and conversations stay.
-`/update cortex` only ever moves to a newer release.
-
 ```text
 /update            # inside Cortex: the installed version, and a newer one if there is one
 /update cortex     # install the latest published Cortex release (restart to apply)
 ```
 
-Or re-run the installer from a shell:
+Or re-run the installer from a shell. It keeps the Python Cortex runs on,
+and your settings, keys and conversations:
 
 ```bash
+# The latest release
 curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash
+
+# Release X.Y.Z, newer or older than the one you have
+curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | bash -s -- X.Y.Z
 ```
+
+`/update cortex` only ever moves to a newer release: to go back to an earlier
+one, use the installer.
 
 `/update cortex` only ever installs a pinned, published release that is strictly newer than the running version: it downloads that GitHub release's wheel asset, verifies it against the release's `.sha256` asset, and installs the verified wheel into the running environment. The new version applies when you restart Cortex. Quitting Cortex while the install step is running is safe — the worker finishes that step before exiting rather than interrupting it.
 
@@ -129,9 +150,14 @@ sudo chown -R $(whoami) ~/.cortex
 chmod -R u+rwX ~/.cortex
 ```
 
-For everything else, see `docs/troubleshooting.md`.
+For everything else, see the [Troubleshooting Guide](troubleshooting.md).
 
 ## Uninstallation
+
+Uninstalling has up to three parts: the program, your data in `~/.cortex`,
+and the `PATH` line in your shell profiles. Each can be done alone.
+
+### The Program
 
 ```bash
 # Remove the isolated runtime and launcher
@@ -145,20 +171,24 @@ rmdir ~/.local/bin ~/.local 2>/dev/null || true  # only if nothing else is in th
 ```
 
 That removes the program; your settings, saved keys, logs and conversations
-stay in `~/.cortex`. To remove them too:
+stay in `~/.cortex`.
 
-```bash
-rm -rf ~/.cortex
-```
+### Your Data
 
-That also deletes a `~/.cortex/config.yaml` you wrote. To keep it, and
-the program in `~/.cortex/install`, and remove the rest (saved keys, logs,
-conversations, the remembered model, and the "Allow always" answers in
-`tool_permissions.yaml`):
+To remove your data but keep a `~/.cortex/config.yaml` you wrote (and the
+program, if it is still in `~/.cortex/install`), remove everything else:
+saved keys, logs, conversations, the remembered model, and the "Allow
+always" answers in `tool_permissions.yaml`:
 
 ```bash
 find ~/.cortex -mindepth 1 -maxdepth 1 ! -name config.yaml ! -name install -exec rm -rf {} +
 ```
+
+Run it after removing the program, too: a Cortex run in between writes a
+log and state again. A `~/.cortex` you keep stays readable only by you.
+
+To remove all of `~/.cortex` instead, `config.yaml` and the program
+included: `rm -rf ~/.cortex`.
 
 Keys `/login` saved to `~/.cortex/credentials.json` go with `~/.cortex`. If
 it said it saved a key to the system keyring instead, that key stays there
@@ -167,13 +197,16 @@ macOS, or on Linux Passwords and Keys (Seahorse) or, where it is installed,
 `secret-tool clear service cortex-llm username openai_api_key` (likewise
 `anthropic_api_key`, `azure_openai_api_key`, `openai_compatible_api_key`).
 
+### The PATH Line
+
 The installer may have put `~/.local/bin` on your `PATH`: a line under
 `# Added by the Cortex installer` in `~/.zshrc`, `~/.bashrc`, `~/.bash_profile`
 or `~/.profile`, or the file `~/.config/fish/conf.d/cortex.fish`. The commands
 below remove only what it added: your own lines stay, and a profile file goes
-only if nothing else is left in it. Skip them if other programs you run from
-`~/.local/bin` need it on your `PATH`. They use `perl`, which macOS and most
-Linux systems have.
+only if nothing else is left in it. Skip them if you run other programs from
+`~/.local/bin` by name, including ones that only became reachable when the
+installer added it: after the cleanup, new terminals do not find them.
+They use `perl`, which macOS and most Linux systems have.
 
 ```bash
 for f in ~/.zshrc ~/.bashrc ~/.bash_profile ~/.profile; do

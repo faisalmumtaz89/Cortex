@@ -54,27 +54,35 @@ die() {
   exit 1
 }
 
-pick_python() {
-  local candidates=()
-  if [[ -n "${CORTEX_PYTHON:-}" ]]; then
-    candidates+=("${CORTEX_PYTHON}")
+python_problem() {
+  # Why the Python $1 cannot run Cortex's runtime; prints nothing when it can.
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "is not a command that can be run"
+    return 0
   fi
-  candidates+=("python3.13" "python3.12" "python3.11" "python3")
-
-  local candidate=""
-  for candidate in "${candidates[@]}"; do
-    if ! command -v "${candidate}" >/dev/null 2>&1; then
-      continue
-    fi
-    # Debian/Ubuntu split venv/ensurepip into python3-venv: without them the
-    # runtime venv cannot be created, so such a Python does not count.
-    if "${candidate}" - <<'PY' >/dev/null 2>&1
+  # Debian/Ubuntu split venv/ensurepip into python3-venv: without them the
+  # runtime venv cannot be created.
+  local verdict=""
+  verdict="$("$1" - <<'PY' 2>/dev/null
 import sys
 if sys.version_info < (3, 11):
-    raise SystemExit(1)
-import ensurepip, venv  # noqa: F401
+    sys.stdout.write("is Python %d.%d; Cortex needs 3.11 or later" % sys.version_info[:2])
+else:
+    try:
+        import ensurepip, venv  # noqa: F401
+    except ImportError:
+        sys.stdout.write("has no venv module (on Debian or Ubuntu: sudo apt install python3-venv)")
+    else:
+        sys.stdout.write("ok")
 PY
-    then
+)" || true
+  [[ "${verdict}" == "ok" ]] || echo "${verdict:-is not a Python that runs}"
+}
+
+pick_python() {
+  local candidate=""
+  for candidate in python3.13 python3.12 python3.11 python3; do
+    if [[ -z "$(python_problem "${candidate}")" ]]; then
       echo "${candidate}"
       return 0
     fi
@@ -565,9 +573,19 @@ PY
 
 detect_platform
 command -v curl >/dev/null 2>&1 || die "curl is required to install Cortex (for example: sudo apt install curl)."
-INSTALL_ROOT="${CORTEX_INSTALL_ROOT:-$HOME/.cortex/install}"
+for choice in CORTEX_MANAGED_PYTHON CORTEX_NO_MODIFY_PATH; do
+  [[ "${!choice:-0}" =~ ^[01]$ ]] || die "${choice} must be 1 or 0 (got: ${!choice}): installing nothing."
+done
+if [[ "${CORTEX_MANAGED_PYTHON:-}" == "1" && -n "${CORTEX_PYTHON:-}" ]]; then
+  die "CORTEX_MANAGED_PYTHON=1 asks for the private Python and CORTEX_PYTHON for ${CORTEX_PYTHON}: set one of them."
+fi
+if [[ -n "${CORTEX_PYTHON:-}" ]]; then
+  problem="$(python_problem "${CORTEX_PYTHON}")"
+  [[ -z "${problem}" ]] || die "CORTEX_PYTHON=${CORTEX_PYTHON} ${problem}: installing nothing."
+fi
+INSTALL_ROOT="${HOME}/.cortex/install"
 VENV_DIR="${INSTALL_ROOT}/venv"
-BIN_DIR="${CORTEX_BIN_DIR:-$HOME/.local/bin}"
+BIN_DIR="${HOME}/.local/bin"
 LOCAL_LINK="${BIN_DIR}/cortex"
 
 # ~/.cortex will hold conversations, logs and keys: only its owner may open it.
@@ -585,19 +603,22 @@ runtime_base_python() {
 }
 
 # Which Python the runtime uses. A choice made for this run wins:
-# CORTEX_MANAGED_PYTHON=1 for the private one, CORTEX_MANAGED_PYTHON=0 or
-# CORTEX_PYTHON for one from the system. Otherwise a re-run (an upgrade)
-# keeps the Python the runtime already runs on, and a first install takes a
-# system Python 3.11+ with venv support, or else a private one (no admin
-# rights, no package manager).
+# CORTEX_MANAGED_PYTHON=1 for the private one, CORTEX_PYTHON for that one,
+# CORTEX_MANAGED_PYTHON=0 for one from the system; a choice that cannot be
+# met stops the install. Otherwise a re-run (an upgrade) keeps the Python the
+# runtime already runs on, and a first install takes a system Python 3.11+
+# with venv support, or else a private one (no admin rights, no package
+# manager).
 PYTHON_BIN=""
 PYTHON_WHY=""
 if [[ "${CORTEX_MANAGED_PYTHON:-}" == "1" ]]; then
   PYTHON_BIN="$(install_managed_python)"
-elif [[ -n "${CORTEX_MANAGED_PYTHON:-}${CORTEX_PYTHON:-}" ]]; then
+elif [[ -n "${CORTEX_PYTHON:-}" ]]; then
+  PYTHON_BIN="${CORTEX_PYTHON}"
+elif [[ "${CORTEX_MANAGED_PYTHON:-}" == "0" ]]; then
   PYTHON_BIN="$(pick_python || true)"
   [[ -n "${PYTHON_BIN}" ]] \
-    || die "No Python 3.11+ with venv support on this system, which CORTEX_MANAGED_PYTHON=0 or CORTEX_PYTHON asks for."
+    || die "CORTEX_MANAGED_PYTHON=0 asks for a Python from this system, and none of python3.13, python3.12, python3.11 and python3 is 3.11 or later with venv support: installing nothing."
 else
   PYTHON_BIN="$(runtime_base_python || true)"
   if [[ -n "${PYTHON_BIN}" ]]; then
@@ -639,7 +660,7 @@ log "Upgrading installer tooling"
 clear_hidden_site_flags "${RUNTIME_PYTHON}"
 
 INSTALL_MODE="release"
-if [[ "${TARGET}" =~ ^(stable|latest)$ ]] && is_source_checkout && [[ "${CORTEX_INSTALL_SOURCE:-1}" == "1" ]]; then
+if [[ "${TARGET}" =~ ^(stable|latest)$ ]] && is_source_checkout; then
   INSTALL_MODE="source"
 fi
 
@@ -740,5 +761,6 @@ else
   echo "Then add a key with /login (or set OPENAI_API_KEY, ANTHROPIC_API_KEY,"
   echo "AZURE_OPENAI_API_KEY with AZURE_OPENAI_ENDPOINT, or OPENAI_COMPATIBLE_API_KEY"
   echo "with OPENAI_COMPATIBLE_BASE_URL) and pick a model with /model."
+  echo "Only running cortex -p, as in CI? Save the key with: cortex login PROVIDER"
 fi
 echo

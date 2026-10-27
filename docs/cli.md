@@ -174,7 +174,7 @@ An edit's prompt shows the change it would make, as a diff with line numbers, be
 
 The prompt shows a command with backslashes, line breaks, tabs and invisible or blank-looking characters as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count (a line break is always shown, as `\n`). Each line of a command starts a row, after the `\n` that ends the line before it; a command whose lines do not fit is shown on one line. A long command fills the rows free on screen; one longer than they hold keeps its start and end, with a count of the characters not shown, and the prompt then starts on **Reject**.
 
-Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds `edit_file`/`write_file`), `full` (adds `bash`). See `docs/configuration.md` for the `tools_*` keys.
+Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds `edit_file`/`write_file`), `full` (adds `bash`). See the [Configuration Guide](configuration.md) for the `tools_*` keys.
 
 ## Skills
 

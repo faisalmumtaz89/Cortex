@@ -189,3 +189,50 @@ def test_the_documented_data_removal_keeps_config_and_the_program(tmp_path: Path
     subprocess.run(["bash", "-ec", _docs_block("find ~/.cortex")],
                    env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}, check=True)
     assert sorted(path.name for path in home.iterdir()) == ["config.yaml", "install"]
+
+
+def test_the_installer_variables_are_documented_and_set_where_the_installer_sees_them() -> None:
+    """Every CORTEX_* variable a user can give an installer is in the
+    Installer Variables table, and a documented `curl ... | bash` sets one
+    on bash: set before curl, it would reach only curl."""
+    docs = (REPO_ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
+    install_ps1 = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
+    test_seams = {"CORTEX_RELEASE_BASE", "CORTEX_ALLOW_INSECURE_BASE"}
+    read = set(re.findall(r"\$\{(CORTEX_[A-Z_]+):?-", INSTALL_SH)) - test_seams
+    read |= set(re.findall(r"\$env:(CORTEX_[A-Z_]+)", install_ps1))
+    table = docs.split("### Installer Variables", 1)[1].split("\n## ", 1)[0]
+    assert set(re.findall(r"^\| `(?:\$env:)?(CORTEX_[A-Z_]+)", table, re.M)) == read
+
+    for doc in sorted((REPO_ROOT / "docs").glob("*.md")) + [REPO_ROOT / "README.md"]:
+        for line in doc.read_text(encoding="utf-8").splitlines():
+            if "install.sh |" in line:
+                assert "CORTEX_" not in line.split("|", 1)[0], f"{doc.name}: {line}"
+
+
+def test_an_installer_choice_that_cannot_be_met_stops_before_anything_is_installed(
+    tmp_path: Path,
+) -> None:
+    """A Python named with CORTEX_PYTHON is used or the install stops: it is
+    never swapped for another one. So does a choice that is not 1 or 0, or
+    two that contradict each other. HOME is left as it was."""
+    import subprocess
+    import sys
+
+    cases = {
+        "CORTEX_PYTHON=/no/such/python": "CORTEX_PYTHON=/no/such/python is not a command",
+        "CORTEX_PYTHON=/bin/true": "CORTEX_PYTHON=/bin/true is not a Python that runs",
+        "CORTEX_MANAGED_PYTHON=yes": "CORTEX_MANAGED_PYTHON must be 1 or 0 (got: yes)",
+        "CORTEX_NO_MODIFY_PATH=true": "CORTEX_NO_MODIFY_PATH must be 1 or 0 (got: true)",
+        f"CORTEX_MANAGED_PYTHON=1 CORTEX_PYTHON={sys.executable}": "set one of them",
+    }
+    for assignments, message in cases.items():
+        home = tmp_path / "home"
+        home.mkdir()
+        env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+        env.update(pair.split("=", 1) for pair in assignments.split())
+        run = subprocess.run(["bash", str(REPO_ROOT / "install.sh"), "2.0.0"], env=env,
+                             capture_output=True, text=True, timeout=60)
+        assert run.returncode == 1, (assignments, run.stdout, run.stderr)
+        assert message in run.stderr, (assignments, run.stderr)
+        assert list(home.iterdir()) == [], assignments
+        home.rmdir()
