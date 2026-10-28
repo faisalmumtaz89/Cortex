@@ -22,6 +22,12 @@ process.on("SIGWINCH", sync)
 export const terminalColumns = columns
 export const terminalRows = rows
 
+/** The columns inside the screen's side padding (2 + 2): the transcript's,
+ * and the panels' around the prompt. */
+export function screenColumns(): number {
+  return Math.max(10, terminalColumns() - 4)
+}
+
 // A reply's widest line on a wide terminal (its box's maxWidth), for blocks
 // such as tables that lay themselves out to fit it.
 export const PROSE_MAX_WIDTH = 104

@@ -7,9 +7,9 @@ import { displayPath } from "../lib/paths"
 import { shellSummary } from "../lib/shell_summary"
 import { spinnerFrame } from "../lib/spinner"
 import { proseColumns, terminalColumns } from "../lib/terminal_size"
-import { wrapText } from "../lib/text_rows"
 import { DiffView } from "./diff_view"
 import { UI_PALETTE } from "./ui_palette"
+import { WrappedText } from "./wrapped_text"
 
 type ToolState = "pending" | "running" | "completed" | "error"
 
@@ -193,16 +193,19 @@ export function ToolBlock(props: {
 
       {/* What "Allow always" did: the rule saved, and where, or why not. */}
       <Show when={props.note}>
-        <box flexDirection="column" flexShrink={0} paddingLeft={2}>
-          <For each={wrapText(`⎿ ${props.note}`, proseColumns() - 2, 2)}>
-            {(row) => <text fg={UI_PALETTE.textMuted}>{row}</text>}
-          </For>
+        <box paddingLeft={2}>
+          <WrappedText text={`⎿ ${props.note}`} columns={proseColumns() - 2} hang={2} fg={UI_PALETTE.textMuted} />
         </box>
       </Show>
 
       <Show when={errored()}>
         <box paddingLeft={2}>
-          <text fg={UI_PALETTE.statusError}>{`⎿ ${truncate(String(props.error ?? "failed"), 120)}`}</text>
+          <WrappedText
+            text={`⎿ ${truncate(String(props.error ?? "failed"), 120)}`}
+            columns={proseColumns() - 2}
+            hang={2}
+            fg={UI_PALETTE.statusError}
+          />
         </box>
       </Show>
 

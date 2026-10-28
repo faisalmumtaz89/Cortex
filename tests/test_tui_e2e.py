@@ -1912,6 +1912,24 @@ def test_status_names_the_version_and_the_directory(tui_project) -> None:
     assert f"Cortex: {cortex.__version__}" in panel, panel
 
 
+def test_a_notice_that_wraps_breaks_only_at_spaces(tui_project) -> None:
+    """B10 saw notices and results wrap inside a token (`credentials.json (` /
+    `readable only by you)`, `Next: /` / `model`): Cortex cuts every text into
+    rows itself, at spaces, so none of it is wrapped by the terminal UI."""
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]], extra_env={"OPENAI_BASE_URL": "https://example.invalid/v1"})
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "40"],
+                   check=True)
+    session.wait_for("Session ready")
+    time.sleep(1)
+    frame = session.capture()
+    rows = [line.split("┃", 1)[1].strip() for line in frame.splitlines() if "┃" in line]
+    notice = ("Ignored OPENAI_BASE_URL: the openai provider always uses its official host. For another "
+              "endpoint, use openai-compatible (OPENAI_COMPATIBLE_BASE_URL with OPENAI_COMPATIBLE_API_KEY)")
+    assert notice in " ".join(rows), frame
+    assert not [row for row in rows if row.endswith("(")], frame
+
+
 INLINE_CODE_REPLY = (
     "**Map**\n"
     "- `inventory/report.py:10`: `render_table(items: list[Item]) -> str`, entry point; builds "

@@ -1,5 +1,10 @@
 import type { MessageRecord } from "../../context/store"
+import { screenColumns } from "../../lib/terminal_size"
 import { UI_PALETTE } from "../ui_palette"
+import { WrappedText } from "../wrapped_text"
+
+// Columns a message's rows lose to its rail and the padding around them (1 + 2 + 2).
+const MESSAGE_INDENT = 5
 
 // A single left "spine" (┃) instead of a full box — one consistent role marker.
 const SPINE_BORDER = {
@@ -35,7 +40,7 @@ export function UserMessage(props: { message: MessageRecord; index: number }) {
       customBorderChars={SPINE_BORDER}
     >
       <box flexShrink={0} paddingLeft={2} paddingRight={2} backgroundColor={UI_PALETTE.panel}>
-        <text fg={UI_PALETTE.text}>{text()}</text>
+        <WrappedText text={text()} columns={screenColumns() - MESSAGE_INDENT} fg={UI_PALETTE.text} />
       </box>
     </box>
   )

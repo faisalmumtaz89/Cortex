@@ -4,6 +4,7 @@ import type { ResultLayout } from "../lib/result_layout"
 import { terminalColumns } from "../lib/terminal_size"
 import { SelectionRows, listWindow, nameColumn, padPrimary } from "./selection_list"
 import { UI_PALETTE } from "./ui_palette"
+import { WrappedText } from "./wrapped_text"
 
 const SPINE_BORDER = {
   topLeft: "",
@@ -22,6 +23,9 @@ const SPINE_BORDER = {
 // Columns a palette row loses besides its name: the screen's side padding
 // (2 + 2), the panel's rail and padding (1 + 2 + 1), and the "❯ " marker (2).
 const ROW_CHROME = 10
+// Columns a panel's rows lose: the screen's side padding (2 + 2), the panel's
+// rail and its padding (1 + 2 + 1).
+const PANEL_INDENT = 8
 // The palette's footer and the blank row above it.
 const FOOTER_ROWS = 2
 
@@ -63,7 +67,11 @@ export function CommandPalette(props: {
               <span style={{ fg: UI_PALETTE.accent }}>{`/${props.argCommand?.name ?? ""} `}</span>
               <span style={{ fg: UI_PALETTE.text }}>{props.argCommand?.argHint ?? ""}</span>
             </text>
-            <text fg={UI_PALETTE.textMuted}>{props.argCommand?.description ?? ""}</text>
+            <WrappedText
+              text={props.argCommand?.description ?? ""}
+              columns={terminalColumns() - PANEL_INDENT}
+              fg={UI_PALETTE.textMuted}
+            />
           </box>
         }
       >

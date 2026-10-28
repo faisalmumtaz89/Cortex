@@ -1,6 +1,11 @@
 import type { MessageRecord } from "../../context/store"
 import { engineUpdateIndicatorLine } from "../../lib/progress_lines"
+import { screenColumns } from "../../lib/terminal_size"
 import { UI_PALETTE } from "../ui_palette"
+import { WrappedText } from "../wrapped_text"
+
+// Columns a notice's rows lose to its rail and the padding after it (1 + 2).
+const NOTICE_INDENT = 3
 
 const SPINE_BORDER = {
   topLeft: "",
@@ -17,6 +22,10 @@ const SPINE_BORDER = {
 }
 
 const TERMINAL_PHASES = new Set(["ready", "failed"])
+
+function Notice(props: { text: string }) {
+  return <WrappedText text={props.text} columns={screenColumns() - NOTICE_INDENT} fg={UI_PALETTE.textMuted} />
+}
 
 export function SystemMessage(props: { message: MessageRecord; index: number }) {
   // Everything below is a reactive accessor ON PURPOSE: component bodies run
@@ -60,15 +69,9 @@ export function SystemMessage(props: { message: MessageRecord; index: number }) 
       customBorderChars={SPINE_BORDER}
     >
       <box flexShrink={0} paddingLeft={2}>
-        {showPrimaryContent() && <text fg={UI_PALETTE.textMuted}>{props.message.content}</text>}
-        {!showPrimaryContent() && terminalFallbackMessage() && (
-          <text fg={UI_PALETTE.textMuted}>{terminalFallbackMessage()}</text>
-        )}
-        {showLiveProgress() && (
-          <text fg={UI_PALETTE.textMuted}>
-            {engineUpdateIndicatorLine(progress()!, props.message.content)}
-          </text>
-        )}
+        {showPrimaryContent() && <Notice text={props.message.content} />}
+        {!showPrimaryContent() && terminalFallbackMessage() && <Notice text={terminalFallbackMessage()!} />}
+        {showLiveProgress() && <Notice text={engineUpdateIndicatorLine(progress()!, props.message.content)} />}
       </box>
     </box>
   )

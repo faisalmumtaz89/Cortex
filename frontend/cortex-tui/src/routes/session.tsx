@@ -27,7 +27,9 @@ import { panelRows } from "../lib/screen_rows"
 import { promptHasDraft, registerPromptDraft } from "../lib/prompt_draft"
 import { applyEdit, masked } from "../lib/secret_input"
 import { turnRunning } from "../protocol"
-import { terminalColumns } from "../lib/terminal_size"
+import { screenColumns, terminalColumns } from "../lib/terminal_size"
+import { WrappedText } from "../components/wrapped_text"
+import { wrapText } from "../lib/text_rows"
 import { parseDiff } from "../context/session_store"
 import { PermissionCall, PermissionPosition } from "../components/permission_view"
 
@@ -39,6 +41,12 @@ class CustomSpeedScroll implements ScrollAcceleration {
   }
 
   reset(): void {}
+}
+
+/** `text` on one row of `columns`, cut with "…" when longer. */
+function oneRow(text: string, columns: number): string {
+  const rows = wrapText(text.replace(/\s+/g, " "), columns - 1)
+  return rows.length > 1 ? `${rows[0]}…` : rows[0]
 }
 
 function isSlashCommandLike(raw: string): boolean {
@@ -982,13 +990,21 @@ export function SessionRoute(props: {
         {/* marginBottom keeps the first system notice from touching the help text;
             with none below, the gap under the transcript is the only blank row. */}
         <box flexDirection="column" flexShrink={0} gap={1} marginBottom={messages().length > 0 ? 1 : 0}>
-          <text fg={UI_PALETTE.text}>Ask anything about this repository, or give Cortex a task.</text>
-          <text fg={UI_PALETTE.textMuted}>
-            It can read, search, edit files, and run commands here — edits and commands ask first.
-          </text>
-          <text fg={UI_PALETTE.textMuted}>
-            /model picks a model · /login adds a provider key · /help lists commands
-          </text>
+          <WrappedText
+            text="Ask anything about this repository, or give Cortex a task."
+            columns={screenColumns()}
+            fg={UI_PALETTE.text}
+          />
+          <WrappedText
+            text="It can read, search, edit files, and run commands here — edits and commands ask first."
+            columns={screenColumns()}
+            fg={UI_PALETTE.textMuted}
+          />
+          <WrappedText
+            text="/model picks a model · /login adds a provider key · /help lists commands"
+            columns={screenColumns()}
+            fg={UI_PALETTE.textMuted}
+          />
         </box>
       </Show>
       <Show when={messages().length > 0}>
@@ -1067,7 +1083,7 @@ export function SessionRoute(props: {
 
         <Show when={store.state.error}>
           <box>
-            <text fg={UI_PALETTE.statusError}>Error: {store.state.error}</text>
+            <WrappedText text={`Error: ${store.state.error}`} columns={screenColumns()} fg={UI_PALETTE.statusError} />
           </box>
         </Show>
 
@@ -1086,7 +1102,8 @@ export function SessionRoute(props: {
         <Show when={store.state.queuedInputs.length > 0}>
           <box flexDirection="column" flexShrink={0}>
             <For each={store.state.queuedInputs}>
-              {(queued) => <text fg={UI_PALETTE.textMuted}>↳ queued: {queued}</text>}
+              {/* One row each, as the panels above the prompt count them. */}
+              {(queued) => <text fg={UI_PALETTE.textMuted}>{oneRow(`↳ queued: ${queued}`, screenColumns())}</text>}
             </For>
           </box>
         </Show>
