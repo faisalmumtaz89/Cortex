@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -2352,7 +2353,14 @@ def test_cortex_login_refuses_what_it_cannot_save_safely(
          'error: no key on stdin. Pipe it in (printf %s "$KEY" | cortex login anthropic), '
          "or run cortex login anthropic in a terminal to type it"),
         (["nosuch"], "k\n",
-         "error: unknown provider nosuch. Use one of: anthropic, azure, openai, openai-compatible"),
+         "error: unknown provider nosuch: the provider comes first (cortex login PROVIDER [URL]), "
+         "one of: anthropic, azure, openai, openai-compatible"),
+        # The arguments swapped: the URL is not repeated, and the order is named.
+        (["http://127.0.0.1:9/v1", "openai-compatible"], "k\n",
+         "error: unknown provider: the provider comes first (cortex login PROVIDER [URL])"),
+        (["openai-compatible", "http://127.0.0.1:9/v1"], "",
+         'no key on stdin. Pipe it in (printf %s "$KEY" | cortex login openai-compatible '
+         "<base_url>)"),
         # The key where the URL goes, with or without one on stdin: not repeated back.
         (["openai-compatible", "sk-where-the-url-goes"], "sk-x\n",
          "error: openai-compatible takes its base URL after the provider, and that is not a URL "
@@ -2750,3 +2758,148 @@ def test_headless_says_when_a_slash_name_is_no_skill(tmp_path: Path, scratch_rep
                           extra_args=[])
     assert skill.returncode == 0, skill.stderr
     assert "no skill is named" not in skill.stderr
+
+
+def test_a_run_that_fails_remembers_no_model_it_did_not_choose(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A run whose --model cannot be used must not leave behind the default
+    model Cortex picked for the key it did find: the next run without
+    --model would send that key to a provider nobody chose."""
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    for name in ("OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_BASE_URL"):
+        env.pop(name, None)
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, "-P", "-m", "cortex", "-p", "hi", *args],
+                              cwd=scratch_repo, env=env, capture_output=True, text=True,
+                              timeout=120)
+
+    failed = run("--model", "openai-compatible:org/m")
+    assert failed.returncode == 2, failed.stderr
+    state = tmp_path / "home" / ".cortex" / "state.yaml"
+    assert "last_used_cloud" not in (state.read_text() if state.exists() else ""), state.read_text()
+    again = run()
+    assert again.returncode == 2, again.stderr
+    assert "error: no model selected" in again.stderr, again.stderr
+
+
+def test_a_headless_run_says_what_it_refuses_and_which_variables_it_ignores(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """Without --full-auto a run says up front that it refuses edits and
+    commands: a model that never tries one leaves no refusal to report. A set
+    OPENAI_BASE_URL is named as ignored."""
+    script = _write_script(tmp_path / "script.json", [[{"text": "No changes needed."}]] * 2)
+    env = _worker_env(tmp_path, script)
+    env["OPENAI_BASE_URL"] = "http://127.0.0.1:9/v1"
+    plain = _run_headless(cwd=scratch_repo, env=env, prompt="fix the bug", extra_args=[])
+    assert plain.returncode == 0, plain.stderr
+    assert ("note: this run refuses edits and commands; pass --full-auto to allow them"
+            in plain.stderr), plain.stderr
+    assert ("warning: Ignored OPENAI_BASE_URL: the openai provider always uses its official "
+            "host") in plain.stderr, plain.stderr
+    full = _run_headless(cwd=scratch_repo, env=env, prompt="fix the bug",
+                         extra_args=["--full-auto"])
+    assert full.returncode == 0, full.stderr
+    assert "refuses edits" not in full.stderr, full.stderr
+
+
+def test_a_run_ended_by_a_signal_stops_the_command_it_runs(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """`timeout 5 cortex -p ...` sends SIGTERM: the command Cortex is running
+    in its own process group must end with it, not run on as an orphan."""
+    import signal
+
+    script = _write_script(tmp_path / "script.json", [[
+        {"tool_calls": [{"name": "bash", "arguments": {
+            "command": "sleep 31.25; touch late.txt"}}]},
+        {"text": "done"},
+    ]])
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cortex", "-p", "wait", "--model", "openai:scripted",
+         "--full-auto"],
+        cwd=scratch_repo, env=_worker_env(tmp_path, script), stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    _wait_for_sleep(process)
+    process.send_signal(signal.SIGTERM)
+    _out, err = process.communicate(timeout=30)
+    assert process.returncode == 128 + signal.SIGTERM, err
+    _assert_sleep_ends()
+    assert not (scratch_repo / "late.txt").exists()
+
+    # The worker of the interactive app, ended the same way (the terminal closed).
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    session_id = _start_session(harness)
+    harness.send("session.submit_user_input", {
+        "session_id": session_id, "user_input": "wait", "active_target": CLOUD_TARGET})
+    harness.send("permission.reply", {"session_id": session_id, "request_id": harness.wait_event(
+        "permission.asked")["payload"]["request_id"], "reply": "allow_once"})
+    _wait_for_sleep(harness.process)
+    harness.process.send_signal(signal.SIGHUP)
+    harness.process.wait(timeout=30)
+    _assert_sleep_ends()
+    assert not (scratch_repo / "late.txt").exists()
+
+
+def _sleeping() -> bool:
+    table = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
+    return any(line.startswith("sleep 31.25") for line in table.splitlines())
+
+
+def _wait_for_sleep(process: subprocess.Popen) -> None:
+    deadline = time.time() + 60
+    while not _sleeping():
+        assert time.time() < deadline and process.poll() is None, "the command did not start"
+        time.sleep(0.2)
+
+
+def _assert_sleep_ends() -> None:
+    deadline = time.time() + 10
+    while _sleeping() and time.time() < deadline:
+        time.sleep(0.2)
+    assert not _sleeping(), "the command outlived Cortex"
+
+
+def test_a_failed_connection_names_the_host_and_why(tmp_path: Path, scratch_repo: Path) -> None:
+    """`Connection error.` gives a CI author nothing to act on: the message
+    names the URL (credentials in it masked) and the cause. A 404 from an
+    endpoint of your own also points at its base URL."""
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    env["CORTEX_CLOUD_MAX_RETRIES"] = "0"
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    closed_port = probe.getsockname()[1]
+    probe.close()  # nothing listens there now
+    env["OPENAI_COMPATIBLE_BASE_URL"] = f"http://ci:sk-in-the-url@127.0.0.1:{closed_port}/v1"
+    command = [sys.executable, "-P", "-m", "cortex", "-p", "hi",
+               "--model", "openai-compatible:test-model"]
+    refused = subprocess.run(command, cwd=scratch_repo, env=env, capture_output=True, text=True,
+                             timeout=120)
+    assert refused.returncode == 1, refused.stderr
+    assert f"could not reach http://***@127.0.0.1:{closed_port}/v1 (" in refused.stderr, \
+        refused.stderr
+    assert "sk-in-the-url" not in refused.stderr
+
+    env["OPENAI_COMPATIBLE_BASE_URL"] = f"127.0.0.1:{closed_port}/v1"  # no scheme
+    unusable = subprocess.run(command, cwd=scratch_repo, env=env, capture_output=True, text=True,
+                              timeout=120)
+    assert unusable.returncode == 2, unusable.stderr
+    assert (f"openai-compatible's URL 127.0.0.1:{closed_port}/v1 must start with https:// or "
+            "http://: fix OPENAI_COMPATIBLE_BASE_URL") in unusable.stderr, unusable.stderr
+
+    server = ChatCompletionsServer([{"status": 404}])
+    try:
+        env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url.removesuffix("/v1")
+        missing = subprocess.run(command, cwd=scratch_repo, env=env, capture_output=True,
+                                 text=True, timeout=120)
+    finally:
+        server.close()
+    assert missing.returncode == 1, missing.stderr
+    assert (f"and that {server.base_url.removesuffix('/v1')} is where the API's paths start "
+            "(often /v1).") in missing.stderr, missing.stderr

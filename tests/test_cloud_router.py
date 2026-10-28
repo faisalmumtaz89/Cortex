@@ -106,3 +106,20 @@ def test_failure_after_an_interrupt_reports_the_interrupt():
 
     with pytest.raises(TurnInterruptedError):
         _events(router, interrupt=interrupt)
+
+
+def test_openai_and_anthropic_never_take_a_base_url_from_the_environment(monkeypatch):
+    """The SDKs read OPENAI_BASE_URL and ANTHROPIC_BASE_URL when no host is
+    given: one left on a runner would send the key to that host, and the reply
+    would still be labelled verified. The clients always name the official host."""
+    from cortex.cloud.clients.anthropic_client import AnthropicClient
+    from cortex.cloud.clients.openai_client import OpenAIClient
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
+    openai = OpenAIClient(api_key="sk-test")
+    anthropic = AnthropicClient(api_key="sk-ant-test")
+    assert str(openai.client.base_url) == "https://api.openai.com/v1/"
+    assert openai.endpoint == "https://api.openai.com/v1"
+    assert str(anthropic.client.base_url) == "https://api.anthropic.com"
+    assert anthropic.endpoint == "https://api.anthropic.com"

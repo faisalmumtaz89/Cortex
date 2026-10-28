@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 from anthropic import Anthropic
 
 from cortex.cloud.retry import RetryCallback, StreamCutOffError, with_retries
+from cortex.cloud.types import ANTHROPIC_BASE_URL
 from cortex.tooling.types import (
     FinishEvent,
     TextDeltaEvent,
@@ -23,12 +24,17 @@ class AnthropicClient:
     """Anthropic Messages API client."""
 
     # Class-level defaults: some tests construct via __new__ and skip __init__.
-    endpoint: str = "https://api.anthropic.com"
+    endpoint: str = ANTHROPIC_BASE_URL
 
-    def __init__(self, api_key: str, timeout_seconds: int = 60):
-        # Retries are Cortex's own (cortex.cloud.retry), not the SDK's.
-        self.client = Anthropic(api_key=api_key, timeout=timeout_seconds, max_retries=0)
-        self.endpoint = str(getattr(self.client, "base_url", "") or "https://api.anthropic.com")
+    def __init__(
+        self, api_key: str, timeout_seconds: int = 60, base_url: Optional[str] = None
+    ):
+        # Retries are Cortex's own (cortex.cloud.retry), not the SDK's. The
+        # host is always given, so the SDK never reads ANTHROPIC_BASE_URL.
+        self.endpoint = base_url or ANTHROPIC_BASE_URL
+        self.client = Anthropic(
+            api_key=api_key, base_url=self.endpoint, timeout=timeout_seconds, max_retries=0
+        )
 
     def _provenance(self, reported_model: Any, response_id: Any) -> Dict[str, Any]:
         """Response-side identity proof for post-turn verification."""

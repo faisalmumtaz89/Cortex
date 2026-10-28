@@ -39,3 +39,16 @@ tools_profile: false
 
     assert config.tools.tools_enabled is True
     assert config.tools.tools_profile == "off"
+
+
+def test_state_is_readable_only_by_its_owner_and_replaced_whole(tmp_path: Path, monkeypatch):
+    """state.yaml can hold an endpoint URL with credentials in it."""
+    state = tmp_path / "state.yaml"
+    state.write_text("last_used_cloud_model: old\n", encoding="utf-8")
+    state.chmod(0o644)
+    monkeypatch.setattr(Config, "STATE_FILE", state)
+    config = Config(config_path=tmp_path / "config.yaml")
+    config.set_state_value("openai_compatible_base_url", "http://user:secret@host/v1")
+    assert state.stat().st_mode & 0o777 == 0o600
+    assert "http://user:secret@host/v1" in state.read_text(encoding="utf-8")
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["state.yaml"]

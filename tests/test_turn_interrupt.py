@@ -31,11 +31,11 @@ def _ping(call) -> ToolResult:
                       output="pong")
 
 
-def _run_interrupted(kind, script, *, tools, interrupt_after, monkeypatch):
+def _run_interrupted(kind, script, *, tools, interrupt_after):
     """Run one client turn, interrupt it after `interrupt_after` seconds and
     return (outcome, seconds from the interrupt to the end, server)."""
     server = ProviderServer(kind, script)
-    client = make_client(kind, server.base_url, monkeypatch)
+    client = make_client(kind, server.base_url)
     interrupt = TurnInterrupt()
     outcome: Dict[str, object] = {}
 
@@ -68,9 +68,9 @@ def _run_interrupted(kind, script, *, tools, interrupt_after, monkeypatch):
 
 @pytest.mark.parametrize("tools", [True, False], ids=["tools", "no-tools"])
 @pytest.mark.parametrize("kind", ["chat", "anthropic", "responses"])
-def test_interrupt_stops_a_reply_the_model_is_still_working_on(kind, tools, monkeypatch):
+def test_interrupt_stops_a_reply_the_model_is_still_working_on(kind, tools):
     outcome, waited, server = _run_interrupted(
-        kind, [{"body_delay": 30}], tools=tools, interrupt_after=1, monkeypatch=monkeypatch
+        kind, [{"body_delay": 30}], tools=tools, interrupt_after=1
     )
 
     assert isinstance(outcome.get("error"), TurnInterruptedError), outcome
@@ -79,7 +79,7 @@ def test_interrupt_stops_a_reply_the_model_is_still_working_on(kind, tools, monk
 
 
 @pytest.mark.parametrize("kind", ["chat", "anthropic", "responses"])
-def test_interrupt_before_the_next_reply_starts_sends_no_further_request(kind, monkeypatch):
+def test_interrupt_before_the_next_reply_starts_sends_no_further_request(kind):
     # The interrupt arrives while the second request, on the first one's
     # pooled connection, still waits for its response headers.
     outcome, waited, server = _run_interrupted(
@@ -87,7 +87,6 @@ def test_interrupt_before_the_next_reply_starts_sends_no_further_request(kind, m
         [{"tool": True}, {"header_delay": 3}, {}],
         tools=True,
         interrupt_after=1.5,
-        monkeypatch=monkeypatch,
     )
 
     assert isinstance(outcome.get("error"), TurnInterruptedError), outcome
@@ -95,9 +94,9 @@ def test_interrupt_before_the_next_reply_starts_sends_no_further_request(kind, m
     assert waited < 3
 
 
-def test_uninterrupted_turn_still_reads_the_whole_reply(monkeypatch):
+def test_uninterrupted_turn_still_reads_the_whole_reply():
     server = ProviderServer("anthropic", [{}])
-    client = make_client("anthropic", server.base_url, monkeypatch)
+    client = make_client("anthropic", server.base_url)
     try:
         events = list(client.stream_events(
             model_id="test-model",

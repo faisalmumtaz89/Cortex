@@ -37,6 +37,7 @@ from cortex.protocol.schema import (
     SkillListParams,
 )
 from cortex.protocol.types import PROTOCOL_VERSION, EventType
+from cortex.tooling.builtin.bash import stop_running_commands
 from cortex.tooling.orchestrator import ToolingOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -240,15 +241,19 @@ class WorkerRuntime:
                     continue
 
                 try:
+                    # Not saved: a default is not a choice the user made.
                     result = self.model_service.select_cloud_model(
-                        provider=provider_enum.value, model_id=model_id
+                        provider=provider_enum.value, model_id=model_id, remember=False
                     )
                 except Exception as exc:  # pragma: no cover - defensive path
                     notices.append(f"Failed to restore model: {exc}")
                     continue
 
                 if bool(result.get("ok")):
-                    notices.append(f"Restored {provider_enum.value}:{model_id}")
+                    notices.append(
+                        f"Using {provider_enum.value}:{model_id}, the default for the "
+                        f"{provider_enum.value} key (pick another with /model)"
+                    )
                     return notices
                 notices.append(
                     str(
@@ -630,6 +635,9 @@ class WorkerRuntime:
         def _terminate(signum, _frame) -> None:
             logger.info("Worker received signal %s — shutting down", signum)
             try:
+                # A command the agent runs, in its own process group, must
+                # not run on after Cortex.
+                stop_running_commands()
                 # An in-flight installer (own process group) must not be
                 # orphaned half-applied — reap it and its temp files first
                 # (bounded), since os._exit skips every finally/atexit.

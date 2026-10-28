@@ -6,6 +6,10 @@ import logging
 import os
 from http import HTTPStatus
 from typing import Dict, Iterable, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
+
+import anthropic
+import openai
 
 from cortex.cloud.clients import AnthropicClient, ChatCompletionsClient, OpenAIClient
 from cortex.cloud.credentials import ENV_KEY_MAP, CloudCredentialStore
@@ -165,16 +169,36 @@ class CloudRouter:
                 "file": " (the saved key)",
             }.get(str(source), "")
             logger.error("Cloud generation failed for %s: %s", model_ref.selector, exc)
+            endpoint = str(getattr(client, "endpoint", "") or getattr(client, "base_url", ""))
+            custom = model_ref.provider in (CloudProvider.AZURE, CloudProvider.OPENAI_COMPATIBLE)
             raise RuntimeError(
                 f"Cloud generation failed for {model_ref.selector}{key_label}: "
-                f"{_describe_failure(exc)}"
+                f"{_describe_failure(exc, endpoint, custom_url=custom)}"
             ) from exc
 
 
-def _describe_failure(exc: Exception) -> str:
-    """The error, with the reason the server gave in its status line when the
+def shown_url(url: str) -> str:
+    """A URL as messages show it: credentials in it (user:password@) masked."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if "@" not in parts.netloc:
+        return url
+    return urlunsplit(parts._replace(netloc="***@" + parts.netloc.rsplit("@", 1)[1]))
+
+
+def _describe_failure(exc: Exception, endpoint: str = "", *, custom_url: bool = False) -> str:
+    """The error, with what to check: for a connection that failed, the host
+    and why; else the reason the server gave in its status line when the
     message lacks it (a gateway that answers "403 model not allowed: ..."
     with no body)."""
+    if isinstance(exc, (openai.APIConnectionError, anthropic.APIConnectionError)):
+        timed_out = isinstance(exc, (openai.APITimeoutError, anthropic.APITimeoutError))
+        cause = exc.__cause__ or exc.__context__
+        why = f" ({cause})" if cause is not None and str(cause) and not timed_out else ""
+        verb = "timed out waiting for" if timed_out else "could not reach"
+        return f"{verb} {shown_url(endpoint) or 'the provider'}{why}"
     text = str(exc)
     response = getattr(exc, "response", None)
     reason = str(getattr(response, "reason_phrase", "") or "").strip()
@@ -186,6 +210,9 @@ def _describe_failure(exc: Exception) -> str:
         text = f"{text} ({reason})"
     if getattr(response, "status_code", None) in (403, 404):
         # The usual cause: a model name the provider does not know, or one
-        # this key may not use.
-        text = f"{text}. Check the model name and that your key may use it."
+        # this key may not use; with a URL of your own, also the URL.
+        text = f"{text}. Check the model name and that your key may use it"
+        if custom_url and endpoint:
+            text += f", and that {shown_url(endpoint)} is where the API's paths start (often /v1)"
+        text += "."
     return text

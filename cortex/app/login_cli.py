@@ -9,6 +9,7 @@ listings would keep it. It is saved where /login saves it.
 from __future__ import annotations
 
 import getpass
+import re
 import sys
 from typing import List
 
@@ -46,7 +47,12 @@ def run_login(argv: List[str]) -> int:
     try:
         provider = CloudProvider.from_value(name)
     except ValueError:
-        return _fail(f"unknown provider {name}. Use one of: {_PROVIDERS}")
+        # A URL or a key put first is not repeated back; a mistyped name is.
+        named = f" {name}" if re.fullmatch(r"[a-z0-9-]{1,24}", name) else ""
+        return _fail(
+            f"unknown provider{named}: the provider comes first (cortex login PROVIDER [URL]), "
+            f"one of: {_PROVIDERS}"
+        )
     url_argument = LOGIN_URL_ARGUMENT.get(provider)
     if len(argv) > 1 and not url_argument:
         return _fail(
@@ -77,9 +83,10 @@ def run_login(argv: List[str]) -> int:
 
     key = _read_key(provider.value)
     if not key:
+        command = f"cortex login {provider.value}" + (f" {url_argument}" if url else "")
         return _fail(
-            f'no key on stdin. Pipe it in (printf %s "$KEY" | cortex login {provider.value}), '
-            f"or run cortex login {provider.value} in a terminal to type it"
+            f'no key on stdin. Pipe it in (printf %s "$KEY" | {command}), '
+            f"or run {command} in a terminal to type it"
         )
     if any(ch.isspace() for ch in key):
         return _fail("the key has spaces or line breaks in it: send only the key")

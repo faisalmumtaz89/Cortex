@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Union
 
+# The hosts the openai and anthropic providers talk to, given to their SDKs
+# so that OPENAI_BASE_URL or ANTHROPIC_BASE_URL in the environment cannot send
+# the key elsewhere. Another endpoint is the openai-compatible provider.
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+
 
 class CloudProvider(str, Enum):
     """Supported cloud providers."""

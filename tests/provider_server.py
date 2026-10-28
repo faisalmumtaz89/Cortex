@@ -168,10 +168,9 @@ class ProviderServer:
         self._httpd.server_close()
 
 
-def make_client(kind: str, base_url: str, monkeypatch):
+def make_client(kind: str, base_url: str):
     if kind == "chat":
         return ChatCompletionsClient(base_url=f"{base_url}/v1", api_key="k", timeout_seconds=60)
     if kind == "responses":
         return OpenAIClient(api_key="k", timeout_seconds=60, base_url=f"{base_url}/v1")
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", base_url)
-    return AnthropicClient(api_key="k", timeout_seconds=60)
+    return AnthropicClient(api_key="k", timeout_seconds=60, base_url=base_url)

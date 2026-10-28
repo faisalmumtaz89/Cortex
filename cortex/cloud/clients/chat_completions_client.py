@@ -37,6 +37,7 @@ class ChatCompletionsClient:
 
     def __init__(self, *, base_url: str, api_key: str, timeout_seconds: int):
         self.base_url = base_url
+        self.endpoint = base_url
         # Retries are Cortex's own (cortex.cloud.retry), not the SDK's.
         self.client = OpenAI(
             api_key=api_key, base_url=base_url, timeout=timeout_seconds, max_retries=0

@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from cortex.cloud import CloudCredentialStore, CloudModelCatalog, CloudRouter
 from cortex.cloud.credentials import ENV_KEY_MAP
+from cortex.cloud.router import shown_url
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
 
 # Providers whose /login also takes the URL requests go to.
@@ -152,7 +153,12 @@ class ModelService:
 
     # ---- selection ---------------------------------------------------------
 
-    def select_cloud_model(self, provider: str, model_id: str) -> Dict[str, Any]:
+    def select_cloud_model(
+        self, provider: str, model_id: str, *, remember: bool = True
+    ) -> Dict[str, Any]:
+        """Make provider:model the active model. With remember=False (a default
+        Cortex picks itself) nothing is saved: later sessions do not take it
+        for a choice the user made."""
         provider_enum = CloudProvider.from_value(provider)
         normalized_model_id = model_id.strip()
         if not normalized_model_id:
@@ -182,6 +188,16 @@ class ModelService:
         url_argument = LOGIN_URL_ARGUMENT.get(provider_enum)
         if url_argument:
             url = self.endpoint_url(provider_enum)
+            if url and not url.startswith(("https://", "http://")):
+                variable = URL_ENV_VARIABLE[provider_enum]
+                return {
+                    "ok": False,
+                    "message": (
+                        f"{provider_enum.value}'s URL {shown_url(url)} must start with https:// "
+                        f"or http://: fix {variable}, or the one saved with "
+                        f"/login {provider_enum.value} <api_key> {url_argument}."
+                    ),
+                }
             if not url:
                 what = "resource endpoint" if provider_enum == CloudProvider.AZURE else "base URL"
                 variable = URL_ENV_VARIABLE[provider_enum]
@@ -200,12 +216,19 @@ class ModelService:
                     },
                 }
             # Persist so later sessions work without the env var.
-            state_key = "azure_endpoint" if provider_enum == CloudProvider.AZURE else "openai_compatible_base_url"
-            self.config.set_state_value(state_key, url)
+            if remember:
+                state_key = (
+                    "azure_endpoint" if provider_enum == CloudProvider.AZURE
+                    else "openai_compatible_base_url"
+                )
+                self.config.set_state_value(state_key, url)
 
         ref = CloudModelRef(provider=provider_enum, model_id=normalized_model_id)
         self.active_target = ActiveModelTarget.cloud(ref)
 
+        result = {"ok": True, "message": f"{ref.selector} — now active.", "active_model": ref.selector}
+        if not remember:
+            return result
         self.config.set_state_value("last_used_cloud_provider", provider_enum.value)
         self.config.set_state_value("last_used_cloud_model", ref.model_id)
         if ref not in self.cloud_catalog.list_models():
@@ -213,11 +236,7 @@ class ModelService:
             # the /model picker lists it from now on.
             recent = [ref.selector, *(s for s in self._selected_selectors() if s != ref.selector)]
             self.config.set_state_value("selected_models", recent[:_REMEMBERED_MODELS])
-        return {
-            "ok": True,
-            "message": f"{ref.selector} — now active.",
-            "active_model": ref.selector,
-        }
+        return result
 
     def auth_status(self, provider: CloudProvider) -> Dict[str, Any]:
         summary = self.credential_store.get_auth_summary(provider)

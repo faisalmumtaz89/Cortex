@@ -24,6 +24,11 @@ import cortex.tooling.permissions as permissions
 # setting CORTEX_AUTO_UPDATE_CHECK=true in their own env, always alongside a
 # CORTEX_UPDATE_PROBE_BASE that points at a local stub server.
 os.environ["CORTEX_AUTO_UPDATE_CHECK"] = "false"
+# The SDKs' own base URL variables, which Cortex ignores and names in its
+# startup notice: one set in the developer's shell would add that notice to
+# every run under test.
+for _name in ("OPENAI_BASE_URL", "ANTHROPIC_BASE_URL"):
+    os.environ.pop(_name, None)
 
 
 @pytest.fixture(autouse=True)

@@ -38,10 +38,12 @@ class _FakeModelService:
     def __init__(self, *, cloud_ok: bool = True) -> None:
         self.cloud_ok = cloud_ok
         self.cloud_calls: list[tuple[str, str]] = []
+        self.remembered: list[bool] = []
         self.active_target = ActiveModelTarget()
 
-    def select_cloud_model(self, *, provider: str, model_id: str):
+    def select_cloud_model(self, *, provider: str, model_id: str, remember: bool = True):
         self.cloud_calls.append((provider, model_id))
+        self.remembered.append(remember)
         if self.cloud_ok:
             self.active_target = ActiveModelTarget.cloud(
                 CloudModelRef(provider=CloudProvider.from_value(provider), model_id=model_id)
@@ -53,14 +55,14 @@ class _FakeModelService:
 class _FailAnthropicModelService(_FakeModelService):
     """Anthropic selection fails (no key); every other provider succeeds."""
 
-    def select_cloud_model(self, *, provider: str, model_id: str):
+    def select_cloud_model(self, *, provider: str, model_id: str, remember: bool = True):
         if provider == "anthropic":
             self.cloud_calls.append((provider, model_id))
             return {
                 "ok": False,
                 "message": "anthropic is not authenticated. Run /login anthropic <api_key>.",
             }
-        return super().select_cloud_model(provider=provider, model_id=model_id)
+        return super().select_cloud_model(provider=provider, model_id=model_id, remember=remember)
 
 
 class _FakeCloudRouter:
@@ -153,8 +155,10 @@ def test_restore_startup_target_falls_back_to_authenticated_default_cloud(
     ]
     assert notices == [
         "anthropic is not authenticated. Run /login anthropic <api_key>.",
-        "Restored openai:gpt-5.1",
+        "Using openai:gpt-5.1, the default for the openai key (pick another with /model)",
     ]
+    # The default is used, not saved: the saved choice stays anthropic's.
+    assert fake_runtime.model_service.remembered == [False]
 
 
 def test_restore_startup_target_fallback_uses_catalog_when_no_configured_default(
@@ -178,7 +182,9 @@ def test_restore_startup_target_fallback_uses_catalog_when_no_configured_default
         ("anthropic", "claude-haiku-4-5"),
         ("openai", "gpt-5-nano"),
     ]
-    assert notices[-1] == "Restored openai:gpt-5-nano"
+    assert notices[-1] == (
+        "Using openai:gpt-5-nano, the default for the openai key (pick another with /model)"
+    )
     assert fake_runtime.config._state["last_used_cloud_provider"] == "anthropic"
 
 
@@ -205,7 +211,10 @@ def test_restore_startup_target_uses_authenticated_cloud_default_when_no_state(
 
     notices = fake_runtime._restore_startup_target()
     assert fake_runtime.model_service.cloud_calls == [("openai", "gpt-5.1")]
-    assert notices == ["Restored openai:gpt-5.1"]
+    assert notices == [
+        "Using openai:gpt-5.1, the default for the openai key (pick another with /model)"
+    ]
+    assert fake_runtime.model_service.remembered == [False]
 
 
 def test_restore_startup_target_keeps_the_saved_choice_when_nothing_restores(

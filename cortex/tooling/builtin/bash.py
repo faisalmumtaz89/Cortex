@@ -27,6 +27,12 @@ _TAIL_BYTES = 230_000
 _DRAIN_SECONDS = 1.0
 _KILL_GRACE_SECONDS = 3.0
 
+# The process groups of the commands running now. Cortex stops them when it
+# is told to end (SIGTERM, SIGHUP), since exiting on a signal skips every
+# finally that would: a command must not run on after Cortex.
+_running: set[int] = set()
+_running_lock = threading.Lock()
+
 
 class BashArgs(BaseModel):
     command: str = Field(min_length=1)
@@ -194,6 +200,8 @@ def run_command(
         env=command_env() if env is None else env,
         start_new_session=True,
     )
+    with _running_lock:
+        _running.add(proc.pid)
     assert proc.stdout is not None
     pipe = proc.stdout
     output = _Output()
@@ -228,6 +236,9 @@ def run_command(
         _stop(proc)
         pipe.close()
         raise
+    finally:
+        with _running_lock:
+            _running.discard(proc.pid)
     if closed:
         pipe.close()
     else:
@@ -259,6 +270,20 @@ def _stop(proc: subprocess.Popen) -> None:
         proc.wait(timeout=_KILL_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         pass
+
+
+def stop_running_commands() -> None:
+    """SIGTERM the process group of every command running now, and SIGKILL
+    the groups still running after the grace period."""
+    with _running_lock:
+        groups = list(_running)
+    groups = [pgid for pgid in groups if _signal_group(pgid, signal.SIGTERM)]
+    deadline = time.monotonic() + _KILL_GRACE_SECONDS
+    while groups and time.monotonic() < deadline:
+        time.sleep(0.05)
+        groups = [pgid for pgid in groups if _signal_group(pgid, 0)]
+    for pgid in groups:
+        _signal_group(pgid, signal.SIGKILL)
 
 
 def _signal_group(pgid: int, signum: int) -> bool:

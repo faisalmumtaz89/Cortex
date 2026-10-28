@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
+import signal
 import sys
 from typing import Optional
 
 from cortex.cloud.types import CloudProvider
+from cortex.tooling.builtin.bash import stop_running_commands
 from cortex.tooling.orchestrator import skill_command_name
 from cortex.tooling.types import PermissionAction, PermissionRule
 
@@ -39,6 +42,23 @@ _NO_FULL_AUTO_NOTE = (
     "read, list and search tools, and say what you could not do."
 )
 _MODEL_STATE_KEYS = ("last_used_cloud_provider", "last_used_cloud_model", "selected_models")
+
+
+def _end_with_signals() -> None:
+    """On SIGTERM (`timeout`, a CI job cancelled), SIGHUP or SIGINT, stop the
+    command running now and exit 128 + the signal, as a shell reports it: the
+    turn may run on other threads, which a signal does not stop."""
+
+    def end(signum, _frame) -> None:
+        stop_running_commands()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(128 + signum)
+
+    for name in ("SIGTERM", "SIGHUP", "SIGINT"):
+        signum = getattr(signal, name, None)
+        if signum is not None:
+            signal.signal(signum, end)
 
 
 def _allowed_commands(manager) -> str:
@@ -261,6 +281,7 @@ def run_headless(
     from cortex.app.worker_runtime import WorkerRuntime
 
     config, conversation_manager = components
+    _end_with_signals()
     # There is no session notice in a headless run: settings that were not
     # valid are reported on stderr.
     for warning in getattr(config, "warnings", []):
@@ -335,21 +356,32 @@ def run_headless(
             print(f"error: {message}", file=sys.stderr)
             return 2
 
-    elif getattr(runtime.model_service.active_target, "cloud_model", None) is None:
+    else:
+        # Only a model chosen with --model, now or by an earlier run (or in the
+        # app), answers: never a default picked for a key that happens to be set.
         saved = _saved_model(config)
-        if saved:
+        restored = getattr(runtime.model_service.active_target, "cloud_model", None)
+        if saved and restored is None:
             # Remembered, but not usable now (most often: its key is not set here).
             provider, _, model_id = saved.partition(":")
             reason = runtime.model_service.select_cloud_model(provider=provider, model_id=model_id)
             message = _refusal(reason)
             print(f"error: {saved} cannot be used: {message}", file=sys.stderr)
             return 2
-        print(
-            "error: no model selected. Pass one with --model provider:model, "
-            f"for example {_example_model(runtime)} (see cortex --help).",
-            file=sys.stderr,
+        if not saved:
+            sys.stderr.write(
+                "error: no model selected. Pass one with --model provider:model, "
+                f"for example {_example_model(runtime)} (see cortex --help).\n"
+            )
+            return 2
+
+    if not full_auto:
+        # Said before the run, on every run: a model that never tries an edit
+        # leaves no refusal to report, and the run would exit 0 having changed nothing.
+        saved = " except those saved rules allow" if _allowed_commands(manager) else ""
+        sys.stderr.write(
+            f"note: this run refuses edits and commands{saved}; pass --full-auto to allow them\n"
         )
-        return 2
 
     name = skill_command_name(prompt.strip())
     skills = runtime.tooling_orchestrator.available_skills()

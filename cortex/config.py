@@ -77,6 +77,10 @@ _NO_EFFECT = frozenset({
     "plugins_dir", "save_format", "show_performance_metrics", "shutdown_timeout",
     "syntax_highlighting", "templates_dir", "tools_continue_on_reject", "ui_theme",
 })
+# Read by the OpenAI and Anthropic SDKs, not by Cortex: those providers
+# always use their official hosts (cortex/cloud/types.py), so a variable left in
+# an environment cannot send their key elsewhere. One that is set is named.
+_SDK_BASE_URL_VARIABLES = {"OPENAI_BASE_URL": "openai", "ANTHROPIC_BASE_URL": "anthropic"}
 _RETIRED = {
     "tools_idle_timeout_seconds": "it has no effect; cloud_timeout_seconds sets the request "
     "timeout, and a permission prompt waits for your answer",
@@ -133,6 +137,14 @@ class Config:
                 f"Ignored {key} in {self.config_path}: "
                 + (hint or "not a Cortex setting")
             )
+
+        for variable, provider in _SDK_BASE_URL_VARIABLES.items():
+            if os.environ.get(variable, "").strip():
+                self.warnings.append(
+                    f"Ignored {variable}: the {provider} provider always uses its official "
+                    "host. For another endpoint, use openai-compatible "
+                    "(OPENAI_COMPATIBLE_BASE_URL with OPENAI_COMPATIBLE_API_KEY)"
+                )
 
         self._file_values = file_values
         self._env_values = self._env_overrides()
@@ -253,13 +265,18 @@ class Config:
             self._save_state()
 
     def _save_state(self) -> None:
-        """Save runtime state to state file."""
-        # Ensure directory exists
+        """Save runtime state to the state file, readable only by its owner
+        (an endpoint URL in it can carry credentials), replaced in one step so
+        a reader never sees half of it."""
         self.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        partial = self.STATE_FILE.with_name(f".{self.STATE_FILE.name}.{os.getpid()}")
         try:
-            with open(self.STATE_FILE, 'w') as f:
+            descriptor = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w") as f:
                 yaml.dump(self._state, f, default_flow_style=False)
+            os.replace(partial, self.STATE_FILE)
         except Exception as e:
+            partial.unlink(missing_ok=True)
             logger.warning("Failed to save state to %s: %s", self.STATE_FILE, e)
 
     def get_state_value(self, key: str, default: Any = None) -> Any:

@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 from openai import OpenAI
 
 from cortex.cloud.retry import RetryCallback, ServerError, StreamCutOffError, with_retries
+from cortex.cloud.types import OPENAI_BASE_URL
 from cortex.tooling.types import (
     FinishEvent,
     TextDeltaEvent,
@@ -27,14 +28,15 @@ class OpenAIClient:
     """
 
     # Class-level defaults: some tests construct via __new__ and skip __init__.
-    endpoint: str = "https://api.openai.com/v1"
+    endpoint: str = OPENAI_BASE_URL
 
     def __init__(self, api_key: str, timeout_seconds: int = 60, base_url: Optional[str] = None):
-        # Retries are Cortex's own (cortex.cloud.retry), not the SDK's.
+        # Retries are Cortex's own (cortex.cloud.retry), not the SDK's. The
+        # host is always given, so the SDK never reads OPENAI_BASE_URL.
+        self.endpoint = base_url or OPENAI_BASE_URL
         self.client = OpenAI(
-            api_key=api_key, timeout=timeout_seconds, base_url=base_url, max_retries=0
+            api_key=api_key, timeout=timeout_seconds, base_url=self.endpoint, max_retries=0
         )
-        self.endpoint = str(base_url or "https://api.openai.com/v1")
 
     def _provenance(self, reported_model: object, response_id: object) -> Dict[str, object]:
         """Response-side identity proof for post-turn verification."""
