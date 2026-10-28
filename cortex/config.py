@@ -3,7 +3,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Type
+from typing import Any, Dict, List, Literal, Optional, Tuple, Type
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
@@ -102,6 +102,8 @@ class Config:
         self.warnings: List[str] = []
         self._file_values: Dict[str, Any] = {}
         self._env_values: Dict[str, Any] = {}
+        # Settings given a value that was not valid, so their default applies.
+        self._invalid: set = set()
 
         self.inference: InferenceConfig
         self.cloud: CloudConfig
@@ -148,6 +150,7 @@ class Config:
 
         self._file_values = file_values
         self._env_values = self._env_overrides()
+        self._invalid = set()
         self._raw_config = {**file_values, **self._env_values}
         self._parse_config()
 
@@ -215,11 +218,10 @@ class Config:
         if len(shown) > 60:
             shown = shown[:57] + "..."
         source = f"CORTEX_{key.upper()}" if key in self._env_values else key
-        fallback = (
-            "using the value in the config file"
-            if key in self._env_values and self._file_values.get(key) is not None
-            else "using the default"
-        )
+        to_file = key in self._env_values and self._file_values.get(key) is not None
+        fallback = "using the value in the config file" if to_file else "using the default"
+        if not to_file:
+            self._invalid.add(key)
         self.warnings.append(f"Ignored {source}: {shown} ({problem}); {fallback}")
 
     def _get_section(self, section_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -287,6 +289,23 @@ class Config:
         """Set a runtime state value and persist it."""
         self._state[key] = value
         self._save_state()
+
+    def settings_in_effect(self) -> List[Tuple[str, Any, str]]:
+        """The settings config.yaml or a CORTEX_* variable changed, by name:
+        each with the value in effect and where it came from."""
+        settings = []
+        for name, section in _SECTIONS.items():
+            for key in section.model_fields:
+                if key in self._invalid:
+                    continue
+                if key in self._env_values:
+                    source = f"CORTEX_{key.upper()}"
+                elif self._file_values.get(key) is not None:
+                    source = self.config_path.name
+                else:
+                    continue
+                settings.append((key, getattr(getattr(self, name), key), source))
+        return sorted(settings)
 
     def is_setting_explicit(self, key: str) -> bool:
         """Return True if a config key was explicitly set in config.yaml."""

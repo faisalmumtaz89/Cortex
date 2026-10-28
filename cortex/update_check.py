@@ -112,6 +112,11 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def release_url(version: str) -> str:
+    """The GitHub page of release `version`: its notes say what changed."""
+    return f"{DEFAULT_PROBE_BASE}/{CORTEX_REPO}/releases/tag/v{normalize_version(version) or version}"
+
+
 def probe_base_url() -> str:
     override = os.environ.get(PROBE_BASE_ENV, "").strip()
     return (override or DEFAULT_PROBE_BASE).rstrip("/")

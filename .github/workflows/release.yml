@@ -84,6 +84,13 @@ jobs:
             exit 1
           fi
 
+      # A release says what changed: its notes are CHANGELOG.md's section for
+      # the version, checked here so a dry run catches a version without one.
+      - name: Fail unless CHANGELOG.md has notes for this version
+        run: |
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          python scripts/release_notes.py "${version}" > /dev/null
+
       - name: Build TUI sidecar (for this runner's platform)
         run: |
           cd frontend/cortex-tui
@@ -192,6 +199,7 @@ jobs:
             fi
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          python3 scripts/release_notes.py "${version}" > release-notes.md
 
       - uses: actions/download-artifact@v4
         with:
@@ -220,4 +228,4 @@ jobs:
           # Explicit (today's @v2 default): a re-run against an existing
           # release must REPLACE same-named assets, never duplicate them.
           overwrite_files: true
-          generate_release_notes: true
+          body_path: release-notes.md

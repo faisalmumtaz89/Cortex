@@ -65,6 +65,7 @@ from cortex.update_check import (
     is_newer,
     normalize_version,
     probe_base_url,
+    release_url,
     running_cortex_version,
 )
 
@@ -300,16 +301,28 @@ class UpdateService:
         result = check_for_updates(cache=self.cache, opener=self.opener)
         if not is_newer(result.cortex_latest, installed_cortex_version()):
             return None
+        latest = str(normalize_version(result.cortex_latest))
         if _source_checkout_root() is not None:
             # Never steer a source-checkout developer into /update cortex:
             # the wheel install would replace their editable install.
             return (
-                f"Cortex {normalize_version(result.cortex_latest)} released — "
-                "source checkout: update with git pull"
+                f"Cortex {latest} released — source checkout: update with git pull · "
+                f"what's new: {release_url(latest)}"
             )
+        return f"Cortex {latest} available — update with /update cortex · what's new: {release_url(latest)}"
+
+    @staticmethod
+    def updated_notice(last_opened: str) -> Optional[str]:
+        """What the first session after an update says: the version now
+        running, the one opened before it, and where its notes are. None when
+        nothing was updated, or Cortex runs from a source checkout, whose
+        version has no release page until it is released."""
+        running = running_cortex_version()
+        if not running or not is_newer(running, last_opened) or _source_checkout_root() is not None:
+            return None
         return (
-            f"Cortex {normalize_version(result.cortex_latest)} available — "
-            "update with /update cortex"
+            f"Updated to Cortex {running} (from {normalize_version(last_opened)}) · "
+            f"what's new: {release_url(running)}"
         )
 
     def _fresh_or_cached_result(self) -> UpdateCheckResult:
@@ -344,7 +357,10 @@ class UpdateService:
             # UNKNOWN — never claim "no releases" for a network failure.
             return f"{name}: {installed} installed · could not determine the latest release"
         if is_newer(latest, installed):
-            return f"{name}: {installed} installed · {latest} available — /update {component}"
+            return (
+                f"{name}: {installed} installed · {latest} available — /update {component} · "
+                f"what's new: {release_url(latest)}"
+            )
         return f"{name}: {installed} installed · up to date"
 
     def status_report(self) -> Dict[str, object]:
@@ -529,7 +545,10 @@ class UpdateService:
             shutil.rmtree(temp_dir, ignore_errors=True)
         return {
             "ok": True,
-            "message": f"Cortex {target_version} installed — restart Cortex to apply.",
+            "message": (
+                f"Cortex {target_version} installed, its checksum verified — restart Cortex "
+                f"to apply. What's new: {release_url(target_version)}"
+            ),
             "update": {"component": "cortex", "version": target_version},
         }
 

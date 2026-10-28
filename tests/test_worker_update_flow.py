@@ -230,6 +230,7 @@ def test_update_status_reports_installed_vs_latest(tmp_path: Path) -> None:
             expected = (
                 f"Cortex: {installed_cortex_version()} installed · "
                 "9999.0.0 available — /update cortex"
+                " · what's new: https://github.com/faisalmumtaz89/Cortex/releases/tag/v9999.0.0"
             )
             assert result["message"] == expected
             assert result["update_status"] == {
@@ -338,7 +339,7 @@ def test_update_cortex_background_flow_end_to_end(tmp_path: Path) -> None:
             assert final_payload["final"] is True
             assert final_payload["progress"]["phase"] == "ready"
             assert final_payload["content"] == (
-                "Cortex 9.9.9 installed — restart Cortex to apply."
+                "Cortex 9.9.9 installed, its checksum verified — restart Cortex to apply. What's new: https://github.com/faisalmumtaz89/Cortex/releases/tag/v9.9.9"
             )
 
             # The stub pip received `install <verified local wheel>`: the
@@ -503,7 +504,7 @@ def test_second_update_refused_while_update_in_flight(tmp_path: Path) -> None:
                 seen.extend(read_events_until(_final_update_frame))
             final_frame = [event for event in seen if _final_update_frame(event)][-1]
             assert final_frame["params"]["payload"]["content"] == (
-                "Cortex 9.9.9 installed — restart Cortex to apply."
+                "Cortex 9.9.9 installed, its checksum verified — restart Cortex to apply. What's new: https://github.com/faisalmumtaz89/Cortex/releases/tag/v9.9.9"
             )
             assert pid_file.exists(), "the first update's pip must have run"
         finally:

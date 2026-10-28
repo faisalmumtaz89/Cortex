@@ -1064,6 +1064,75 @@ def test_a_bad_setting_keeps_the_others_and_is_reported(tmp_path: Path, scratch_
         harness.close()
 
 
+def test_status_lists_the_settings_in_effect(tmp_path: Path, scratch_repo: Path) -> None:
+    """/status says which settings config.yaml and CORTEX_* variables changed,
+    and from where; one that was not valid, and so is not in effect, is not."""
+    env = _worker_env(tmp_path, _write_script(tmp_path / "script.json", [[{"text": "Hi."}]]))
+    config = tmp_path / "home" / ".cortex" / "config.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("temperature: 0.3\ntools_max_iterations: 1001\n"
+                      "cloud_openai_compatible_base_url: https://me:hunter2@llm.example.com/v1\n")
+    env["CORTEX_MAX_TOKENS"] = "8000"
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        status = harness.wait_response(harness.send("command.execute", {
+            "session_id": session_id, "command": "/status"}))["result"]["message"]
+    finally:
+        harness.close()
+    # The suite's own CORTEX_AUTO_UPDATE_CHECK is one of them.
+    assert (
+        "- Settings: auto_update_check false (CORTEX_AUTO_UPDATE_CHECK), "
+        "cloud_openai_compatible_base_url https://***@llm.example.com/v1 (config.yaml), "
+        "max_tokens 8000 (CORTEX_MAX_TOKENS), temperature 0.3 (config.yaml)"
+    ) in status, status
+    assert "hunter2" not in status
+
+    config.unlink()
+    env.pop("CORTEX_MAX_TOKENS")
+    env.pop("CORTEX_AUTO_UPDATE_CHECK")
+    env["CORTEX_UPDATE_PROBE_BASE"] = "http://127.0.0.1:9"  # a check, if one runs, goes nowhere
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        status = harness.wait_response(harness.send("command.execute", {
+            "session_id": session_id, "command": "/status"}))["result"]["message"]
+    finally:
+        harness.close()
+    assert "- Settings: the defaults" in status, status
+
+
+def test_the_first_session_after_an_update_says_what_changed(tmp_path: Path, scratch_repo: Path) -> None:
+    """Once, in the app: a headless run leaves the notice for the next session."""
+    import cortex
+
+    version = cortex.__version__
+    env = _worker_env(tmp_path, _write_script(tmp_path / "script.json", [[{"text": "Hi."}]] * 3))
+    env["CORTEX_SELF_INSTALL_KIND"] = "installed"  # as an install, not this checkout
+    state = tmp_path / "home" / ".cortex" / "state.yaml"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("last_cortex_version: 1.0.0\n")
+
+    headless = _run_headless(cwd=scratch_repo, env=env, prompt="hi", extra_args=[])
+    assert headless.returncode == 0, headless.stderr
+    assert "last_cortex_version: 1.0.0" in state.read_text()
+
+    notices = []
+    for _ in range(2):
+        harness = WorkerHarness(cwd=scratch_repo, env=env)
+        try:
+            _start_session(harness)
+            notices.append(harness.wait_event("system.notice")["payload"]["message"])
+        finally:
+            harness.close()
+    assert (
+        f"Updated to Cortex {version} (from 1.0.0) · what's new: "
+        f"https://github.com/faisalmumtaz89/Cortex/releases/tag/v{version}"
+    ) in notices[0], notices[0]
+    assert "Updated to" not in notices[1], notices[1]
+    assert f"last_cortex_version: {version}" in state.read_text()
+
+
 def test_headless_rejects_a_prompt_it_cannot_answer_and_keeps_stdout_clean(
     tmp_path: Path, scratch_repo: Path
 ) -> None:
@@ -2721,55 +2790,68 @@ def test_headless_model_without_its_provider_names_the_flag(
     assert "--model provider:model" in process.stderr and "/model" not in process.stderr.replace("--model", "")
 
 
-def test_the_documented_pre_commit_hook_blocks_a_bug_and_fails_closed(
+def test_the_documented_pre_commit_hook_lets_the_tests_decide(
     tmp_path: Path, scratch_repo: Path
 ) -> None:
-    """The hook in docs/cli.md, as written: a review that ends in VERDICT: BUG
-    stops the commit, one that ends in VERDICT: OK lets it through, and a
-    review that cannot run (no key) stops it too."""
+    """The hook in docs/cli.md, as written: a change that fails the tests is
+    stopped, with the review shown; one that passes them goes through, whatever
+    the review says, and so does one whose review cannot run (no key)."""
     docs = (REPO_ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
     hook = re.search(r"```bash\n(#!/bin/sh\n# \.git/hooks/pre-commit[^`]*)```", docs)
     assert hook, "the pre-commit hook was not found in docs/cli.md"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    (bin_dir / "cortex").write_text(f'#!/bin/sh\nexec "{sys.executable}" -m cortex "$@"\n')
-    (bin_dir / "cortex").chmod(0o755)
+    for name, command in (("cortex", f'"{sys.executable}" -m cortex'), ("python", f'"{sys.executable}"')):
+        (bin_dir / name).write_text(f'#!/bin/sh\nexec {command} "$@"\n')
+        (bin_dir / name).chmod(0o755)
     script = tmp_path / "script.json"
     env = _worker_env(tmp_path, script)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    env["PYTHONPATH"] = f"{REPO_ROOT}{os.pathsep}{scratch_repo / 'src'}"
 
     def git(*args: str) -> subprocess.CompletedProcess:
         return subprocess.run(["git", *args], cwd=scratch_repo, env=env, capture_output=True,
                               text=True, timeout=180)
 
+    (scratch_repo / "test_app.py").write_text(
+        "from app import main\n\n\ndef test_main():\n    assert main() == 1\n", encoding="utf-8"
+    )
     git("init", "-q")
     git("config", "user.email", "dev@example.com")
     git("config", "user.name", "Dev")
     git("add", "-A")
-    assert git("commit", "-qm", "start").returncode == 0
+    assert git("commit", "-qm", "start", "--no-verify").returncode == 0
     hook_path = scratch_repo / ".git" / "hooks" / "pre-commit"
     hook_path.write_text(hook.group(1))
     hook_path.chmod(0o755)
 
     (scratch_repo / "src" / "app.py").write_text("def main():\n    return 2\n", encoding="utf-8")
     git("add", "src/app.py")
-    _write_script(script, [[{"text": "main() now returns the wrong value.\nVERDICT: BUG"}]])
+    _write_script(script, [[{"text": "main() now returns 2, which test_main rejects."}]])
     blocked = git("commit", "-qm", "change")
     assert blocked.returncode == 1, blocked.stderr
-    assert "the review found a problem" in blocked.stderr
+    assert "main() now returns 2" in blocked.stderr, blocked.stderr  # git shows a hook's output there
+    assert "pre-commit: the tests fail" in blocked.stderr
+    assert "1 failed" in (scratch_repo / ".git" / "cortex-tests.log").read_text()
     assert git("rev-list", "--count", "HEAD").stdout.strip() == "1"
+    assert not list(scratch_repo.rglob("__pycache__"))
 
+    (scratch_repo / "src" / "app.py").write_text("def main():\n    return 1  # one\n", encoding="utf-8")
+    git("add", "src/app.py")
     env.pop("OPENAI_API_KEY")
-    unreviewed = git("commit", "-qm", "change")
-    assert unreviewed.returncode == 1
-    assert "the review did not run (exit 2)" in unreviewed.stderr, unreviewed.stderr
+    unreviewed = git("commit", "-qm", "comment")
+    assert unreviewed.returncode == 0, unreviewed.stderr
+    assert "pre-commit: the review did not run" in unreviewed.stderr, unreviewed.stderr
     assert "openai is not authenticated" in (scratch_repo / ".git" / "cortex-review.log").read_text()
 
     env["OPENAI_API_KEY"] = "sk-test-scripted"
-    _write_script(script, [[{"text": "The change is correct.\nVERDICT: OK"}]])
-    passed = git("commit", "-qm", "change")
+    (scratch_repo / "README.md").write_text("# Scratch, reviewed\n", encoding="utf-8")
+    git("add", "README.md")
+    _write_script(script, [[{"text": "Unverified: the title may be a bug."}]])
+    passed = git("commit", "-qm", "title")
     assert passed.returncode == 0, passed.stderr
-    assert git("rev-list", "--count", "HEAD").stdout.strip() == "2"
+    assert "Unverified: the title may be a bug." in passed.stderr
+    assert git("rev-list", "--count", "HEAD").stdout.strip() == "3"
 
 
 def test_headless_says_when_a_slash_name_is_no_skill(tmp_path: Path, scratch_repo: Path) -> None:

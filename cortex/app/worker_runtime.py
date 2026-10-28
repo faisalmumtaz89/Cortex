@@ -39,6 +39,7 @@ from cortex.protocol.schema import (
 from cortex.protocol.types import PROTOCOL_VERSION, EventType
 from cortex.tooling.builtin.bash import stop_running_commands
 from cortex.tooling.orchestrator import ToolingOrchestrator
+from cortex.update_check import running_cortex_version
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,11 @@ class WorkerRuntime:
         self._update_notice_emitted = False
         model_notices = self._restore_startup_target()
         restored = self.model_service.active_target.cloud_model is not None
+        # The version the app last opened a session at: a newer one says so once.
+        self._last_opened_version = str(config.get_state_value("last_cortex_version", "") or "")
+        updated = self.update_service.updated_notice(self._last_opened_version)
         self._startup_notices: list[str] = [
+            *([updated] if updated else []),
             *getattr(config, "warnings", []),
             *(model_notices if restored else []),
         ]
@@ -511,6 +516,9 @@ class WorkerRuntime:
         if not self._startup_notices_emitted:
             self._startup_notices_emitted = True
             notice_parts.extend(self._startup_notices)
+            running = running_cortex_version()
+            if running and running != self._last_opened_version:
+                self.config.set_state_value("last_cortex_version", running)
         self._emit_event(
             session_id=session_id,
             event_type="system.notice",

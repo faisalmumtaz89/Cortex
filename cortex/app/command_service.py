@@ -9,6 +9,7 @@ from typing import Callable, Dict, cast
 
 from cortex.app.command_output import format_auth_status, format_status_summary
 from cortex.app.model_service import LOGIN_URL_ARGUMENT
+from cortex.cloud.router import shown_url
 from cortex.cloud.types import CloudProvider
 from cortex.update_check import running_cortex_version
 
@@ -16,6 +17,14 @@ logger = logging.getLogger(__name__)
 
 _CLOUD_LOGIN_PROVIDERS = {"openai", "anthropic", "azure", "openai-compatible"}
 _MODEL_USAGE = "Usage: /model <provider>:<model> (example: /model openai:gpt-5.5)"
+
+
+def _setting_text(value: object) -> str:
+    """A setting's value as config.yaml writes it; a URL with any credentials
+    in it masked."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return shown_url(value) if isinstance(value, str) else str(value)
 
 
 class CommandService:
@@ -142,10 +151,15 @@ class CommandService:
         if cmd == "/status":
             home = str(Path.home())
             cwd = str(Path.cwd())
+            settings = [
+                f"{key} {_setting_text(value)} ({source})"
+                for key, value, source in self.model_service.config.settings_in_effect()
+            ]
             status = {
                 "cortex": running_cortex_version() or "unknown",
                 "directory": "~" + cwd[len(home):] if cwd == home or cwd.startswith(home + os.sep) else cwd,
                 **self.model_service.status_summary(),
+                "settings": ", ".join(settings) or "the defaults",
             }
             return {"ok": True, "status": status, "message": format_status_summary(status)}
         if cmd == "/clear":

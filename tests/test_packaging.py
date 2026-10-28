@@ -92,6 +92,25 @@ def test_release_workflow_is_single_channel_and_publishes_last() -> None:
     assert "concurrency:" in RELEASE and "cancel-in-progress: false" in RELEASE
 
 
+def test_the_release_notes_are_the_changelogs_section_for_the_version() -> None:
+    """A release says what changed: the workflow publishes CHANGELOG.md's
+    section for the version as its notes, and the version has one."""
+    import importlib.util
+
+    import cortex
+
+    spec = importlib.util.spec_from_file_location("release_notes", REPO_ROOT / "scripts" / "release_notes.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert module.notes(changelog, cortex.__version__), f"CHANGELOG.md has no '## {cortex.__version__}'"
+    assert module.notes("## 1.2.3\n\n- one\n\n## 1.2.2\n\n- two\n", "1.2.3") == "- one"
+    assert module.notes("## 1.2.3\n\n## 1.2.2\n- two\n", "1.2.3") == ""
+    assert "body_path: release-notes.md" in RELEASE and "generate_release_notes" not in RELEASE
+    assert RELEASE.index("scripts/release_notes.py") < RELEASE.index("Build wheel")
+
+
 def test_release_workflow_pins_the_frontend_toolchain() -> None:
     """The shipped sidecar's toolchain must be reproducible: the workflows'
     bun pin must match the version the frontend declares."""

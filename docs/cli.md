@@ -52,7 +52,34 @@ Runs one agent turn through the same worker wiring the TUI uses:
 - Text the model writes after a tool call starts a new paragraph.
 - Slash commands are not run in headless mode, except `/<skill> request`. A prompt that starts with a command of the interactive app (`/model`, `/login`, `/update`, ...) is refused with exit code `2` and not sent to the model (for `/login`, the error names `cortex login`); any other text, `/` or not, is sent to the model as written. A `/name` that is no skill (`/review` for `/review-changes`) is sent too, with a note on stderr that lists the skills.
 
-In CI, pass `--model` on every run: a fresh runner has no remembered model. Exit `0` means the turn finished, not that the task succeeded, so check the result yourself (re-run the tests, look at `git diff`); with `--full-auto` the model may change any file in the repository.
+### In CI
+
+A GitHub Actions job that installs a pinned version and asks about the change:
+
+```yaml
+- name: Install Cortex
+  run: curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | CORTEX_NO_MODIFY_PATH=1 bash -s -- 2.0.10
+- name: Summarize the change
+  env:
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    CORTEX_AUTO_UPDATE_CHECK: "false"   # no release check on the runner
+    CORTEX_AUTO_SAVE: "false"           # no conversation history kept
+    CORTEX_CLOUD_MAX_RETRIES: "4"       # ride out a provider's brief outage
+  run: git diff origin/main...HEAD | ~/.local/bin/cortex -p "summarize this change for a reviewer" --model openai:gpt-5.5
+```
+
+- Pin the version, so a new release changes nothing until you move the pin.
+  With `CORTEX_NO_MODIFY_PATH=1` no shell profile changes, and Cortex runs as
+  `~/.local/bin/cortex`.
+- Pass `--model` on every run: a fresh runner has no remembered model.
+- A request that fails to connect, times out, is rate limited (429) or gets
+  a server error (5xx) is sent again, up to `cloud_max_retries` times, before
+  any of its reply has arrived; a run that still fails exits `1`, with the
+  reason on stderr. Running the step once more is reasonable then; a `2` (no
+  key, no model) fails the same way again.
+- Exit `0` means the turn finished, not that the task succeeded, so check the
+  result yourself (re-run the tests, look at `git diff`); with `--full-auto`
+  the model may change any file in the repository.
 
 ### Saving a key without the interactive app
 
@@ -63,30 +90,41 @@ cortex login openai-compatible https://llm.example.com/v1    # in a terminal: as
 
 `cortex login PROVIDER [URL]` saves the key where `/login` does (the system keyring, else `~/.cortex/credentials.json`, readable only by you), so later `cortex -p` runs on that machine find it. It reads the key from stdin, or asks for it without showing it when run in a terminal; it never takes the key as an argument, which would keep it in shell history and process listings. `azure` takes its endpoint and `openai-compatible` its base URL, unless one is saved or set already. On a CI runner, a secret in the `*_API_KEY` variable is usually simpler.
 
-### A review that can fail a commit
+### A pre-commit check: the tests decide, the review explains
 
-Exit codes say whether the run worked, not what the model found, so a check that passes or fails asks for a fixed last line and reads it. A git pre-commit hook:
+A model's verdict on code it has not run is an opinion, and can call a correct
+change a bug. So let the tests stop a commit, and have Cortex review it with the
+`review-changes` skill, which reports a finding as proven only by a run that
+shows it. A git pre-commit hook:
 
 ```bash
 #!/bin/sh
-# .git/hooks/pre-commit — block a commit the review finds a real bug in.
+# .git/hooks/pre-commit — the tests decide; the review says what may be wrong.
+git diff --cached --quiet && exit 0      # nothing staged: nothing to check
+dir=$(git rev-parse --git-dir)
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider >"$dir/cortex-tests.log" 2>&1
+tests=$?
+if [ "$tests" -eq 0 ]; then result=passed; else result=failed; fi
 # --model names the model on every run, as on a fresh CI runner, which remembers none.
-reply=$(git diff --cached | cortex -p "Review this staged diff for real bugs only (not style).
-End with one last line, exactly VERDICT: BUG or VERDICT: OK." --model openai:gpt-5.5 \
-  2>>.git/cortex-review.log)
-status=$?
-if [ "$status" -ne 0 ]; then
-  echo "pre-commit: the review did not run (exit $status); see .git/cortex-review.log" >&2
-  exit 1                       # fail closed: no review, no commit
+git diff --cached | cortex -p "/review-changes the staged diff below. The tests ran on it and $result:
+$(tail -n 30 "$dir/cortex-tests.log")" --model openai:gpt-5.5 2>>"$dir/cortex-review.log" \
+  || echo "pre-commit: the review did not run; see $dir/cortex-review.log" >&2
+if [ "$tests" -ne 0 ]; then
+  echo "pre-commit: the tests fail; see $dir/cortex-tests.log (commit with --no-verify to skip)" >&2
+  exit 1
 fi
-printf '%s\n' "$reply"
-case "$(printf '%s\n' "$reply" | tail -n 1)" in
-  "VERDICT: OK") exit 0 ;;
-  *) echo "pre-commit: the review found a problem (commit with --no-verify to skip it)" >&2; exit 1 ;;
-esac
 ```
 
-It fails closed: without a key or a model the review exits `2`, and the commit is stopped with the reason in the log, instead of going through unreviewed.
+Put your project's test command in place of `python -m pytest ...`. The review
+runs nothing itself (a run without `--full-auto` refuses commands), so it works
+from the diff, the code it reads and the test output it is given: on a change
+that breaks a test it names the line that does, and a bug no test covers (an
+off-by-one in a new function, say) it still reports, as unverified, with the
+command that would show it, while the commit goes through. Read what it says;
+only the tests stop the commit. A review that cannot run (no key, no model)
+says so and does not stop it either. The tests run on your working tree,
+unstaged changes included: run `git stash --keep-index` first to test exactly
+what you commit.
 
 Examples:
 
@@ -101,10 +139,10 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 | Command | Description |
 |---|---|
 | `/help` | List available commands |
-| `/status` | The Cortex version, the directory it works in, the active model and the model that answered the last turn |
+| `/status` | The Cortex version, the directory it works in, the active model, the model that answered the last turn, and the settings `config.yaml` and `CORTEX_*` variables changed (each with where it comes from) |
 | `/model [provider:model]` | Pick a model interactively, or switch by `provider:model` |
 | `/login <provider> [api_key] [url]` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials (Azure and OpenAI-compatible also take the URL) |
-| `/update [cortex]` | Show the installed version and any newer one, or update Cortex |
+| `/update [cortex]` | Show the installed version and any newer one, with a link to its release notes, or update Cortex (the download is checked against its published checksum before anything is installed) |
 | `/clear` | Clear conversation history |
 | `/save` | Save the conversation as JSON |
 | `/quit` or `/exit` | Exit Cortex |

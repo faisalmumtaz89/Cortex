@@ -1634,8 +1634,9 @@ def test_update_notice_status_panel_and_live_update_narration(tui_project, tmp_p
         assert "Working…" not in live  # background op: never the turn spinner
 
         # Resolves in place: final message, no lingering live indicator.
-        final = "Cortex 9.9.9 installed — restart Cortex to apply."
-        session.wait_for(final, timeout=30)
+        final = "Cortex 9.9.9 installed, its checksum verified — restart Cortex to apply."
+        frame = session.wait_for(final, timeout=30)
+        assert "https://github.com/faisalmumtaz89/Cortex/releases/tag/v9.9.9" in frame, frame
         session.wait_until(
             lambda f: "Updating Cortex…" not in f and final in f,
             description="update indicator resolved into the final message",

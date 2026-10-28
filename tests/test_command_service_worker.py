@@ -19,6 +19,9 @@ class _FakeConfig:
     def get_state_value(self, key: str, default=None):
         return self.state.get(key, default)
 
+    def settings_in_effect(self) -> list:
+        return []
+
 
 class _FakeCloudRouter:
     def __init__(self, *, authenticated: bool = False) -> None:

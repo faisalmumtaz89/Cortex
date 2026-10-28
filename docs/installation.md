@@ -64,9 +64,9 @@ Each applies to the run it is set for. With `curl ... | bash`, set it on `bash`,
 | `CORTEX_MANAGED_PYTHON=0` | Use a Python from your system; stop if there is none. |
 | `CORTEX_PYTHON=/path/to/python3` | Use this Python; stop, with the reason, if it is not 3.11 or later with `venv`. |
 | `CORTEX_NO_MODIFY_PATH=1` | Change no shell profile; the installer prints the full path to run Cortex by. |
+| `$env:CORTEX_VERSION = "X.Y.Z"` | Windows (`install.ps1`): install that release instead of the latest. |
 
 A choice that cannot be met, or a value other than `1` or `0`, stops the installer before it changes anything.
-| `$env:CORTEX_VERSION = "X.Y.Z"` | Windows (`install.ps1`): install that release instead of the latest. |
 
 ## Development Install
 

@@ -80,6 +80,7 @@ def test_status_report_newer_release_available(tmp_path: Path) -> None:
     report = _service(tmp_path, cortex_tag="v9999.0.0").status_report()
     assert report["message"] == (
         f"Cortex: {installed_cortex_version()} installed · 9999.0.0 available — /update cortex"
+        " · what's new: https://github.com/faisalmumtaz89/Cortex/releases/tag/v9999.0.0"
     )
     assert report["update_status"] == {
         "cortex_installed": installed_cortex_version(),
@@ -121,6 +122,7 @@ def test_status_report_falls_back_to_cache_when_probe_fails(tmp_path: Path) -> N
     service = UpdateService(cache=cache, opener=FailingOpener())
     assert service.status_report()["message"] == (
         f"Cortex: {installed_cortex_version()} installed · 9999.0.0 available — /update cortex"
+        " · what's new: https://github.com/faisalmumtaz89/Cortex/releases/tag/v9999.0.0"
     )
 
 
@@ -145,7 +147,10 @@ def test_startup_notice_only_when_strictly_newer(
 ) -> None:
     monkeypatch.setenv("CORTEX_SELF_INSTALL_KIND", "installed")
     newer = _service(tmp_path / "a", cortex_tag="v9999.0.0")
-    assert newer.startup_notice() == "Cortex 9999.0.0 available — update with /update cortex"
+    assert newer.startup_notice() == (
+        "Cortex 9999.0.0 available — update with /update cortex"
+        " · what's new: https://github.com/faisalmumtaz89/Cortex/releases/tag/v9999.0.0"
+    )
 
     current = _service(tmp_path / "b", cortex_tag=f"v{installed_cortex_version()}")
     assert current.startup_notice() is None
@@ -173,7 +178,10 @@ def test_startup_notice_cortex_source_checkout_points_to_git(
     service = _service(tmp_path, cortex_tag="v9999.0.0")
     # This suite runs from the repo — a source checkout.
     notice = str(service.startup_notice())
-    assert "Cortex 9999.0.0 released — source checkout: update with git pull" == notice
+    assert notice == (
+        "Cortex 9999.0.0 released — source checkout: update with git pull · "
+        "what's new: https://github.com/faisalmumtaz89/Cortex/releases/tag/v9999.0.0"
+    )
     assert "/update cortex" not in notice
 
     # Normal installs keep the /update cortex nudge.
@@ -181,6 +189,7 @@ def test_startup_notice_cortex_source_checkout_points_to_git(
     installed = _service(tmp_path / "b", cortex_tag="v9999.0.0")
     assert installed.startup_notice() == (
         "Cortex 9999.0.0 available — update with /update cortex"
+        " · what's new: https://github.com/faisalmumtaz89/Cortex/releases/tag/v9999.0.0"
     )
 
 
@@ -330,7 +339,7 @@ def test_update_cortex_downloads_verifies_and_installs_release_wheel(
             progress_callback=lambda payload: phases.append(str(payload["phase"]))
         )
     assert result["ok"] is True, result
-    assert result["message"] == "Cortex 9.9.9 installed — restart Cortex to apply."
+    assert result["message"] == "Cortex 9.9.9 installed, its checksum verified — restart Cortex to apply. What's new: https://github.com/faisalmumtaz89/Cortex/releases/tag/v9.9.9"
     record = _pip_record(tmp_path)
     args = record["ARGS"].split()
     assert args[0] == "install"
@@ -590,7 +599,7 @@ def test_shutdown_waits_for_in_flight_self_install_pip(
         assert list(staging.glob("cortex-wheel-*")) == []  # staged dir removed
         result = outcome["result"]
         assert result["ok"] is True, result
-        assert result["message"] == "Cortex 9.9.9 installed — restart Cortex to apply."
+        assert result["message"] == "Cortex 9.9.9 installed, its checksum verified — restart Cortex to apply. What's new: https://github.com/faisalmumtaz89/Cortex/releases/tag/v9.9.9"
 
         service.shutdown()  # idempotent: nothing left to reap, never raises
 

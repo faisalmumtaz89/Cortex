@@ -98,7 +98,7 @@ auto_update_check: true      # false: no daily check for a new release
 
 ### Updates
 
-- `auto_update_check` (default: `true`) — once a day, the worker checks GitHub for a new Cortex release (a single redirect probe, in a background thread that never blocks startup) and posts a one-line notice at session start when an update exists. Set `auto_update_check: false` to opt out. `/update` always works regardless of this setting. The last check result is cached in `~/.cortex/update-check.json`.
+- `auto_update_check` (default: `true`) — once a day, the worker checks GitHub for a new Cortex release (a single redirect probe, in a background thread that never blocks startup) and posts a one-line notice at session start when an update exists, with a link to its release notes. The first session after an update says which version it now runs, with the same link (`last_cortex_version` in `~/.cortex/state.yaml` remembers the version last opened). Set `auto_update_check: false` to opt out. `/update` always works regardless of this setting. The last check result is cached in `~/.cortex/update-check.json`.
 
 ### Developer
 

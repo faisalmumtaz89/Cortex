@@ -148,17 +148,27 @@ tools_profile: full
 
 ### Tool permission prompts
 
-When a tool call needs approval, the TUI shows an arrow menu: **Allow once** / **Allow always** / **Reject** (↑↓ + Enter; Esc rejects). "Allow always" covers only that exact command (run in the same directory) or file, in the directory Cortex was started in. Persistent approvals are stored in `~/.cortex/tool_permissions.yaml` — delete that file to reset them; running sessions pick up the change.
+When a tool call needs approval, the TUI shows an arrow menu: **Allow once** / **Allow always** / **Reject** (↑↓ + Enter; Esc rejects). "Allow always" covers only that exact command (run in the same directory) or file, in the directory Cortex was started in, and the call's row says where it was saved. Persistent approvals are stored in `~/.cortex/tool_permissions.yaml` — delete that file to reset them; running sessions pick up the change. A row saying "Allowed in this session only: could not save it" names the reason (often a `~/.cortex` you cannot write; see [Configuration Issues](#configuration-issues)).
+
+A prompt starts on **Reject** when its call does not fit on screen at once: page through it with PgUp/PgDn (Home/End for either end), then choose. A taller window shows more of it.
+
+### A panel or the prompt is cut at the bottom
+
+Cortex lays out the screen for 24 rows or more. On a shorter window, the transcript keeps one row and the rows that do not fit go off the bottom of the screen; make the window taller.
 
 ### Headless edits are denied
 
-`cortex -p` denies `edit_file`/`write_file`/`bash` by design. Pass `--full-auto` to auto-approve them.
+`cortex -p` denies `edit_file`/`write_file`/`bash` by design, and says so on stderr before the run starts. Pass `--full-auto` to auto-approve them, or allow one exact command (the tests, say) with a rule in `~/.cortex/tool_permissions.yaml` (see the [Configuration Guide](configuration.md)).
+
+### A review says BUG on a change that is correct
+
+A model's verdict on code it has not run is an opinion. Let the tests decide whether a commit goes through, and read the review as advice: see the pre-commit check in the [CLI guide](cli.md#a-pre-commit-check-the-tests-decide-the-review-explains).
 
 ---
 
 ## Configuration Issues
 
-Cortex reads `~/.cortex/config.yaml`; every key is optional (see the [Configuration Guide](configuration.md)). The file is flat (e.g. `temperature`, `max_tokens`) — no nested sections. Edit it with a text editor and restart Cortex; there is no CLI subcommand for configuration.
+Cortex reads `~/.cortex/config.yaml`; every key is optional (see the [Configuration Guide](configuration.md)). `/status` lists the settings it and `CORTEX_*` variables changed, and where each comes from; a setting that is not valid is named in the startup notice and left at its default. The file is flat (e.g. `temperature`, `max_tokens`) — no nested sections. Edit it with a text editor and restart Cortex; there is no CLI subcommand for configuration.
 
 If Cortex cannot read or write its state files:
 
