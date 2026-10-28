@@ -178,6 +178,12 @@ def _parse_rules(payload: Dict[str, object]) -> List[PermissionRule]:
     return rules
 
 
+def _shown(path: Path) -> str:
+    """`path` as the user knows it: under ~ when it is in their home."""
+    home, text = str(Path.home()), str(path)
+    return "~" + text[len(home):] if text.startswith(home + os.sep) else text
+
+
 def _kind(permission: str) -> str:
     return {"bash": "command", "edit": "edit"}.get(permission, f"{permission} call")
 
@@ -257,9 +263,11 @@ class PermissionManager:
             return PermissionAction.ASK
         return PermissionAction.ALLOW
 
-    def _record_allow_always(self, *, permission: str, patterns: Sequence[str]) -> None:
+    def _record_allow_always(self, *, permission: str, patterns: Sequence[str]) -> str:
+        """Save the rules that allow these patterns from now on, and say what
+        was done: the user chose "Allow always" and should see that it held."""
         if "*" in patterns:
-            return  # a call with no command or file: allowed once, never saved
+            return "Allowed this once: a call with no command or file to name is never saved"
         added: List[PermissionRule] = []
         for pattern in patterns:
             # Escaped, so the rule matches this exact command or path only.
@@ -277,7 +285,11 @@ class PermissionManager:
         except Exception as exc:  # the rules still apply in this session
             logger.warning("Could not save permission rules to %s: %s", self.store.path, exc)
             self._unsaved.extend(added)
+            self._loaded_stamp = _STALE
+            return (f"Allowed in this session only: could not save it to "
+                    f"{_shown(self.store.path)} ({type(exc).__name__}: {exc})")
         self._loaded_stamp = _STALE  # reload: the file now holds the merged rules
+        return f"Allowed from now on here: saved in {_shown(self.store.path)}"
 
     def request(
         self,
@@ -287,17 +299,18 @@ class PermissionManager:
         metadata: Optional[Dict[str, object]] = None,
         prompt_callback: Optional[Callable[[PermissionRequest], PermissionDecision]] = None,
         preview: Optional[Callable[[], Optional[Dict[str, object]]]] = None,
-    ) -> None:
+    ) -> Optional[str]:
         """Resolve permission request or raise PermissionDeniedError. `preview`
         gives the change the call would make; it runs only when a prompt is
-        shown, and its diff goes in the prompt's metadata."""
+        shown, and its diff goes in the prompt's metadata. Returns what an
+        "Allow always" answer did, for the call's result to show."""
         # Patterns are matched exactly as given: stripping could make a command
         # that runs differently match an approved one.
         normalized_patterns = [str(pattern) or "*" for pattern in patterns] or ["*"]
         decision = self.evaluate(permission=permission, patterns=normalized_patterns)
 
         if decision == PermissionAction.ALLOW:
-            return
+            return None
 
         if decision == PermissionAction.DENY:
             reasons = [
@@ -330,11 +343,10 @@ class PermissionManager:
         user_decision = prompt_callback(prompt)
 
         if user_decision == PermissionDecision.ALLOW_ONCE:
-            return
+            return None
 
         if user_decision == PermissionDecision.ALLOW_ALWAYS:
-            self._record_allow_always(permission=permission, patterns=normalized_patterns)
-            return
+            return self._record_allow_always(permission=permission, patterns=normalized_patterns)
 
         raise PermissionDeniedError(
             f"Rejected at the permission prompt: the {_kind(permission)} was not carried out."

@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js"
-import type { PromptLayout, PromptRow, PromptTone } from "../lib/permission_prompt"
+import type { PromptLayout } from "../lib/permission_prompt"
+import type { PromptRow, PromptTone } from "../lib/text_rows"
 import { UI_PALETTE } from "./ui_palette"
 
 const TONES: Record<PromptTone, keyof typeof UI_PALETTE> = {
@@ -45,7 +46,7 @@ export function PermissionPosition(props: { layout: PromptLayout }) {
   return (
     <Show when={layout().window < layout().rows.length} fallback={<text> </text>}>
       <text fg={UI_PALETTE.textMuted}>
-        {`rows ${layout().offset + 1}–${layout().offset + layout().window} of ${layout().rows.length} · PgUp/PgDn to scroll`}
+        {`rows ${layout().offset + 1}–${layout().offset + layout().window} of ${layout().rows.length} · PgUp/PgDn, Home/End`}
       </text>
     </Show>
   )

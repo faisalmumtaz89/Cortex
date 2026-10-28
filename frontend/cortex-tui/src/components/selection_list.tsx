@@ -47,6 +47,16 @@ const SPINE_BORDER = {
 }
 
 const NAME_COLUMN = 12
+const LIST_MAX_ROWS = 8
+const LIST_MIN_ROWS = 3
+
+/** How many of a list's `count` rows it shows in `room` rows, `chrome` of
+ * them its title and footer: all, when they fit; else as many as leave a row
+ * each for "+N more above" and "+N more", at most 8 and at least 3. */
+export function listWindow(room: number, chrome: number, count: number): number {
+  if (count <= Math.min(LIST_MAX_ROWS, room - chrome)) return count
+  return Math.min(count, Math.max(LIST_MIN_ROWS, Math.min(LIST_MAX_ROWS, room - chrome - 2)))
+}
 
 /** Left-pad a primary label to the name column (the shared one, or a wider
  * one that fits every label of a list) so descriptions align. */
@@ -72,7 +82,7 @@ interface RowProps<T> {
 /** Just the windowed selectable rows (no panel chrome) — used directly by the
  * permission menu inside its own box. */
 export function SelectionRows<T>(props: RowProps<T>) {
-  const maxRows = () => props.maxVisibleRows ?? 8
+  const maxRows = () => props.maxVisibleRows ?? LIST_MAX_ROWS
   const windowStart = () =>
     props.selectedIndex < maxRows() ? 0 : props.selectedIndex - maxRows() + 1
   const visible = () => props.items.slice(windowStart(), windowStart() + maxRows())
@@ -80,6 +90,9 @@ export function SelectionRows<T>(props: RowProps<T>) {
 
   return (
     <box flexDirection="column" flexShrink={0}>
+      <Show when={windowStart() > 0}>
+        <text fg={UI_PALETTE.textMuted}>{`  +${windowStart()} more above`}</text>
+      </Show>
       <For each={visible()}>
         {(item, i) => {
           const absoluteIndex = () => windowStart() + i()
@@ -122,16 +135,19 @@ export function SelectionRows<T>(props: RowProps<T>) {
   )
 }
 
-/** Full overlay: the ┃ panel chrome + optional title + rows + footer hint.
- * Used by the slash palette (list mode) and the model picker. */
+/** Full overlay: the ┃ panel chrome + optional title + rows + footer hint,
+ * in at most `room` rows. Used by the model and login pickers. */
 export function SelectionList<T>(
   props: RowProps<T> & {
     title?: string
     footer: string
+    room: number
     borderColor?: RGBA
     emptyLabel?: string
   },
 ) {
+  // The title and the footer take two rows each, with the blank under or above them.
+  const window = () => listWindow(props.room, (props.title ? 2 : 0) + 2, props.items.length)
   return (
     <box
       flexDirection="column"
@@ -160,7 +176,7 @@ export function SelectionList<T>(
           getSecondary={props.getSecondary}
           getTag={props.getTag}
           getDanger={props.getDanger}
-          maxVisibleRows={props.maxVisibleRows}
+          maxVisibleRows={window()}
         />
       </Show>
       <box flexShrink={0} marginTop={1}>

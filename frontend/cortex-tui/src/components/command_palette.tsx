@@ -1,7 +1,8 @@
 import { For, Show } from "solid-js"
 import type { SlashCommand } from "../commands"
-import { terminalColumns, terminalRows } from "../lib/terminal_size"
-import { SelectionRows, nameColumn, padPrimary } from "./selection_list"
+import type { ResultLayout } from "../lib/result_layout"
+import { terminalColumns } from "../lib/terminal_size"
+import { SelectionRows, listWindow, nameColumn, padPrimary } from "./selection_list"
 import { UI_PALETTE } from "./ui_palette"
 
 const SPINE_BORDER = {
@@ -21,6 +22,8 @@ const SPINE_BORDER = {
 // Columns a palette row loses besides its name: the screen's side padding
 // (2 + 2), the panel's rail and padding (1 + 2 + 1), and the "❯ " marker (2).
 const ROW_CHROME = 10
+// The palette's footer and the blank row above it.
+const FOOTER_ROWS = 2
 
 /** A description cut to the row, so a skill's long one stays on one line. */
 function fitDescription(command: SlashCommand, column: number): string {
@@ -30,13 +33,15 @@ function fitDescription(command: SlashCommand, column: number): string {
 }
 
 /** Command list / arg-hint panel shown above the prompt while typing a slash
- * command. The list body reuses the shared SelectionRows so the palette,
- * permission menu, and model picker are visually identical. */
+ * command, in at most `room` rows. The list body reuses the shared
+ * SelectionRows so the palette, permission menu, and model picker are
+ * visually identical. */
 export function CommandPalette(props: {
   matches: SlashCommand[]
   selectedIndex: number
   argMode: boolean
   argCommand?: SlashCommand
+  room: number
 }) {
   const column = () => nameColumn(props.matches.map((command) => `/${command.name}`))
   return (
@@ -71,6 +76,7 @@ export function CommandPalette(props: {
             selectedIndex={props.selectedIndex}
             getPrimary={(command) => padPrimary(`/${command.name}`, column())}
             getSecondary={(command) => fitDescription(command, column())}
+            maxVisibleRows={listWindow(props.room, FOOTER_ROWS, props.matches.length)}
           />
         </Show>
       </Show>
@@ -90,30 +96,9 @@ export function CommandPalette(props: {
   )
 }
 
-const RESULT_MAX_ROWS = 24
-// Rows the rest of the screen keeps while a result shows: header, a few
-// transcript rows, the prompt and its footer.
-const RESULT_RESERVED_ROWS = 14
-
-export function CommandResultPanel(props: { command: string; ok: boolean; text: string }) {
-  // Budgeted in screen rows, wrapped lines counted as the rows they take: a
-  // taller panel pushes the prompt off screen and squeezes the transcript.
-  const visible = () => {
-    const lines = props.text.split("\n")
-    const width = Math.max(10, terminalColumns() - 8) // margin, spine, padding
-    let budget = Math.max(3, Math.min(RESULT_MAX_ROWS, terminalRows() - RESULT_RESERVED_ROWS))
-    const shown: string[] = []
-    for (const line of lines) {
-      const rows = Math.max(1, Math.ceil(line.length / width))
-      if (rows > budget) break
-      shown.push(line)
-      budget -= rows
-    }
-    if (shown.length < lines.length && shown.length > 0 && budget === 0) shown.pop()
-    return { shown, overflow: lines.length - shown.length }
-  }
-  const shown = () => visible().shown
-  const overflow = () => visible().overflow
+export function CommandResultPanel(props: { command: string; ok: boolean; layout: ResultLayout }) {
+  const shown = () => props.layout.rows.slice(props.layout.offset, props.layout.offset + props.layout.window)
+  const scrolls = () => props.layout.window < props.layout.rows.length
 
   return (
     <box
@@ -135,12 +120,14 @@ export function CommandResultPanel(props: { command: string; ok: boolean; text: 
         </text>
         <text fg={UI_PALETTE.textMuted}>Esc to dismiss</text>
       </box>
-      <Show when={props.text.trim().length > 0}>
+      <Show when={props.layout.rows.some((row) => row.trim())}>
         {/* Blank row between the ✓/✕ header and the body. */}
         <box flexDirection="column" flexShrink={0} marginTop={1}>
           <For each={shown()}>{(line) => <text fg={UI_PALETTE.text}>{line}</text>}</For>
-          <Show when={overflow() > 0}>
-            <text fg={UI_PALETTE.textMuted}>{`… +${overflow()} more lines: make the window taller to see them`}</text>
+          <Show when={scrolls()}>
+            <text fg={UI_PALETTE.textMuted}>
+              {`rows ${props.layout.offset + 1}–${props.layout.offset + props.layout.window} of ${props.layout.rows.length} · PgUp/PgDn, Home/End`}
+            </text>
           </Show>
         </box>
       </Show>

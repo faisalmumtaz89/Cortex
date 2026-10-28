@@ -338,7 +338,7 @@ class ToolingOrchestrator:
         patterns = self._extract_permission_patterns(call, registry.repo_root)
 
         try:
-            self.permission_manager.request(
+            note = self.permission_manager.request(
                 permission=permission,
                 patterns=patterns,
                 metadata={"tool": call.name, "arguments": call.arguments},
@@ -354,7 +354,10 @@ class ToolingOrchestrator:
                 error=str(exc),
             )
 
-        return registry.execute(call=call, session_id=session_id, interrupt=interrupt)
+        result = registry.execute(call=call, session_id=session_id, interrupt=interrupt)
+        if note:  # for the call's row; the model is not told
+            result.metadata = {**result.metadata, "permission_note": note}
+        return result
 
     def _record_event(
         self,

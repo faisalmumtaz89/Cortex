@@ -242,7 +242,7 @@ def _selection_window_size() -> int:
     source = (REPO_ROOT / "frontend/cortex-tui/src/components/selection_list.tsx").read_text(
         encoding="utf-8"
     )
-    match = re.search(r"maxVisibleRows \?\? (\d+)", source)
+    match = re.search(r"LIST_MAX_ROWS = (\d+)", source)
     assert match, "selection_list.tsx window default not found"
     return int(match.group(1))
 
@@ -655,7 +655,7 @@ def test_login_picker_shows_each_provider_auth_status(tui_project) -> None:
     def row(provider: str) -> str:
         return next(line for line in picker.splitlines() if f" {provider} " in line)
 
-    assert "logged in · env" in row("azure"), picker  # the harness sets its key
+    assert "logged in · environment variable" in row("azure"), picker  # the harness sets its key
     assert "not logged in" in row("anthropic"), picker
     # A base URL alone is half the setup: the row says the key is what is missing.
     assert "URL saved, no key" in row("openai-compatible"), picker
@@ -750,10 +750,12 @@ def test_openai_compatible_login_takes_the_base_url_and_needs_no_restart(tui_pro
     session.send_key("/login ")
     time.sleep(1)
     session.send_key("Enter")
-    session.wait_for("Log in to a provider", timeout=10)
-    for _ in range(3):  # openai, anthropic, azure, openai-compatible
-        session.send_key("Down")
-        time.sleep(0.3)
+    picker = session.wait_for("Log in to a provider", timeout=10)
+    # The picker starts on the provider logged in (azure, by the harness's
+    # environment); openai-compatible is the row under it.
+    assert re.search(r"❯ azure\b", picker), picker
+    session.send_key("Down")
+    time.sleep(0.3)
     session.send_key("Enter")
     hint = session.wait_until(
         lambda frame: "/login openai-compatible" in frame and "<base_url>" in frame,
@@ -831,8 +833,10 @@ def test_bare_login_opens_provider_picker_and_prefills_key_prompt(tui_project) -
     # No numbered selection anywhere.
     assert "[1]" not in picker
 
-    # Enter on the highlighted provider pre-fills the key prompt (arg-hint).
-    session.send_key("Down")  # anthropic
+    # It starts on the provider logged in; Enter on the highlighted provider
+    # pre-fills the key prompt (arg-hint).
+    assert re.search(r"❯ azure\b", picker), picker
+    session.send_key("Up")  # anthropic
     time.sleep(0.4)
     session.send_key("Enter")
     session.wait_until(
@@ -925,16 +929,19 @@ def test_a_small_screen_edit_prompt_shows_the_change_and_scrolls_to_the_rest(tui
     prompt = session.wait_for("Permission required")
     assert "Edit file: values.py  +1 -1" in prompt, prompt
     assert "6 + line_6 = 60" in prompt, prompt
-    assert "rows 3–5 of 7 · PgUp/PgDn to scroll" in prompt, prompt
+    # All free rows but the transcript's 3: 4 of the diff's 7, from the line before the change.
+    assert "rows 3–6 of 7 · PgUp/PgDn, Home/End" in prompt, prompt
+    assert " 5   line_5 = 5" in prompt, prompt
     assert "❯ Reject" in prompt, prompt
     assert "Waiting for your answer" not in prompt, prompt
     session.send_key("PageDown")
-    end = session.wait_for("rows 5–7 of 7")
+    end = session.wait_for("rows 4–7 of 7")
     assert " 8   line_8 = 8" in end and "Edit file: values.py" in end, end
-    session.send_key("PageUp")
-    session.send_key("PageUp")
-    top = session.wait_for("rows 1–3 of 7")
+    session.send_key("Home")
+    top = session.wait_for("rows 1–4 of 7")
     assert " 3   line_3 = 3" in top, top
+    session.send_key("End")
+    session.wait_for("rows 4–7 of 7")
     session.send_key("Escape")
     session.wait_for("EDIT_DONE_MARKER")
     assert (project / "values.py").read_text(encoding="utf-8").count("line_6 = 6\n") == 1
@@ -1034,7 +1041,8 @@ def test_permission_modal_shows_command_and_executes_it(tui_project) -> None:
     session.send_line("create the proof file")
 
     modal = session.wait_for("Permission required")
-    assert "Run command: echo proof > proof.txt" in modal
+    rows = [line.strip().lstrip("┃").strip() for line in modal.splitlines()]
+    assert rows[rows.index("Run command:") + 1] == "echo proof > proof.txt", modal
     # Arrow menu (no numbers): "Allow once" is the default highlight.
     assert "❯ Allow once" in modal
     assert "Allow always" in modal and "Reject" in modal
@@ -1045,6 +1053,26 @@ def test_permission_modal_shows_command_and_executes_it(tui_project) -> None:
     session.send_key("Enter")
     session.wait_for("WROTE_FILE_MARKER")
     assert (project / "proof.txt").read_text(encoding="utf-8").strip() == "proof"
+
+
+def test_allow_always_says_what_it_saved_and_where(tui_project) -> None:
+    """B10: "Allow always" gave no sign of what was saved or where. The call's
+    row says so, and the same command later runs without asking."""
+    project, start = tui_project
+    turn = [{"tool_calls": [{"name": "bash", "arguments": {"command": "echo again >> log.txt"}}]},
+            {"text": "RAN_MARKER"}]
+    session = start([turn, turn])
+    _select_scripted_model(session)
+    session.send_line("log it")
+    session.wait_for("Permission required")
+    session.send_key("Down")  # Allow always
+    time.sleep(0.4)
+    session.send_key("Enter")
+    frame = session.wait_for("RAN_MARKER")
+    assert "⎿ Allowed from now on here: saved in ~/.cortex/tool_permissions.yaml" in frame, frame
+    session.send_line("log it again")
+    session.wait_until(lambda f: f.count("RAN_MARKER") == 2, description="the second run", timeout=20)
+    assert (project / "log.txt").read_text(encoding="utf-8") == "again\nagain\n"
 
 
 def test_enter_after_typing_a_message_queues_it_and_leaves_the_prompt_open(tui_project) -> None:
@@ -1098,7 +1126,8 @@ def test_permission_modal_shows_the_directory_a_command_runs_in(tui_project) -> 
 
     modal = session.wait_for("Permission required")
     rows = [line.strip().lstrip("┃").strip() for line in modal.splitlines()]
-    assert "Run command: cd ./sub || exit 1\\n" in rows, modal
+    assert "Run command:" in rows, modal
+    assert "cd ./sub || exit 1 ↵" in rows, modal
     assert "echo here > here.txt" in rows, modal
 
     session.send_key("Enter")
@@ -1107,8 +1136,8 @@ def test_permission_modal_shows_the_directory_a_command_runs_in(tui_project) -> 
 
 
 def test_permission_modal_shows_a_command_of_several_lines_line_by_line(tui_project) -> None:
-    """Each line of a command starts a row of the prompt, its line break still
-    shown as \\n, instead of one run of escapes."""
+    """Each line of a command starts a row of the prompt, a line break shown
+    as ↵ at the end of the row before it."""
     project, start = tui_project
     command = "cd src\npython3 -m unittest discover -s tests\necho done"
     session = start(
@@ -1119,8 +1148,8 @@ def test_permission_modal_shows_a_command_of_several_lines_line_by_line(tui_proj
     session.send_line("run it")
     modal = session.wait_for("Permission required")
     rows = [line.strip().lstrip("┃").strip() for line in modal.splitlines()]
-    assert "Run command: cd src\\n" in rows, modal
-    assert "python3 -m unittest discover -s tests\\n" in rows, modal
+    assert "cd src ↵" in rows, modal
+    assert "python3 -m unittest discover -s tests ↵" in rows, modal
     assert "echo done" in rows, modal
     assert "❯ Allow once" in modal, modal  # all of it is shown, so Enter may allow it
     session.send_key("Escape")
@@ -1138,11 +1167,14 @@ def test_permission_modal_shows_every_line_of_a_command(tui_project) -> None:
     session.send_line("run it")
 
     modal = session.wait_for("Permission required")
-    flat = "".join(line.strip().lstrip("┃").strip() for line in modal.splitlines())
-    # The blank run is counted, and each line break stays visible.
-    assert "⟨20000 blank or invisible characters⟩\\n\\n" in flat, modal
-    assert "\\n; touch HIDDEN.txt" in flat, modal
-    assert "Allow once" in modal and "Reject" in modal
+    rows = [line.strip().lstrip("┃").strip() for line in modal.splitlines()]
+    # The blank run is counted, and each line break stays visible as ↵.
+    assert "echo hello⟨20000 blank or invisible characters⟩ ↵" in rows, modal
+    assert "↵" in rows, modal
+    assert "❯ Reject" in modal  # its 61 rows are not all on screen
+    session.send_key("End")
+    end = session.wait_for("; touch HIDDEN.txt")
+    assert "rows 42–61 of 61" in end, end
     session.send_key("Escape")
     session.wait_for("DONE_MARKER")
     assert not (project / "HIDDEN.txt").exists()
@@ -1183,14 +1215,26 @@ def test_permission_modal_for_a_command_too_long_to_show_starts_on_reject(tui_pr
 
     modal = session.wait_for("Permission required")
     # Its 124 rows scroll in a window of 4: none of the command is left out.
-    assert "rows 1–4 of 124 · PgUp/PgDn to scroll" in modal, modal
+    assert "rows 1–4 of 124 · PgUp/PgDn, Home/End" in modal, modal
     assert "touch LONG.txt" not in modal, modal
     assert "❯ Reject" in modal
-    for _ in range(45):
-        session.send_key("PageDown")
+    session.send_key("PageDown")
+    session.wait_for("rows 4–7 of 124")  # a window less one row at a time
+    session.send_key("End")
     end = session.wait_for("rows 121–124 of 124")
     assert "A; touch LONG.txt" in end, end
     assert "❯ Reject" in end  # seeing it all does not change the choice
+    # With text typed, Home and End move in it; the call stays where it is.
+    session.send_key("note")
+    session.wait_for("note")
+    session.send_key("Home")
+    time.sleep(0.8)
+    assert "rows 121–124 of 124" in session.capture()
+    session.send_key("End")
+    session.send_key("C-u")  # clears the draft, to the caret
+    session.wait_until(lambda frame: "note" not in frame, description="the draft cleared", timeout=10)
+    session.send_key("Home")
+    session.wait_for("rows 1–4 of 124")
     session.send_key("Enter")
     session.wait_for("DONE_MARKER")
     assert not (project / "LONG.txt").exists()
@@ -1654,12 +1698,18 @@ def test_help_with_a_long_transcript_keeps_the_prompt_and_every_row_readable(
     # A skill shows one sentence, not the paragraph written for the model.
     assert "Not for only explaining an error" not in frame, frame
 
-    # On a small window the rows that do not fit are counted, with the way to
-    # see them, and the prompt stays.
+    # On a small window the panel shows the rows that fit and says which, the
+    # prompt stays, and the keys it names reach the rest.
     subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
                    check=True)
-    small = session.wait_for("make the window taller to see them", timeout=10)
+    small = session.wait_until(lambda frame: re.search(r"rows 1–\d+ of \d+ · PgUp/PgDn, Home/End", frame)
+                               is not None, description="/help's row window", timeout=10)
     assert "Ask Cortex" in small, small
+    assert "/review-changes" not in small, small
+    session.send_key("End")
+    end = session.wait_for("/review-changes", timeout=10)
+    assert "Ask Cortex" in end, end
+    assert re.search(r"rows \d+–(\d+) of \1 ", end), end
 
 
 def test_a_new_message_brings_the_transcript_back_to_the_bottom(tui_project) -> None:
@@ -1746,8 +1796,8 @@ def test_a_command_of_indented_lines_reads_as_typed(tui_project) -> None:
     session.send_line("run it")
     modal = session.wait_for("Permission required")
     rows = [line.split("┃", 1)[-1][2:].rstrip() for line in modal.splitlines() if "┃" in line]
-    assert "    if got != want:\\n" in rows, modal
-    assert "        fails.append(name)\\n" in rows, modal
+    assert "    if got != want: ↵" in rows, modal
+    assert "        fails.append(name) ↵" in rows, modal
     assert "blank or invisible" not in modal, modal
     assert "❯ Allow once" in modal, modal
     session.send_key("Escape")
@@ -1783,7 +1833,7 @@ def test_the_header_branch_follows_a_switch_made_during_the_turn(tui_project) ->
     session.wait_for("git switch -q -c fix/median")
     session.send_key("Enter")  # Allow once
     # The next prompt keeps the turn running: the header already shows the new branch.
-    frame = session.wait_for("Run command: echo hold")
+    frame = session.wait_for("echo hold")
     assert "⎇ fix/median" in frame, frame
     session.send_key("Escape")
     session.wait_for("DONE_MARKER")
@@ -1797,10 +1847,13 @@ def test_help_and_the_palette_keep_their_columns_on_a_small_screen(tui_project) 
                    check=True)
     time.sleep(0.5)
     session.send_line("/help")
-    panel = session.wait_for("Skills:", timeout=15)
+    session.wait_for("Skills:", timeout=15)
+    session.send_key("End")  # the panel's last rows, where the skills end
+    panel = session.wait_until(lambda frame: re.search(r"rows \d+–(\d+) of \1 ", frame) is not None,
+                               description="/help scrolled to its end", timeout=10)
     rows = [line.split("┃", 1)[1][2:] for line in panel.splitlines() if "┃" in line]
     skills = rows[[row.startswith("Skills:") for row in rows].index(True) + 1:]
-    skills = skills[:[not row.strip() for row in skills].index(True)]  # the panel ends at a blank row
+    skills = skills[:[row.startswith("rows ") for row in skills].index(True)]  # the panel ends there
     column = len("/reproduce-and-fix") + 2
     wrapped = [row for row in skills if row.strip() and not row.startswith(("/", "…"))]
     assert wrapped, panel  # at 80 columns some descriptions take two rows
@@ -1818,6 +1871,36 @@ def test_help_and_the_palette_keep_their_columns_on_a_small_screen(tui_project) 
     assert not [line for line in palette.splitlines() if re.match(r"\s*┃\s+(tr|work)", line)], palette
 
 
+@pytest.mark.parametrize("opens", ["/model", "/login", "/"])
+def test_a_panel_on_a_small_screen_leaves_the_transcript_whole(tui_project, opens) -> None:
+    """B10 saw the first /model frame at 80x24 draw two transcript rows in one
+    (`┃moNolmodelsloaded.lPick…`): the picker took every row, and a transcript
+    left none is drawn in one row anyway, each block over the others. A
+    panel takes the rows the screen has for it, and the transcript keeps its
+    last rows readable."""
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]])
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
+                   check=True)
+    session.wait_for("Session ready")
+    time.sleep(0.5)
+    if opens == "/":
+        session.send_key("/")
+        session.wait_for("Tab complete", timeout=10)
+    else:
+        session.send_line(opens)
+        session.wait_for("Esc cancel", timeout=10)
+    time.sleep(1.5)  # the B10 frame was a steady state
+    frame = session.capture()
+    rows = [row for row in frame.splitlines() if row.strip()]
+    assert "no model · idle" in rows[0], frame
+    assert "Ctrl+C quit" in rows[-1], frame
+    # The notice above the panel, whole, with the row above it.
+    assert "┃  No model loaded. Pick one with /model, or add a key with /login." in frame, frame
+    if opens != "/login":  # four providers fit; the models and commands do not
+        assert re.search(r"\+\d+ more", frame), frame
+
+
 def test_status_names_the_version_and_the_directory(tui_project) -> None:
     project, start = tui_project
     session = start([[{"text": "IGNORED"}]])
@@ -1827,3 +1910,33 @@ def test_status_names_the_version_and_the_directory(tui_project) -> None:
     import cortex
 
     assert f"Cortex: {cortex.__version__}" in panel, panel
+
+
+INLINE_CODE_REPLY = (
+    "**Map**\n"
+    "- `inventory/report.py:10`: `render_table(items: list[Item]) -> str`, entry point; builds "
+    "display rows at `:13` (price rendered as `price_cents / 100:.2f`), sizes columns at "
+    "`:16-19`, joins at `:25`.\n"
+    "- `inventory/ledger.py:10`: `Item` dataclass — `sku: str`, `name: str`, `qty: int = 0`, "
+    "`price_cents: int = 0`, `tags: list[str]`.\n"
+    "INLINE_DONE_MARKER"
+)
+
+
+@pytest.mark.parametrize("columns", [80, 100])
+def test_inline_code_that_wraps_keeps_every_character(tui_project, columns) -> None:
+    """B10 saw `price_cents / 100:.2f` drawn as `100:` / `2f)` and `qty: int = 0`
+    as `qty: int` / `0` where a row wrapped: code an explanation shows must be
+    exactly what the model wrote."""
+    project, start = tui_project
+    session = start([[{"text": INLINE_CODE_REPLY}]])
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name,
+                    "-x", str(columns), "-y", "40"], check=True)
+    _select_scripted_model(session)
+    session.send_line("map the report")
+    frame = session.wait_for("INLINE_DONE_MARKER")
+    shown = " ".join(line.strip() for line in frame.splitlines())
+    shown = re.sub(r"\s+", " ", shown)
+    for line in INLINE_CODE_REPLY.replace("`", "").replace("**", "").splitlines()[1:-1]:
+        expected = re.sub(r"\s+", " ", line.lstrip("- ").strip())
+        assert expected in shown, f"{expected!r} not shown whole:\n{frame}"

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import type { DiffData } from "../src/context/session_store"
-import { permissionLayout, permissionLines, type PromptRow } from "../src/lib/permission_prompt"
-import { visibleText } from "../src/lib/visible_text"
+import { permissionLayout, permissionLines } from "../src/lib/permission_prompt"
+import type { PromptRow } from "../src/lib/text_rows"
+import { visibleLines } from "../src/lib/visible_text"
 
 const bash = (command: string) => ({
   permission: "bash",
@@ -37,20 +38,21 @@ describe("permission prompt", () => {
 
   test("a short call is shown in full", () => {
     const layout = permissionLayout(bash("make test"), undefined, { columns: 80, rows: 24 })
-    expect(layout.rows.map(text)).toEqual(["Run command: make test"])
+    expect(layout.pinned.map(text)).toEqual(["Run command:"])
+    expect(layout.rows.map(text)).toEqual(["make test"])
     expect(layout.full).toBe(true)
   })
 
-  test("a command of several lines reads line by line, its indentation as typed", () => {
-    const layout = permissionLayout(bash("for f in *.py; do\n        wc -l $f\ndone"), undefined, { columns: 80, rows: 40 })
-    expect(layout.rows.map(text)).toEqual(["Run command: for f in *.py; do\\n", "        wc -l $f\\n", "done"])
+  test("a command of several lines reads line by line, as typed", () => {
+    const layout = permissionLayout(bash("for f in *.py; do\n        printf '%s\\n' $f\ndone"), undefined, { columns: 80, rows: 40 })
+    expect(layout.rows.map(text)).toEqual(["for f in *.py; do ↵", "        printf '%s\\n' $f ↵", "done"])
   })
 
   test("a long command wraps into rows that fit, losing nothing", () => {
     const command = "python3 -c \"" + "x = 1; ".repeat(120) + "print(x)\""
     const layout = permissionLayout(bash(command), undefined, { columns: 80, rows: 60 })
     expect(layout.rows.every((row) => columns(row) <= 80 - 7)).toBe(true)
-    expect(layout.rows.map(text).join("")).toBe(visibleText(`Run command: ${command}`, Infinity))
+    expect(layout.rows.map(text).join("")).toBe(visibleLines(command).join(""))
     expect(layout.full).toBe(true)
   })
 
@@ -65,19 +67,21 @@ describe("permission prompt", () => {
     expect(end.offset).toBe(end.rows.length - end.window)
   })
 
-  test("the call takes at most half the rows the screen leaves, the transcript the rest", () => {
-    const command = Array.from({ length: 40 }, (_, n) => `echo ${n}`).join("\n")
-    // 24 rows: 15 for the screen's chrome and 1 for the input leave 8, 4 of them for the call.
+  test("the call takes every free row but the transcript's 3", () => {
+    const command = Array.from({ length: 80 }, (_, n) => `echo ${n}`).join("\n")
+    // 24 rows: 10 for the screen's chrome, 1 for the input and 3 for the
+    // transcript leave the prompt 10: 5 for its title, position row and
+    // choices, 1 for the label, 4 for the command.
     expect(permissionLayout(bash(command), undefined, { columns: 80, rows: 24 }).window).toBe(4)
-    expect(permissionLayout(bash(command), undefined, { columns: 80, rows: 24, queued: 1, inputRows: 3 }).window).toBe(3)
-    expect(permissionLayout(bash(command), undefined, { columns: 120, rows: 40 }).window).toBe(12)
+    expect(permissionLayout(bash(command), undefined, { columns: 80, rows: 24, queued: 1, inputRows: 3 }).window).toBe(2)
+    expect(permissionLayout(bash(command), undefined, { columns: 120, rows: 40 }).window).toBe(20)
   })
 
   test("wide characters count as two columns", () => {
     const layout = permissionLayout(bash("echo " + "漢".repeat(100)), undefined, { columns: 80, rows: 40 })
     expect(layout.rows.every((row) => columns(row) <= 80 - 7)).toBe(true)
-    // 18 columns of "Run command: echo " and 27 characters, then 36 a row.
-    expect(layout.rows.map((row) => [...text(row)].length)).toEqual([45, 36, 36, 1])
+    // "echo " and 34 characters, then 36 a row.
+    expect(layout.rows.map((row) => [...text(row)].length)).toEqual([39, 36, 30])
   })
 
   test("an edit keeps its file in view and starts the window just before the change", () => {
@@ -85,11 +89,12 @@ describe("permission prompt", () => {
     const change = diff([...rows, { kind: "del", text: "line_6 = 6", oldNo: 6 }, { kind: "add", text: "line_6 = 60", newNo: 6 }, context(7)])
     const layout = permissionLayout(edit("values.py"), change, { columns: 80, rows: 24 })
     expect(layout.pinned.map(text)).toEqual(["Edit file: values.py  +1 -1"])
-    expect(layout.window).toBe(3)
+    expect(layout.window).toBe(4)
     expect(layout.rows.slice(layout.offset, layout.offset + layout.window).map(text)).toEqual([
       " 5   line_5 = 5",
       " 6 - line_6 = 6",
       " 6 + line_6 = 60",
+      " 7   line_7 = 7",
     ])
     expect(layout.full).toBe(false)
     expect(permissionLayout(edit("values.py"), change, { columns: 80, rows: 40 }).full).toBe(true)
@@ -117,6 +122,19 @@ describe("permission prompt", () => {
   test("invisible characters in the new text are shown as escapes", () => {
     const change = diff([{ kind: "add", text: "ok = True\u202e  # \\n", newNo: 1 }])
     const layout = permissionLayout(edit("a.py"), change, { columns: 80, rows: 40 })
-    expect(text(layout.rows[0])).toBe(" 1 + ok = True\\u{202e}  # \\n")
+    expect(text(layout.rows[0])).toBe(" 1 + ok = True⟨U+202E⟩  # \\n")
   })
+})
+
+test("the window starts at the first row of the line before the change", () => {
+  const long = "x".repeat(150)
+  const change = diff([
+    { kind: "ctx", text: long, oldNo: 1, newNo: 1 },
+    { kind: "del", text: "a", oldNo: 2 },
+    { kind: "add", text: "b", newNo: 2 },
+    ...[3, 4, 5, 6, 7, 8, 9, 10].map(context),
+  ])
+  const layout = permissionLayout(edit("a.py"), change, { columns: 80, rows: 24 })
+  expect(layout.offset).toBe(0) // the long line's first row, not its wrapped end
+  expect(text(layout.rows[0]).startsWith(" 1   xxx")).toBe(true)
 })

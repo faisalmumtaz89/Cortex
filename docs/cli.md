@@ -22,11 +22,13 @@ Type a message to run an agent turn with the active model, or a slash command to
 |---|---|
 | `Enter` | Submit input (a command name typed alone, such as `quit`, runs that command, as the hint under the input says; any longer text is a message) |
 | `Shift+Enter` | Insert newline |
-| `↑` / `↓`, `Enter` / `Esc` | Choose an answer to a pending permission prompt / reject it. With a message typed in the input, `Enter` queues the message and the prompt stays open |
+| `↑` / `↓`, `Enter` / `Esc` | Choose an answer to a pending permission prompt / reject it. With a message typed in the input, `Enter` queues the message and the prompt stays open; `Esc` still rejects, and the message stays in the input |
 | `↑` / `↓` (empty input) | Recall earlier prompts |
 | `Esc` | Close the palette or result panel; otherwise interrupt the running turn |
 | `Ctrl+O` | Show or hide tool details |
-| `PageUp` / `PageDown` | Scroll the transcript, or a permission prompt's call when it has more rows than it shows |
+| `PageUp` / `PageDown` | Scroll a permission prompt's call or a command's result when it has more rows than it shows; otherwise the transcript |
+| `Home` / `End` | Jump to the first or last rows of such a call or result (with text typed, they move in the text instead) |
+| `Ctrl+U` | Delete the typed text before the caret |
 | `Ctrl+C` | Exit Cortex at once, without asking |
 
 ## Headless Mode
@@ -108,6 +110,11 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 | `/quit` or `/exit` | Exit Cortex |
 | `/<skill> [request]` | Run a skill on a request (see [Skills](#skills)) |
 
+A command's result, such as the list `/help` shows, opens in a panel above the
+input, and `Esc` closes it. When it has more rows than the screen leaves it, a
+row under it says which are shown (`rows 1–7 of 27 · PgUp/PgDn, Home/End`), and
+those keys scroll it.
+
 ### `/model` — switch models
 
 ```text
@@ -173,14 +180,16 @@ With tools enabled (the default: `tools_enabled: true`, `tools_profile: full`), 
 File tools work only inside the directory Cortex was started in (a call for a file elsewhere is refused without a prompt), and `bash` runs there or in a directory below it; `bash` commands are not otherwise sandboxed. When permission is needed, the TUI shows an arrow menu (↑↓ to choose, Enter to confirm):
 
 - **Allow once** — allows this one call; the next call asks again
-- **Allow always** — allows this exact command, run in the same directory (for `bash`), or this file (for edits) from now on, only in the directory Cortex was started in; saved in `~/.cortex/tool_permissions.yaml`. A call with no command or file to name is allowed this once only.
+- **Allow always** — allows this exact command, run in the same directory (for `bash`), or this file (for edits) from now on, only in the directory Cortex was started in; saved in `~/.cortex/tool_permissions.yaml`, as the call's row then says (or that it could not be saved, and why: the rule then holds until Cortex exits). A call with no command or file to name is allowed this once only, and its row says so.
 - **Reject** (or `Esc`) — the model continues without the tool result
 
-An edit's prompt shows the file and the size of the change (`+3 -2`), and the change itself as a diff with line numbers before anything is written, starting just before the first changed line; a long line wraps under its code. Invisible and control characters in the new text show as escapes such as `\u{202e}`.
+An edit's prompt shows the file and the size of the change (`+3 -2`), and the change itself as a diff with line numbers before anything is written, starting just before the first changed line; a long line wraps under its code. Invisible and control characters in the new text show as markers such as `⟨U+202E⟩`, a tab as `⟨tab⟩`.
 
-The prompt shows a command with backslashes, line breaks, tabs and invisible or blank-looking characters as escapes such as `\n` or `\u{200b}`, and a run of 8 or more blank or invisible characters as a count, except spaces that indent a line. Each line of a command starts a row, after the `\n` that ends the line before it.
+The prompt shows a command as typed, backslashes included, each of its lines starting a row and ending in ` ↵` when another follows. A row that only continues a long line has no ` ↵` above it. Tabs, carriage returns and invisible or blank-looking characters show as markers (`⟨tab⟩`, `⟨CR⟩`, `⟨U+200B⟩`), and a run of 8 or more of them as a count (`⟨12 blank or invisible characters⟩`), except spaces that indent a line. A `⟨`, `⟩` or `↵` in the command itself shows as a marker too, so it cannot pass for one the prompt drew.
 
-The call takes at most half the rows the screen has free, so the transcript keeps the rest. When it has more rows than that, a row under it says which rows are shown (`rows 9–16 of 61 · PgUp/PgDn to scroll`), PgUp/PgDn scroll through all of it, and the prompt starts on **Reject**: Enter approves only a call that was on screen whole. So does a diff Cortex had to cut (a line over 2000 characters, or more than 400 rows), and an edit of a file too large to compare. While the call fits, PgUp/PgDn scroll the transcript.
+The call takes the rows the screen has free but 3, which the transcript keeps so what led to the prompt stays in view. A command's `Run command:` label, and an edit's file with the size of its change, stay in view however far the call scrolls. When the call has more rows than it shows, a row under it says which are shown (`rows 9–16 of 61 · PgUp/PgDn, Home/End`), PgUp/PgDn page through it, Home/End jump to either end, and the prompt starts on **Reject**: Enter approves only a call that was on screen whole, and seeing the rest does not change the choice. So does a diff Cortex had to cut (a line over 2000 characters, or more than 400 rows), and an edit of a file too large to compare. While the call fits, PgUp/PgDn scroll the transcript.
+
+The pickers, the slash command list and a command's result share the screen the same way: each shows the rows the screen leaves it, with the rest counted (`+5 more`) or scrolled, from 80x24 up.
 
 Profiles restrict the exposed tool set: `off` (none), `read_only`, `edit` (adds `edit_file`/`write_file`), `full` (adds `bash`). See the [Configuration Guide](configuration.md) for the `tools_*` keys.
 

@@ -22,6 +22,8 @@ import { useStore } from "../context/store"
 import { readGitBranch } from "../lib/git_branch"
 import { spinnerFrame } from "../lib/spinner"
 import { permissionLayout } from "../lib/permission_prompt"
+import { resultLayout } from "../lib/result_layout"
+import { panelRows } from "../lib/screen_rows"
 import { promptHasDraft, registerPromptDraft } from "../lib/prompt_draft"
 import { applyEdit, masked } from "../lib/secret_input"
 import { turnRunning } from "../protocol"
@@ -313,7 +315,9 @@ export function SessionRoute(props: {
         (item) => String(item.provider ?? "").trim() === provider,
       )
       const authenticated = Boolean(row?.authenticated)
-      const source = String(row?.auth_source ?? "").trim()
+      const raw = String(row?.auth_source ?? "").trim()
+      // Where the key comes from, in words.
+      const source = { env: "environment variable", keychain: "keyring", file: "key file" }[raw] ?? raw
       return {
         provider,
         tag: authenticated
@@ -327,7 +331,12 @@ export function SessionRoute(props: {
   )
 
   const openLoginPicker = () => {
-    setLoginPickerIndex(0)
+    // On the provider of the model in use, else the first one logged in.
+    const active = store.state.activeModelLabel.split(":")[0]
+    const entries = loginPickerEntries()
+    const inUse = entries.findIndex((entry) => entry.provider === active)
+    const loggedIn = entries.findIndex((entry) => entry.tag?.text.startsWith("logged in"))
+    setLoginPickerIndex(Math.max(0, inUse >= 0 ? inUse : loggedIn))
     closePaletteAndClearInput()
     store.clearCommandResult()
     setLoginPickerOpen(true)
@@ -636,10 +645,16 @@ export function SessionRoute(props: {
   // The call a prompt asks about (an edit with the change it makes), laid
   // out for this screen from the row the prompt is scrolled to.
   const permissionDiff = createMemo(() => parseDiff(store.state.pendingPermission?.metadata))
+  // A command's result, laid out for this screen from the row it is scrolled to.
+  const resultView = createMemo(() => {
+    const result = store.state.commandResult
+    if (!result || paletteVisible()) return undefined
+    return resultLayout(result.text, result.hang ?? 0, store.screen(), store.state.resultScroll)
+  })
   const permissionView = createMemo(() => {
     const pending = store.state.pendingPermission
     if (!pending) return undefined
-    return permissionLayout(pending, permissionDiff(), store.permissionScreen(), store.state.permissionScroll)
+    return permissionLayout(pending, permissionDiff(), store.screen(), store.state.permissionScroll)
   })
 
 
@@ -782,7 +797,18 @@ export function SessionRoute(props: {
         return
       }
 
-      // Keyboard scrolling of the transcript (mouse reporting is disabled).
+      // A result taller than its panel scrolls first; else the transcript
+      // (mouse reporting is disabled). Home/End move in typed text, if any.
+      const result = resultView()
+      const paging = key === "pageup" || key === "pagedown" || (!store.state.promptHasText && (key === "home" || key === "end"))
+      if (result && result.window < result.rows.length && paging) {
+        event.preventDefault()
+        const step = Math.max(1, result.window - 1)
+        const last = result.rows.length - result.window
+        const next = { home: 0, end: last, pageup: result.offset - step, pagedown: result.offset + step }[key]!
+        store.setResultScroll(Math.max(0, Math.min(last, next)))
+        return
+      }
       if ((key === "pageup" || key === "pagedown") && transcriptScroll && !transcriptScroll.isDestroyed) {
         event.preventDefault()
         transcriptScroll.scrollBy({ x: 0, y: key === "pageup" ? -10 : 10 })
@@ -839,10 +865,16 @@ export function SessionRoute(props: {
     // arrows, Enter and Esc. Other keys type a message, which Enter queues.
     const key = String(event.name ?? "").toLowerCase()
     const shift = Boolean((event as { shift?: boolean }).shift)
+    const layout = permissionView()
+    const scrolls = layout !== undefined && layout.window < layout.rows.length
+    if ((key === "home" || key === "end") && scrolls && !store.state.promptHasText) {
+      event.preventDefault()
+      store.setPermissionScroll(key === "home" ? 0 : layout.rows.length - layout.window)
+      return
+    }
     if (key === "pageup" || key === "pagedown") {
       event.preventDefault()
-      const layout = permissionView()
-      if (layout && layout.window < layout.rows.length) {
+      if (scrolls) {
         // The call's rows, a window less one at a time, so a row stays in view.
         const step = Math.max(1, layout.window - 1)
         store.setPermissionScroll(Math.max(0, Math.min(layout.rows.length - layout.window,
@@ -1009,11 +1041,15 @@ export function SessionRoute(props: {
           </text>
         </box>
 
+        {/* At least a row, on a screen too short for the panel above the
+            prompt: given none, the transcript would still be drawn in one
+            row, every block of it on top of the others. */}
         <scrollbox
           ref={(r: ScrollBoxRenderable) => {
             transcriptScroll = r
           }}
           flexGrow={1}
+          minHeight={1}
           stickyScroll
           stickyStart="bottom"
           viewportOptions={{ paddingRight: 0 }}
@@ -1096,6 +1132,7 @@ export function SessionRoute(props: {
             }}
             getTag={(entry) => entry.tag}
             title="Select a model"
+            room={panelRows(store.screen())}
             footer={
               terminalColumns() < 64
                 ? "↑↓ · Enter · Esc"
@@ -1116,6 +1153,7 @@ export function SessionRoute(props: {
             getPrimary={(entry) => entry.provider}
             getTag={(entry) => entry.tag}
             title="Log in to a provider"
+            room={panelRows(store.screen())}
             footer="↑↓ select · Enter choose · Esc cancel"
             emptyLabel="No providers available."
           />
@@ -1129,14 +1167,17 @@ export function SessionRoute(props: {
             selectedIndex={selectedIndex()}
             argMode={argMode()}
             argCommand={argCommand()}
+            room={panelRows(store.screen())}
           />
         </Show>
-        <Show when={store.state.commandResult && !paletteVisible()}>
-          <CommandResultPanel
-            command={store.state.commandResult!.command}
-            ok={store.state.commandResult!.ok}
-            text={store.state.commandResult!.text}
-          />
+        <Show when={resultView()}>
+          {(layout) => (
+            <CommandResultPanel
+              command={store.state.commandResult!.command}
+              ok={store.state.commandResult!.ok}
+              layout={layout()}
+            />
+          )}
         </Show>
 
         <PromptPanel

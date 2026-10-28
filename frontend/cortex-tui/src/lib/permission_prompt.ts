@@ -1,14 +1,15 @@
 // What a permission prompt shows, laid out to fit the screen. Each row is cut
 // to the prompt's width here, so it takes exactly one terminal row, and the
-// call's rows go in a window that leaves the transcript at least half the
-// free rows; PgUp/PgDn move the window. The store decides the prompt's
+// call's rows go in a window of the rows the screen leaves the prompt (see
+// screen_rows); PgUp/PgDn page through them, Home/End jump to either end. The store decides the prompt's
 // starting choice from this layout, so Enter never approves a call whose
 // text was not on screen.
-import type { RGBA } from "@opentui/core"
 import { highlightLine } from "../components/syntax_highlight"
 import type { DiffData } from "../context/session_store"
 import { displayPath } from "./paths"
-import { rowsAtLineBreaks, visibleCode, visibleText } from "./visible_text"
+import { type Screen, panelRows } from "./screen_rows"
+import { type PromptRow, type PromptSpan, type PromptTone, wrapSpans } from "./text_rows"
+import { visibleCode, visibleLines } from "./visible_text"
 
 export type PermissionPrompt = {
   permission: string
@@ -57,18 +58,16 @@ export function permissionLines(pending: PermissionPrompt): string[] {
   // Patterns/paths display repo-relative when inside the repo (display only).
   const target = pending.patterns.map(displayPath).join(", ") || "*"
   const lines = [summary]
-  if (pending.permission !== "bash" && !visibleText(summary).includes(visibleText(target))) {
+  const shown = (text: string) => visibleLines(text).join("\n")
+  if (pending.permission !== "bash" && !shown(summary).includes(shown(target))) {
     lines.push(`Target: ${target}`)
   }
   return lines
 }
 
-export type PromptTone = "text" | "muted" | "addGutter" | "delGutter" | "delText"
-export type PromptSpan = { text: string; tone: PromptTone; color?: RGBA }
-export type PromptRow = { spans: PromptSpan[]; band?: "add" | "del" }
 
 export type PromptLayout = {
-  /** Always on screen: an edit's file and the size of its change. */
+  /** Always on screen: what the call is (an edit's file and the size of its change). */
   pinned: PromptRow[]
   /** The call's text: the command, or the edit's diff. */
   rows: PromptRow[]
@@ -83,71 +82,13 @@ export type PromptLayout = {
 // prompt's rail and the padding after it (1 + 2). Diff rows indent 2 more.
 const TEXT_INDENT = 7
 const DIFF_INDENT = 2
-// Rows the screen keeps while a prompt is open, besides the transcript and
-// the call's rows: its top and bottom padding (2), the header and the row
-// after it (2), the row after the transcript (1), the prompt's title, the row
-// for the scroll position and the 3 choices (5), the row after the prompt
-// (1), and the input panel around one row of text (4).
-const FIXED_ROWS = 15
+// The prompt's rows besides the call's: its title, the row for the scroll
+// position and the 3 choices.
+const PROMPT_ROWS = 5
 const MIN_BODY_ROWS = 3
 
-const columnsOf = (ch: string) => (ch.codePointAt(0)! < 0x80 ? 1 : 2)
-const width = (spans: PromptSpan[]) =>
-  spans.reduce((total, span) => total + [...span.text].reduce((sum, ch) => sum + columnsOf(ch), 0), 0)
-
-/** `body` cut into rows of at most `columns`, each after `first` (the first
- * row) or `rest` (the rows below), at a space when the row's second half has
- * one. A character that may be wide counts as two columns. */
-function wrap(
-  first: PromptSpan[],
-  rest: PromptSpan[],
-  body: PromptSpan[],
-  columns: number,
-  band?: "add" | "del",
-): PromptRow[] {
-  const chars: { ch: string; span: number }[] = []
-  body.forEach((span, index) => {
-    for (const ch of span.text) chars.push({ ch, span: index })
-  })
-  const rows: PromptRow[] = []
-  let start = 0
-  do {
-    const prefix = rows.length === 0 ? first : rest
-    const room = Math.max(1, columns - width(prefix))
-    let end = start
-    let used = 0
-    while (end < chars.length && used + columnsOf(chars[end].ch) <= room) {
-      used += columnsOf(chars[end].ch)
-      end += 1
-    }
-    if (end === start && end < chars.length) end += 1
-    if (end < chars.length) {
-      for (let index = end - 1; index > start + Math.floor((end - start) / 2); index--) {
-        if (chars[index].ch === " ") {
-          end = index + 1
-          break
-        }
-      }
-    }
-    const spans: PromptSpan[] = [...prefix]
-    for (const { ch, span } of chars.slice(start, end)) {
-      const last = spans[spans.length - 1]
-      if (last && last.tone === body[span].tone && last.color === body[span].color && spans.length > prefix.length) {
-        last.text += ch
-      } else {
-        spans.push({ ...body[span], text: ch })
-      }
-    }
-    rows.push({ spans, band })
-    start = end
-  } while (start < chars.length)
-  return rows
-}
-
-function textRows(line: string, tone: PromptTone, columns: number): PromptRow[] {
-  return rowsAtLineBreaks(visibleText(line, Infinity)).flatMap((row) =>
-    wrap([], [], [{ text: row, tone }], columns),
-  )
+function textRows(text: string, tone: PromptTone, columns: number): PromptRow[] {
+  return visibleLines(text).flatMap((line) => wrapSpans([], [], [{ text: line, tone }], columns))
 }
 
 function diffRows(diff: DiffData, columns: number): PromptRow[] {
@@ -165,7 +106,7 @@ function diffRows(diff: DiffData, columns: number): PromptRow[] {
       const code = visibleCode(row.text.replace(/\t/g, "    "))
       const number = String(row.kind === "del" ? row.oldNo : row.newNo).padStart(numbers)
       if (row.kind === "del") {
-        rows.push(...wrap([{ text: `${number} - `, tone: "delGutter" }], blank,
+        rows.push(...wrapSpans([{ text: `${number} - `, tone: "delGutter" }], blank,
           [{ text: code, tone: "delText" }], columns, "del"))
         continue
       }
@@ -174,7 +115,7 @@ function diffRows(diff: DiffData, columns: number): PromptRow[] {
       const gutter: PromptSpan = row.kind === "add"
         ? { text: `${number} + `, tone: "addGutter" }
         : { text: `${number}   `, tone: "muted" }
-      rows.push(...wrap([gutter], blank, body, columns, row.kind === "add" ? "add" : undefined))
+      rows.push(...wrapSpans([gutter], blank, body, columns, row.kind === "add" ? "add" : undefined))
     }
   })
   if (diff.truncated) {
@@ -183,21 +124,12 @@ function diffRows(diff: DiffData, columns: number): PromptRow[] {
   return rows
 }
 
-/** Rows the call's text may take: half the rows the rest of the screen
- * leaves (the other half stays with the transcript), and at least a few. */
-function bodyRows(rows: number, queued: number, inputRows: number): number {
-  const free = rows - FIXED_ROWS - inputRows - (queued > 0 ? queued + 1 : 0)
-  return Math.max(MIN_BODY_ROWS, Math.floor(free / 2))
-}
-
-/** The prompt as drawn on a screen of `columns` x `rows`, with `queued`
- * messages shown above it and `inputRows` rows of typed text below it,
- * starting at row `offset` of the call (where it starts best, if omitted:
- * an edit's first change). */
+/** The prompt as drawn on `screen`, starting at row `offset` of the call
+ * (where it starts best, if omitted: an edit's first change). */
 export function permissionLayout(
   pending: PermissionPrompt,
   diff: DiffData | undefined,
-  screen: { columns: number; rows: number; queued?: number; inputRows?: number },
+  screen: Screen,
   offset?: number,
 ): PromptLayout {
   const columns = Math.max(10, screen.columns - TEXT_INDENT)
@@ -211,22 +143,30 @@ export function permissionLayout(
       { text: " ", tone: "muted" },
       { text: `-${diff.removed}`, tone: "delGutter" },
     ]
-    pinned.push(...wrap([], [], [{ text: visibleText(summary, Infinity), tone: "text" }, ...counts], columns))
+    pinned.push(...wrapSpans([], [], [{ text: visibleLines(summary).join(" "), tone: "text" }, ...counts], columns))
     if (target) pinned.push(...textRows(target, "muted", columns))
     rows = diffRows(diff, Math.max(10, columns - DIFF_INDENT))
+  } else if (pending.permission === "bash") {
+    // The label stays in view; the command itself scrolls.
+    const label = "Run command: "
+    pinned.push({ spans: [{ text: label.trimEnd(), tone: "text" }] })
+    rows = textRows(summary.slice(label.length), "text", columns)
   } else {
     rows = textRows(summary, "text", columns)
     if (target) rows.push(...textRows(target, "muted", columns))
   }
 
-  const room = bodyRows(screen.rows, screen.queued ?? 0, screen.inputRows ?? 1)
+  // The call's rows: the panel's but the prompt's own, and at least a few.
+  const room = Math.max(MIN_BODY_ROWS, panelRows(screen) - PROMPT_ROWS)
   const window = Math.min(rows.length, Math.max(1, room - pinned.length))
   const last = rows.length - window
   let start = offset
   if (start === undefined) {
-    // From the row before an edit's first change, so the change is in view.
+    // From the line before an edit's first change, its first row, so the
+    // change is in view after a whole line of context.
     const first = rows.findIndex((row) => row.band !== undefined)
-    start = first > 0 ? first - 1 : 0
+    start = Math.max(0, first - 1)
+    while (start > 0 && rows[start].continued) start -= 1
   }
   start = Math.max(0, Math.min(start, last))
   const clipped = diff?.hunks.some((hunk) => hunk.rows.some((row) => row.clipped)) ?? false

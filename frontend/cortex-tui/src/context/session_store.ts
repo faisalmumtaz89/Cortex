@@ -8,6 +8,7 @@ import { createStore } from "solid-js/store"
 import { isOutOfBandNotice } from "../lib/notices"
 import type { EventEnvelope, SessionStatus } from "../protocol"
 import { permissionLayout } from "../lib/permission_prompt"
+import type { Screen } from "../lib/screen_rows"
 import { terminalColumns, terminalRows } from "../lib/terminal_size"
 
 type MessageRole = "user" | "assistant" | "system"
@@ -47,12 +48,19 @@ export type MessagePart =
       output?: string
       error?: string
       diff?: DiffData
+      /** What an "Allow always" answer to the call's prompt did. */
+      note?: string
       /** Wall-clock ms when a LIVE terminal state was ingested. Absent on
        * historical fills (restored transcripts), letting the UI distinguish a
        * just-finished tool (animate the transition) from an old one (render
        * as-is). */
       completedAtMs?: number
     }
+
+function noteOf(metadata: unknown): string | undefined {
+  const note = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).permission_note : undefined
+  return typeof note === "string" && note ? note : undefined
+}
 
 /** Defensively parse metadata.diff into a DiffData, or undefined on any shape
  * mismatch (a malformed diff must never break tool rendering). */
@@ -147,7 +155,9 @@ type State = {
   promptHasText: boolean // whether the input holds a message being typed
   promptRows: number // rows the typed text takes in the input
   commandInFlight: boolean
-  commandResult?: { command: string; ok: boolean; text: string; background?: boolean }
+  // `hang`: columns a wrapped line goes on under (/help's descriptions).
+  commandResult?: { command: string; ok: boolean; text: string; hang?: number; background?: boolean }
+  resultScroll: number // the first row of the result panel shown
   // Full model lists (for the interactive /model picker) + permission-menu highlight.
   models: {
     cloud: Record<string, unknown>[]
@@ -180,6 +190,7 @@ function freshState(): State {
     models: { cloud: [], providers: [] },
     permissionChoiceIndex: 0,
     permissionScroll: 0,
+    resultScroll: 0,
   }
 }
 
@@ -221,6 +232,7 @@ export function normalizeServerParts(rawParts: unknown[]): MessagePart[] {
       output: typed.output as string | undefined,
       error: typed.error as string | undefined,
       diff: parseDiff(typed.metadata),
+      note: noteOf(typed.metadata),
     }
 
     const existingIndex = part.call_id ? toolIndexByCall[part.call_id] : undefined
@@ -251,8 +263,8 @@ export function createSessionStore() {
   let timer: ReturnType<typeof setTimeout> | undefined
   let lastFlushMs = 0
 
-  // The screen a permission prompt is laid out for.
-  const permissionScreen = () => ({
+  // The screen a panel above the prompt is laid out for.
+  const screen = (): Screen => ({
     columns: terminalColumns(),
     rows: terminalRows(),
     queued: state.queuedInputs.length,
@@ -428,6 +440,9 @@ export function createSessionStore() {
     if (part.diff) {
       updates.diff = part.diff
     }
+    if (part.note) {
+      updates.note = part.note
+    }
     if (part.completedAtMs !== undefined) {
       updates.completedAtMs = part.completedAtMs
     }
@@ -463,6 +478,7 @@ export function createSessionStore() {
       output: rawPart.output as string | undefined,
       error: rawPart.error as string | undefined,
       diff: parseDiff(rawPart.metadata),
+      note: noteOf(rawPart.metadata),
       // Live-ingest timestamp for terminal states (NOT set on historical
       // fills) — lets the UI animate just-finished tools only.
       completedAtMs: terminal ? Date.now() : undefined,
@@ -542,7 +558,7 @@ export function createSessionStore() {
         // Default highlight = Allow once, or Reject when the prompt cannot show
         // the whole call at once: Enter must not approve what the user could not see.
         const pending = { permission: String(event.payload.permission ?? ""), patterns, metadata }
-        const layout = permissionLayout(pending, parseDiff(metadata), permissionScreen())
+        const layout = permissionLayout(pending, parseDiff(metadata), screen())
         setState("permissionChoiceIndex", layout.full ? 0 : 2)
         setState("permissionScroll", layout.offset)
         return
@@ -689,8 +705,19 @@ export function createSessionStore() {
     setState("permissionScroll", row)
   }
 
-  const setCommandResult = (result: { command: string; ok: boolean; text: string; background?: boolean }) => {
+  const setCommandResult = (result: {
+    command: string
+    ok: boolean
+    text: string
+    hang?: number
+    background?: boolean
+  }) => {
     setState("commandResult", result)
+    setState("resultScroll", 0)
+  }
+
+  const setResultScroll = (row: number) => {
+    setState("resultScroll", row)
   }
 
   const clearCommandResult = () => {
@@ -832,8 +859,9 @@ export function createSessionStore() {
       setPermissionChoice,
       setPromptRows,
       setPermissionScroll,
-      permissionScreen,
+      screen,
       setCommandResult,
+      setResultScroll,
       clearCommandResult,
       armCommandInFlight,
       disarmCommandInFlight,

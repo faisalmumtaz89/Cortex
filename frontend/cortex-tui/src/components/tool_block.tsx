@@ -6,7 +6,8 @@ import { gitSummary } from "../lib/git_summary"
 import { displayPath } from "../lib/paths"
 import { shellSummary } from "../lib/shell_summary"
 import { spinnerFrame } from "../lib/spinner"
-import { terminalColumns } from "../lib/terminal_size"
+import { proseColumns, terminalColumns } from "../lib/terminal_size"
+import { wrapText } from "../lib/text_rows"
 import { DiffView } from "./diff_view"
 import { UI_PALETTE } from "./ui_palette"
 
@@ -116,6 +117,7 @@ export function ToolBlock(props: {
   error?: string
   expanded: boolean
   diff?: DiffData
+  note?: string
   completedAtMs?: number
 }) {
   // DISPLAY state: mirrors props.state but holds each live transition for a
@@ -188,6 +190,15 @@ export function ToolBlock(props: {
           <span style={{ fg: eased(UI_PALETTE.textMuted) }}>{` · ${resultHint(props.tool, props.output)}`}</span>
         </Show>
       </text>
+
+      {/* What "Allow always" did: the rule saved, and where, or why not. */}
+      <Show when={props.note}>
+        <box flexDirection="column" flexShrink={0} paddingLeft={2}>
+          <For each={wrapText(`⎿ ${props.note}`, proseColumns() - 2, 2)}>
+            {(row) => <text fg={UI_PALETTE.textMuted}>{row}</text>}
+          </For>
+        </box>
+      </Show>
 
       <Show when={errored()}>
         <box paddingLeft={2}>

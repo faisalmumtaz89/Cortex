@@ -592,8 +592,38 @@ def test_workdir_pattern_cannot_run_anywhere_else(
         assert [prompt["patterns"] for prompt in asked] == [[pattern]]
         saved = (tmp_path / "home" / ".cortex" / "tool_permissions.yaml").exists()
         assert saved == (pattern != "*")
+        # The tool's row says what "Allow always" did.
+        (part,) = [part for part in harness.tool_parts() if part.get("state") != "running"]
+        note = part["metadata"]["permission_note"]
+        if saved:
+            assert note == "Allowed from now on here: saved in ~/.cortex/tool_permissions.yaml", note
+        else:
+            assert note == "Allowed this once: a call with no command or file to name is never saved", note
     finally:
         harness.close()
+
+
+def test_allow_always_that_cannot_be_saved_says_so(tmp_path: Path, scratch_repo: Path) -> None:
+    """The rule still applies in this session, and the tool's row says it was
+    not saved and why, rather than a log line nobody reads."""
+    store = tmp_path / "home" / ".cortex" / "tool_permissions.yaml"
+    store.mkdir(parents=True)  # a directory where the file goes: no file can be written
+    script = _write_script(
+        tmp_path / "script.json", [_bash_turn("touch one.txt"), _bash_turn("touch one.txt")]
+    )
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    try:
+        session_id = _start_session(harness)
+        assert len(_turn_answering_prompts(harness, session_id, "one", "allow_always")) == 1
+        assert _turn_answering_prompts(harness, session_id, "one again", "reject") == []
+        notes = [part["metadata"].get("permission_note") for part in harness.tool_parts()
+                 if part.get("state") == "completed"]
+    finally:
+        harness.close()
+    assert notes[0].startswith(
+        "Allowed in this session only: could not save it to ~/.cortex/tool_permissions.yaml ("
+    ), notes
+    assert notes[-1] is None, notes  # the second run asked nothing
 
 
 def test_allow_once_covers_only_that_call(tmp_path: Path, scratch_repo: Path) -> None:

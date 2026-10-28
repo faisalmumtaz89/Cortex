@@ -1,75 +1,43 @@
 import { describe, expect, test } from "bun:test"
-import { SHOWN_CHARS, rowsAtLineBreaks, shownInFull, visibleCode, visibleText } from "../src/lib/visible_text"
+import { visibleCode, visibleLines } from "../src/lib/visible_text"
 
-describe("visibleText", () => {
-  test("keeps ordinary text, accents included", () => {
-    expect(visibleText("rm -rf ./build && echo café")).toBe("rm -rf ./build && echo café")
-    expect(shownInFull("rm -rf ./build")).toBe(true)
+describe("visibleLines", () => {
+  test("keeps ordinary text as written, backslashes and accents included", () => {
+    expect(visibleLines("printf 'a\\nb' && echo café")).toEqual(["printf 'a\\nb' && echo café"])
   })
 
-  test("shows line breaks and control characters as escapes", () => {
-    expect(visibleText("echo hi\ntouch x\r\t\u001b[2J")).toBe("echo hi\\ntouch x\\r\\t\\u{1b}[2J")
+  test("gives each line a row, a line break shown as ↵ at its end", () => {
+    expect(visibleLines("cd src\nmake test")).toEqual(["cd src ↵", "make test"])
+    expect(visibleLines("a\n\nb\n")).toEqual(["a ↵", " ↵", "b ↵", ""])
   })
 
-  test("tells a real line break from a typed backslash-n", () => {
-    expect(visibleText("echo safe\ntouch x")).toBe("echo safe\\ntouch x")
-    expect(visibleText("echo safe\\ntouch x")).toBe("echo safe\\\\ntouch x")
+  test("marks control, invisible, bidi, blank-looking and non-ASCII space characters", () => {
+    expect(visibleLines("git\u200b status\u202e\u00a0x\u3000\t\r\u001b[2J")).toEqual([
+      "git⟨U+200B⟩ status⟨U+202E⟩⟨U+00A0⟩x⟨U+3000⟩⟨tab⟩⟨CR⟩⟨U+001B⟩[2J",
+    ])
   })
 
-  test("shows invisible, bidi, blank-looking and non-ASCII space characters", () => {
-    expect(visibleText("git​ status‮ x　͏️ㅤ⠀\u{e0041}")).toBe(
-      "git\\u{200b} status\\u{202e}\\u{a0}x\\u{3000}\\u{34f}\\u{fe0f}\\u{3164}\\u{2800}\\u{e0041}",
-    )
-  })
-
-  test("counts long runs of whitespace, invisible or combining characters", () => {
-    expect(visibleText("echo hi" + " ".repeat(20000) + "; touch pwn")).toBe(
+  test("counts long runs of blank or invisible characters, but not indentation", () => {
+    expect(visibleLines("echo hi" + " ".repeat(20000) + "; touch pwn")).toEqual([
       "echo hi⟨20000 blank or invisible characters⟩; touch pwn",
-    )
-    expect(visibleText("a" + "́".repeat(400) + "b")).toBe("a⟨400 blank or invisible characters⟩b")
+    ])
+    expect(visibleLines("for x in y:\n         c = x")).toEqual(["for x in y: ↵", "         c = x"])
+    expect(visibleLines("a\n\t\t\t\t\t\t\t\tb")).toEqual(["a ↵", "⟨8 blank or invisible characters⟩b"])
   })
 
-  test("spaces that indent a line stay as they are, its line break still shown", () => {
-    expect(visibleText("for x in y:\n         c = x")).toBe("for x in y:\\n         c = x")
-    expect(visibleText("         c = x")).toBe("         c = x")
-    expect(visibleText("a =\n\t\t\t\t\t\t\t\tb")).toBe("a =\\n⟨8 blank or invisible characters⟩b")
-  })
-
-  test("escapes its own markers so they cannot be faked", () => {
-    expect(visibleText("⟨3 characters not shown⟩")).toBe("\\u{27e8}3 characters not shown\\u{27e9}")
-  })
-
-  test("keeps the start and end of long text, cut at whole characters", () => {
-    const text = "echo x" + "😀".repeat(300) + "z; touch ok X"
-    const shown = visibleText(text)
-    expect(shown.endsWith("z; touch ok X")).toBe(true)
-    expect(shown).toContain("characters not shown⟩")
-    expect([...shown].length).toBeLessThan(SHOWN_CHARS + 40)
-    expect(shown).not.toMatch(/\p{Cs}/u)
-    expect(shownInFull(text)).toBe(false)
-  })
-})
-
-describe("rowsAtLineBreaks", () => {
-  test("a command of several lines reads line by line, each break still shown", () => {
-    expect(rowsAtLineBreaks(visibleText("cd src\nmake test"))).toEqual(["cd src\\n", "make test"])
-  })
-
-  test("a run of line breaks stays on one row, and a trailing break ends the last", () => {
-    expect(rowsAtLineBreaks(visibleText("a\n\n\nb\n"))).toEqual(["a\\n\\n\\n", "b\\n"])
-  })
-
-  test("a backslash before an n is not a line break", () => {
-    expect(rowsAtLineBreaks(visibleText("printf 'a\\nb'"))).toEqual(["printf 'a\\\\nb'"])
+  test("marks its own marker characters, so they cannot be faked", () => {
+    expect(visibleLines("⟨3 blank or invisible characters⟩ ↵")).toEqual([
+      "⟨U+27E8⟩3 blank or invisible characters⟨U+27E9⟩ ⟨U+21B5⟩",
+    ])
   })
 })
 
 describe("visibleCode", () => {
-  test("keeps code as written, backslashes and spaces included", () => {
+  test("keeps code as written, backslashes and runs of spaces included", () => {
     expect(visibleCode('print("a\\nb")        # x')).toBe('print("a\\nb")        # x')
   })
 
-  test("shows control and invisible characters as escapes", () => {
-    expect(visibleCode("ok\u202e = 1\u200b\u00a0\u001b")).toBe("ok\\u{202e} = 1\\u{200b}\\u{a0}\\u{1b}")
+  test("marks control and invisible characters", () => {
+    expect(visibleCode("ok\u202e = 1\u200b\u00a0\u001b⟨")).toBe("ok⟨U+202E⟩ = 1⟨U+200B⟩⟨U+00A0⟩⟨U+001B⟩⟨U+27E8⟩")
   })
 })

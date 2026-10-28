@@ -1,14 +1,12 @@
 import { createContext, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
 import { SLASH_COMMANDS, isSkillInput, setSkills, skills, slashCommandFor } from "../commands"
 import { exitCortex, registerWorkerKill } from "../lib/exit"
-import { wrapCell } from "../lib/table_layout"
-import { terminalColumns } from "../lib/terminal_size"
 import { RpcClient } from "../protocol"
 import { useStore } from "./store"
 
 /** /help is rendered client-side from the command registry so its content and
  * order can never drift from the palette. */
-export function buildHelpText(): string {
+export function buildHelp(): { text: string; hang: number } {
   const commands = SLASH_COMMANDS.map((command) => ({
     name: command.name === "quit" ? "/quit (/exit)" : `/${command.name}`,
     description: command.description,
@@ -18,17 +16,13 @@ export function buildHelpText(): string {
     name: `/${skill.name}`,
     description: skill.description.split(/(?<=\.)\s/)[0],
   }))
-  // One column for every name, two spaces wider than the longest; a long
-  // description wraps under its own column. The panel's text is the screen
-  // less its side padding (2 + 2) and the panel's rail and padding (1 + 2 + 1).
+  // One column for every name, two spaces wider than the longest; the panel
+  // wraps a long description under its own column (`hang`).
   const width = Math.max(...[...commands, ...skillList].map((row) => row.name.length)) + 2
-  const room = Math.max(20, terminalColumns() - 8 - width)
-  const format = (row: { name: string; description: string }) =>
-    wrapCell(row.description, room)
-      .map((line, index) => `${(index === 0 ? row.name : "").padEnd(width)}${line}`)
-      .join("\n")
+  const format = (row: { name: string; description: string }) => `${row.name.padEnd(width)}${row.description}`
   const rows = commands.map(format)
-  return skillList.length ? [...rows, "", "Skills:", ...skillList.map(format)].join("\n") : rows.join("\n")
+  const lines = skillList.length ? [...rows, "", "Skills:", ...skillList.map(format)] : rows
+  return { text: lines.join("\n"), hang: width }
 }
 
 type RpcContextValue = {
@@ -179,7 +173,7 @@ export function RpcProvider(props: ParentProps) {
     store.clearError()
     // /help is rendered from the registry (single source of truth) — no round-trip.
     if (lowerCommand === "/help") {
-      store.setCommandResult({ command: "/help", ok: true, text: buildHelpText() })
+      store.setCommandResult({ command: "/help", ok: true, ...buildHelp() })
       return true
     }
     // Slash commands never enter the transcript (no "You: /cmd" echo). Their

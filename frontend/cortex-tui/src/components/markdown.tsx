@@ -1,6 +1,7 @@
 import type { RGBA } from "@opentui/core"
-import { For, Show, createMemo } from "solid-js"
+import { For, Match, Show, Switch, createMemo } from "solid-js"
 import { tableLines } from "../lib/table_layout"
+import { cutRows } from "../lib/text_rows"
 import { proseColumns, terminalColumns } from "../lib/terminal_size"
 import { highlightLine } from "./syntax_highlight"
 import { UI_PALETTE } from "./ui_palette"
@@ -100,57 +101,54 @@ export function parseInline(input: string): InlineToken[] {
   return tokens
 }
 
-/** Renders inline markdown (bold/italic/code/links) as one text line. An
- * optional prefix (list marker) and baseColor/bold keep list markers and
- * headings in the same text flow so wrapping never drops spacing. */
-function InlineText(props: {
-  text: string
-  prefix?: string
-  prefixColor?: RGBA
-  baseColor?: RGBA
-  bold?: boolean
-}) {
-  const tokens = createMemo(() => parseInline(props.text))
+type InlineSpan = { text: string; kind: InlineToken["kind"] }
+
+/** Renders inline markdown (bold/italic/code/links) in rows of at most
+ * `columns`, cut here at spaces rather than by the terminal UI, so a row never
+ * breaks inside code or loses a character where it wraps. baseColor/bold keep
+ * headings in the same text flow. */
+function InlineText(props: { text: string; columns: number; baseColor?: RGBA; bold?: boolean }) {
+  const rows = createMemo(() => {
+    const spans: InlineSpan[] = parseInline(props.text).map((token) => ({ text: token.text, kind: token.kind }))
+    return cutRows<InlineSpan>([], [], spans, Math.max(10, props.columns))
+  })
   const base = () => props.baseColor ?? UI_PALETTE.text
   return (
-    <text fg={base()}>
-      <Show when={props.prefix}>
-        <span style={{ fg: props.prefixColor ?? UI_PALETTE.accent }}>{props.prefix}</span>
-      </Show>
-      <For each={tokens()}>
-        {(token) => (
-          <>
-            <Show when={token.kind === "text"}>
-              <Show when={props.bold} fallback={<span style={{ fg: base() }}>{token.text}</span>}>
-                <strong>
-                  <span style={{ fg: base() }}>{token.text}</span>
-                </strong>
-              </Show>
-            </Show>
-            <Show when={token.kind === "bold"}>
-              <strong>
-                <span style={{ fg: base() }}>{token.text}</span>
-              </strong>
-            </Show>
-            <Show when={token.kind === "italic"}>
-              <em>
-                <span style={{ fg: base() }}>{token.text}</span>
-              </em>
-            </Show>
-            <Show when={token.kind === "code"}>
-              {/* No pad spaces — they doubled with the surrounding literal
-                  spaces; the bg hugs the code text, separation comes from prose. */}
-              <span style={{ fg: UI_PALETTE.statusBusy, bg: UI_PALETTE.codeBackground }}>{token.text}</span>
-            </Show>
-            <Show when={token.kind === "link"}>
-              <u>
-                <span style={{ fg: UI_PALETTE.heading }}>{token.text}</span>
-              </u>
-            </Show>
-          </>
+    <box flexDirection="column" flexShrink={0}>
+      <For each={rows()}>
+        {(row) => (
+          <text fg={base()}>
+            <For each={row}>
+              {(span) => (
+                <Switch>
+                  <Match when={span.kind === "code"}>
+                    <span style={{ fg: UI_PALETTE.statusBusy, bg: UI_PALETTE.codeBackground }}>{span.text}</span>
+                  </Match>
+                  <Match when={span.kind === "bold" || (span.kind === "text" && props.bold)}>
+                    <strong>
+                      <span style={{ fg: base() }}>{span.text}</span>
+                    </strong>
+                  </Match>
+                  <Match when={span.kind === "italic"}>
+                    <em>
+                      <span style={{ fg: base() }}>{span.text}</span>
+                    </em>
+                  </Match>
+                  <Match when={span.kind === "link"}>
+                    <u>
+                      <span style={{ fg: UI_PALETTE.heading }}>{span.text}</span>
+                    </u>
+                  </Match>
+                  <Match when={span.kind === "text"}>
+                    <span style={{ fg: base() }}>{span.text}</span>
+                  </Match>
+                </Switch>
+              )}
+            </For>
+          </text>
         )}
       </For>
-    </text>
+    </box>
   )
 }
 
@@ -416,7 +414,7 @@ export function Markdown(props: { content: string }) {
                   const b = block as Extract<Block, { kind: "heading" }>
                   return (
                     <box flexShrink={0} marginTop={mt()}>
-                      <InlineText text={b.text} baseColor={HEADING_COLORS[b.level - 1]} bold />
+                      <InlineText text={b.text} columns={proseColumns()} baseColor={HEADING_COLORS[b.level - 1]} bold />
                     </box>
                   )
                 })()}
@@ -424,7 +422,7 @@ export function Markdown(props: { content: string }) {
 
               <Show when={block.kind === "paragraph"}>
                 <box flexShrink={0} marginTop={mt()}>
-                  <InlineText text={(block as Extract<Block, { kind: "paragraph" }>).text} />
+                  <InlineText text={(block as Extract<Block, { kind: "paragraph" }>).text} columns={proseColumns()} />
                 </box>
               </Show>
 
@@ -435,7 +433,7 @@ export function Markdown(props: { content: string }) {
                     <box flexShrink={0} marginTop={mt()} paddingLeft={b.indent * 2} flexDirection="row">
                       <text fg={UI_PALETTE.accent}>{"• "}</text>
                       <box flexGrow={1} flexShrink={1}>
-                        <InlineText text={b.text} />
+                        <InlineText text={b.text} columns={proseColumns() - b.indent * 2 - 2} />
                       </box>
                     </box>
                   )
@@ -449,7 +447,7 @@ export function Markdown(props: { content: string }) {
                     <box flexShrink={0} marginTop={mt()} paddingLeft={b.indent * 2} flexDirection="row">
                       <text fg={UI_PALETTE.heading}>{`${b.marker}. `}</text>
                       <box flexGrow={1} flexShrink={1}>
-                        <InlineText text={b.text} />
+                        <InlineText text={b.text} columns={proseColumns() - b.indent * 2 - b.marker.length - 2} />
                       </box>
                     </box>
                   )
@@ -466,7 +464,7 @@ export function Markdown(props: { content: string }) {
                   customBorderChars={SPINE_BORDER}
                 >
                   <For each={(block as Extract<Block, { kind: "quote" }>).lines}>
-                    {(line) => <InlineText text={line} baseColor={UI_PALETTE.textMuted} />}
+                    {(line) => <InlineText text={line} columns={proseColumns() - 3} baseColor={UI_PALETTE.textMuted} />}
                   </For>
                 </box>
               </Show>
