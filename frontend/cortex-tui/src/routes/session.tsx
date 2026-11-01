@@ -165,7 +165,8 @@ export function SessionRoute(props: {
       Boolean(store.state.models.providers.find((row) => row.provider === provider)?.url_saved)
     return command && commandTakesArgs(command.name) ? argHintFor(command, value, urlSaved) : undefined
   })
-  const argMode = createMemo(() => Boolean(argCommand()))
+  // Not while a permission prompt waits, as the palette: the prompt takes the keys.
+  const argMode = createMemo(() => Boolean(argCommand()) && !hasPendingPermission())
   const matches = createMemo(() => (paletteOpen() ? matchCommands(promptValue()) : []))
 
   // Keep the highlight valid as the filter changes.
@@ -1149,7 +1150,9 @@ export function SessionRoute(props: {
         {/* Interactive /model picker — same overlay slot, mutually exclusive.
             Primary names are width-budgeted so they ellipsize instead of
             colliding with the right-aligned status tag on narrow terminals. */}
-        <Show when={modelPickerOpen()}>
+        {/* A picker opened while a permission prompt waits is drawn once it is
+            answered: until then the prompt takes the keys, Enter included. */}
+        <Show when={modelPickerOpen() && !hasPendingPermission()}>
           <SelectionList
             items={modelPickerEntries()}
             selectedIndex={modelPickerIndex()}
@@ -1173,7 +1176,7 @@ export function SessionRoute(props: {
 
         {/* /login provider picker — Enter pre-fills "/login <provider> " so
             the arg-hint prompt asks for the API key. */}
-        <Show when={loginPickerOpen()}>
+        <Show when={loginPickerOpen() && !hasPendingPermission()}>
           <SelectionList
             items={loginPickerEntries()}
             selectedIndex={loginPickerIndex()}

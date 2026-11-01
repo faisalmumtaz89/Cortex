@@ -1288,6 +1288,37 @@ def test_permission_modal_on_a_screen_too_small_for_its_call_never_approves_it(t
     session.wait_for("DONE_MARKER")
     assert not (project / "TINY.txt").exists(), tiny
 
+def test_a_picker_waits_for_the_permission_prompt_to_be_answered(tui_project) -> None:
+    """Keys answer a permission prompt while it waits, so a picker opened
+    then (/model typed for after it) is not drawn until the prompt is
+    answered: its Enter would approve the call."""
+    project, start = tui_project
+    session = start(
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": "touch PICKED.txt"}}]},
+          {"text": "DONE_MARKER"}]]
+    )
+    _select_scripted_model(session)
+    session.send_line("run it")
+    session.wait_for("Permission required")
+    session.send_line("/model")
+    time.sleep(1.0)
+    waiting = session.capture()
+    assert "Select a model" not in waiting and "❯ Allow once" in waiting, waiting
+    # Nor the hint panel of a command typed with its argument to come.
+    session.send_key("/model ")
+    session.wait_for("/model ")
+    time.sleep(0.8)
+    hinted = session.capture()
+    assert "Esc cancel" not in hinted and "❯ Allow once" in hinted, hinted
+    session.send_key("C-u")
+    session.wait_until(lambda frame: "/model " not in frame, description="the draft cleared")
+    session.send_key("Escape")  # rejects the call
+    picker = session.wait_until(lambda frame: "DONE_MARKER" in frame and "Select a model" in frame,
+                                description="the picker after the answer")
+    assert not (project / "PICKED.txt").exists(), picker
+    session.send_key("Escape")
+    session.wait_until(lambda frame: "Select a model" not in frame, description="the picker closed")
+
 def test_interrupt_during_tool_stops_it_and_resolves_the_tool_row(tui_project) -> None:
     """Esc while a bash command runs stops the command at once, and its tool
     row resolves: no spinner survives the interrupted turn (regression,

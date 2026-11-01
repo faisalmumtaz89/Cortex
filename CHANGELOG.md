@@ -18,6 +18,9 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
 - A key in a URL's query (`?api_key=`, `?code=`, a signature) is masked
   wherever Cortex shows the URL, as credentials before the host already
   were.
+- While a permission prompt waits, the `/model` and `/login` pickers and a
+  command's hint panel are not drawn: the prompt takes Enter and Esc. A
+  picker opened then shows once the prompt is answered.
 
 ## 2.0.10
 
