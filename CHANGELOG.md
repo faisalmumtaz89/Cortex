@@ -9,6 +9,9 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
 - An error that wraps to several rows keeps the input in view on a full
   screen, and leaves room for a picker or the slash command list opened
   under it.
+- A long line in a reply's code block goes on in rows that start with
+  `↪`, every character kept, wide characters and emoji included; tabs
+  show as 4 spaces.
 
 ## 2.0.10
 

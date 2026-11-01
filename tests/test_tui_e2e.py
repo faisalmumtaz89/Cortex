@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 
@@ -1970,6 +1971,81 @@ def test_a_notice_that_wraps_breaks_only_at_spaces(tui_project) -> None:
               "endpoint, use openai-compatible (OPENAI_COMPATIBLE_BASE_URL with OPENAI_COMPATIBLE_API_KEY)")
     assert notice in " ".join(rows), frame
     assert not [row for row in rows if row.endswith("(")], frame
+
+
+CODE_LINES = [
+    "def summary(name, values):",
+    '    return f"{name}: n={len(values)} mean={mean(values):.2f} median={median(values):.2f} max={max(values)}"',
+    'URL = "https://example.com/' + "".join(f"{i:02d}" for i in range(55)) + '"',
+    "│   ├── markdown.tsx    # reply renderer: café, naïve",
+    "# " + "漢字かな交じり文" * 6,
+]
+
+
+def test_code_that_wraps_goes_on_in_marked_rows_with_every_character(tui_project) -> None:
+    """B11 saw a long line of a code block drawn as two lines at 80 columns,
+    the second at the block's margin and the space at the break gone: it read
+    as a line break inside an f-string. A line too long for a row goes on in
+    rows that start with ↪: after a space when one is late enough in the row,
+    else where the row is full, every character kept. A character other than
+    printable ASCII is counted as two columns, never fewer than it is drawn
+    in, so a row is never wrapped again by the terminal UI."""
+    project, start = tui_project
+    reply = "Here:\n\n```python\n" + "\n".join(CODE_LINES) + "\n```\n\nCODE_DONE"
+    session = start([[{"text": reply}]])
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "30"],
+                   check=True)
+    _select_scripted_model(session)
+    session.send_line("show the code")
+    frame = session.wait_for("CODE_DONE")
+    # The code block's rail sits under the reply, 5 columns in.
+    code = [line[len("     ┃  "):] for line in frame.splitlines() if line.startswith("     ┃  ")]
+    # A code row holds 80 columns less the transcript's margins (8) and the
+    # block's rail and padding (5); a row after ↪ (counted as two) one less.
+    full = 80 - 8 - 5
+    goes_on = full - 3
+    assert code == [
+        CODE_LINES[0],
+        '    return f"{name}: n={len(values)} mean={mean(values):.2f}',  # its space, at the end, not captured
+        "↪ median={median(values):.2f} max={max(values)}\"",
+        CODE_LINES[2][:full],
+        "↪ " + CODE_LINES[2][full:full + goes_on],
+        "↪ " + CODE_LINES[2][full + goes_on:],
+        CODE_LINES[3],
+        *code[7:],
+    ], frame
+    # The CJK line: two columns a character, rows as full as that allows, every character kept.
+    cjk = code[7:]
+    assert cjk[0].startswith("# 漢") and all(row.startswith("↪ ") for row in cjk[1:]), frame
+    assert "".join([cjk[0], *(row[2:] for row in cjk[1:])]) == CODE_LINES[4], frame
+    columns = lambda row: sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in row)  # noqa: E731
+    assert all(full - 2 < columns(row) <= full for row in cjk[:-1]), frame  # full: the next character takes 2
+
+
+@pytest.mark.parametrize("symbols", [
+    ("❤", "‼", "🖥"),
+    ("\u00ad", "\u200e"),
+    ("👍🏽", "🇬🇧", "👨\u200d👩\u200d👧", "กำ"),
+])
+def test_code_of_symbols_the_terminal_draws_wide_or_hides_wraps_only_where_marked(tui_project, symbols) -> None:
+    """A row is never counted narrower than the terminal UI draws it: a symbol
+    it draws in two columns (❤ ‼ 🖥), an invisible one it gives a column (a
+    soft hyphen, a direction mark), or an emoji sequence or a letter with its
+    marks, each counted as one column, would make a full row wider than the
+    block, and the terminal UI would wrap it again: an unmarked row."""
+    project, start = tui_project
+    line = "s = '" + "".join(f"{chr(97 + i % 26)}{symbols[i % len(symbols)]}" for i in range(60)) + "'"
+    session = start([[{"text": "Here:\n\n```python\n" + line + "\n```\n\nCODE_DONE"}]])
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "30"],
+                   check=True)
+    _select_scripted_model(session)
+    session.send_line("show the code")
+    frame = session.wait_for("CODE_DONE")
+    code = [line[len("     ┃  "):] for line in frame.splitlines() if line.startswith("     ┃  ")]
+    assert code[0].startswith("s = '") and len(code) > 1, frame
+    assert all(row.startswith("↪ ") for row in code[1:]), frame
+    shown = "".join([code[0], *(row[2:] for row in code[1:])])
+    assert [shown.count(symbol) for symbol in symbols] == [line.count(symbol) for symbol in symbols], frame
 
 
 INLINE_CODE_REPLY = (

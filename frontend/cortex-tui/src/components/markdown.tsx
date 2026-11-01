@@ -3,7 +3,7 @@ import { For, Match, Show, Switch, createMemo } from "solid-js"
 import { tableLines } from "../lib/table_layout"
 import { cutRows } from "../lib/text_rows"
 import { proseColumns, terminalColumns } from "../lib/terminal_size"
-import { highlightLine } from "./syntax_highlight"
+import { type SyntaxToken, highlightLine } from "./syntax_highlight"
 import { UI_PALETTE } from "./ui_palette"
 
 // ---- Inline parsing (bold / italic / code / links) ----
@@ -297,7 +297,19 @@ const SPINE_BORDER = {
   rightT: "",
 }
 
+// Columns a code row loses to its block's rail and padding (1 + 2 + 2).
+const CODE_INDENT = 5
+const CODE_CONTINUED: SyntaxToken = { text: "↪ ", color: UI_PALETTE.textMuted }
+
 function CodeBlock(props: { language?: string; lines: string[]; marginTop: number }) {
+  // Each line cut into rows here (see lib/text_rows), every character kept: a
+  // row a line goes on onto starts with ↪, so it never reads as a line of its
+  // own. Tabs show as 4 spaces, so a row is as wide as it is counted.
+  const rows = () =>
+    props.lines.flatMap((line) =>
+      cutRows([], [CODE_CONTINUED], highlightLine(line.replace(/\t/g, "    "), props.language),
+        proseColumns() - CODE_INDENT, true),
+    )
   // No language caption — the syntax coloring conveys it, and a muted label row
   // reads as a stray "# comment". The ┃ spine matches every other gutter.
   return (
@@ -312,12 +324,10 @@ function CodeBlock(props: { language?: string; lines: string[]; marginTop: numbe
       borderColor={UI_PALETTE.accent}
       customBorderChars={SPINE_BORDER}
     >
-      <For each={props.lines}>
-        {(line) => (
+      <For each={rows()}>
+        {(row) => (
           <text>
-            <For each={highlightLine(line, props.language)}>
-              {(token) => <span style={{ fg: token.color }}>{token.text}</span>}
-            </For>
+            <For each={row}>{(token) => <span style={{ fg: token.color }}>{token.text}</span>}</For>
           </text>
         )}
       </For>
