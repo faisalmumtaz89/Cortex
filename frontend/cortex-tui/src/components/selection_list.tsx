@@ -48,14 +48,13 @@ const SPINE_BORDER = {
 
 const NAME_COLUMN = 12
 const LIST_MAX_ROWS = 8
-const LIST_MIN_ROWS = 3
 
 /** How many of a list's `count` rows it shows in `room` rows, `chrome` of
  * them its title and footer: all, when they fit; else as many as leave a row
- * each for "+N more above" and "+N more", at most 8 and at least 3. */
+ * each for "+N more above" and "+N more", at most 8 and at least 1. */
 export function listWindow(room: number, chrome: number, count: number): number {
   if (count <= Math.min(LIST_MAX_ROWS, room - chrome)) return count
-  return Math.min(count, Math.max(LIST_MIN_ROWS, Math.min(LIST_MAX_ROWS, room - chrome - 2)))
+  return Math.min(count, Math.max(1, Math.min(LIST_MAX_ROWS, room - chrome - 2)))
 }
 
 /** Left-pad a primary label to the name column (the shared one, or a wider

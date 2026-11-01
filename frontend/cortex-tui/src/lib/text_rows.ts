@@ -84,6 +84,11 @@ export function wrapSpans(
   }))
 }
 
+/** `text`, line by line, cut into rows of at most `columns` (see `wrapText`). */
+export function textRows(text: string, columns: number, hang = 0): string[] {
+  return text.split("\n").flatMap((line) => (line ? wrapText(line, columns, hang) : [""]))
+}
+
 /** `line` cut into rows of at most `columns`, those after the first indented
  * by `hang` spaces (under a description column, say). */
 export function wrapText(line: string, columns: number, hang = 0): string[] {

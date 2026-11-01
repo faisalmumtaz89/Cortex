@@ -4,6 +4,12 @@ What changed in each release of Cortex, newest first. The release workflow
 publishes a version's section as its release notes, and stops when a version
 has none. Releases before 2.0.9 are described on their GitHub release pages.
 
+## 2.0.11
+
+- An error that wraps to several rows keeps the input in view on a full
+  screen, and leaves room for a picker or the slash command list opened
+  under it.
+
 ## 2.0.10
 
 The terminal app

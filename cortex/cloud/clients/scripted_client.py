@@ -17,7 +17,9 @@ Script format:
 Each entry in "responses" serves one user turn (selected by counting user
 messages in the request). Each step models one model round-trip: its text is
 streamed, its tool calls are executed, and the loop continues to the next
-step — exactly the shape of the native cloud tool loop.
+step — exactly the shape of the native cloud tool loop. A step with "error"
+fails the request with that message after streaming its text, as a provider
+error or a dropped stream does.
 """
 
 from __future__ import annotations
@@ -99,6 +101,8 @@ class ScriptedClient:
             text = str(step.get("text", "") or "")
             for offset in range(0, len(text), _STREAM_CHUNK_CHARS):
                 yield TextDeltaEvent(delta=text[offset : offset + _STREAM_CHUNK_CHARS])
+            if step.get("error"):
+                raise RuntimeError(str(step["error"]))
 
             raw_calls = step.get("tool_calls")
             if not isinstance(raw_calls, list) or not raw_calls:

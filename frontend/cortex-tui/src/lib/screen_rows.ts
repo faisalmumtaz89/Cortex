@@ -4,7 +4,7 @@
 // stays in view, and the rest for the panel. Each panel lays itself out in
 // the rows it is given here, so on a screen of 24 rows or more they add up.
 
-export type Screen = { columns: number; rows: number; queued?: number; inputRows?: number }
+export type Screen = { columns: number; rows: number; queued?: number; inputRows?: number; errorRows?: number }
 
 // Rows besides the transcript, the panel and the typed text: the screen's top
 // and bottom padding (2), the header (1), the rows between the header, the
@@ -14,8 +14,12 @@ const CHROME_ROWS = 10
 const TRANSCRIPT_ROWS = 3
 
 /** Rows the panel above the prompt may take on `screen`, with `queued`
- * messages shown above it and `inputRows` rows of typed text below it. */
+ * messages and an error of `errorRows` shown above it, and `inputRows` rows
+ * of typed text below it. Each block above it takes the row after it too. */
 export function panelRows(screen: Screen): number {
-  const queued = screen.queued ?? 0
-  return screen.rows - CHROME_ROWS - (screen.inputRows ?? 1) - (queued > 0 ? queued + 1 : 0) - TRANSCRIPT_ROWS
+  const above = (rows = 0) => (rows > 0 ? rows + 1 : 0)
+  return (
+    screen.rows - CHROME_ROWS - (screen.inputRows ?? 1) - above(screen.queued) - above(screen.errorRows) -
+    TRANSCRIPT_ROWS
+  )
 }

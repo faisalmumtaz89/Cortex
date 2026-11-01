@@ -30,7 +30,7 @@ import { turnRunning } from "../protocol"
 import { screenColumns, terminalColumns } from "../lib/terminal_size"
 import { WrappedText } from "../components/wrapped_text"
 import { wrapText } from "../lib/text_rows"
-import { parseDiff } from "../context/session_store"
+import { errorBanner, parseDiff } from "../context/session_store"
 import { PermissionCall, PermissionPosition } from "../components/permission_view"
 
 class CustomSpeedScroll implements ScrollAcceleration {
@@ -1082,8 +1082,8 @@ export function SessionRoute(props: {
         </scrollbox>
 
         <Show when={store.state.error}>
-          <box>
-            <WrappedText text={`Error: ${store.state.error}`} columns={screenColumns()} fg={UI_PALETTE.statusError} />
+          <box flexShrink={0}>
+            <WrappedText text={errorBanner(store.state.error!)} columns={screenColumns()} fg={UI_PALETTE.statusError} />
           </box>
         </Show>
 

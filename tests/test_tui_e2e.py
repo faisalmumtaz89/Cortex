@@ -1913,6 +1913,47 @@ def test_status_names_the_version_and_the_directory(tui_project) -> None:
     assert f"Cortex: {cortex.__version__}" in panel, panel
 
 
+def test_an_error_that_wraps_keeps_the_input_in_view(tui_project) -> None:
+    """B11 saw an error of several rows drawn over the input box at 80x24 after
+    a long reply: when the screen was full the error was squeezed with the
+    transcript, its last rows drawn over the input panel. Only the transcript
+    gives way; the error keeps its rows, and so does the input panel, also
+    with a picker open under the error."""
+    project, start = tui_project
+    reply = "\n\n".join(f"LINE_{i} " + "word " * 12 for i in range(40))
+    failure = " ".join(["The endpoint refused the request with a long reason."] * 5) + " END_OF_ERROR"
+    session = start([[{"text": reply}], [{"error": failure}], [{"error": failure}]])
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
+                   check=True)
+    _select_scripted_model(session)
+    session.send_line("first")
+    session.wait_for("LINE_39")
+    session.send_line("second")
+    session.wait_for("END_OF_ERROR", timeout=20)
+    session.send_key("abc")
+    frame = session.wait_for("abc", timeout=10)
+    rows = [row.strip() for row in frame.splitlines()]
+    error = next(i for i, row in enumerate(rows) if row.startswith("Error:"))
+    end = next(i for i in range(error, len(rows)) if rows[i].endswith("END_OF_ERROR"))
+    assert end - error >= 3, frame  # four rows at 80 columns
+    assert rows[end + 1:end + 4] == ["", "┃", "┃  abc"], frame
+
+    # A picker opened under the error leaves room for both: the hint under
+    # the input stays on the last row, with the picker scrolled to the middle
+    # of its list, where it counts the rows above and below.
+    session.send_key("C-u")
+    session.send_line("/model")
+    session.wait_for("Select a model", timeout=10)
+    session.send_key("Up")
+    session.wait_for("more above", timeout=10)
+    session.send_key("Up")
+    picker = session.wait_until(lambda frame: "more above" in frame and re.search(r"\+\d+ more\n", frame),
+                                description="both counts shown", timeout=10)
+    shown = [row for row in picker.splitlines() if row.strip()]
+    assert "END_OF_ERROR" in picker, picker
+    assert "Ctrl+C quit" in shown[-1], picker
+
+
 def test_a_notice_that_wraps_breaks_only_at_spaces(tui_project) -> None:
     """B10 saw notices and results wrap inside a token (`credentials.json (` /
     `readable only by you)`, `Next: /` / `model`): Cortex cuts every text into

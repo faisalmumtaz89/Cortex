@@ -9,7 +9,8 @@ import { isOutOfBandNotice } from "../lib/notices"
 import type { EventEnvelope, SessionStatus } from "../protocol"
 import { permissionLayout } from "../lib/permission_prompt"
 import type { Screen } from "../lib/screen_rows"
-import { terminalColumns, terminalRows } from "../lib/terminal_size"
+import { textRows } from "../lib/text_rows"
+import { screenColumns, terminalColumns, terminalRows } from "../lib/terminal_size"
 
 type MessageRole = "user" | "assistant" | "system"
 type ToolState = "pending" | "running" | "completed" | "error"
@@ -60,6 +61,11 @@ export type MessagePart =
 function noteOf(metadata: unknown): string | undefined {
   const note = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).permission_note : undefined
   return typeof note === "string" && note ? note : undefined
+}
+
+/** The line a turn's error is shown as, above the prompt. */
+export function errorBanner(error: string): string {
+  return `Error: ${error}`
 }
 
 /** Defensively parse metadata.diff into a DiffData, or undefined on any shape
@@ -269,6 +275,7 @@ export function createSessionStore() {
     rows: terminalRows(),
     queued: state.queuedInputs.length,
     inputRows: state.promptRows,
+    errorRows: state.error ? textRows(errorBanner(state.error), screenColumns()).length : 0,
   })
 
   const flush = () => {
