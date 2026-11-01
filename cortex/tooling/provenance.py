@@ -32,6 +32,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from cortex.cloud.router import shown_url
 from cortex.cloud.types import CloudProvider
 
 _SEPARATORS = re.compile(r"[.\-_\s]+")
@@ -124,8 +125,8 @@ def verify_turn_provenance(
         return ProvenanceVerdict(
             ok=False,
             reason=(
-                f"answered from endpoint {reported_endpoint!r} instead of the "
-                f"configured endpoint {expected_endpoint!r}"
+                f"answered from endpoint {shown_url(str(reported_endpoint or ''))!r} instead of the "
+                f"configured endpoint {shown_url(str(expected_endpoint))!r}"
             ),
         )
 

@@ -250,6 +250,8 @@ def test_openai_compatible_binds_identity_via_client_and_configured_endpoint() -
     mismatch = verdict(endpoint="https://other.example/v1")
     assert not mismatch.ok
     assert "configured endpoint" in mismatch.reason
+    keyed = verdict(endpoint="https://other.example/v1?api_key=sk-in-the-query")
+    assert "'https://other.example/v1?api_key=***'" in keyed.reason, keyed.reason
     unreported = verdict(endpoint=None)
     assert not unreported.ok
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from http import HTTPStatus
 from typing import Dict, Iterable, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
@@ -177,15 +178,26 @@ class CloudRouter:
             ) from exc
 
 
+# A query parameter whose name has one of these in it holds a credential.
+_SECRET_PARAMETER = re.compile(r"key|token|secret|sig|pass|pwd|auth|credential|code", re.IGNORECASE)
+
+
+def _shown_parameter(parameter: str) -> str:
+    name, equals, value = parameter.partition("=")
+    return f"{name}=***" if equals and value and _SECRET_PARAMETER.search(name) else parameter
+
+
 def shown_url(url: str) -> str:
-    """A URL as messages show it: credentials in it (user:password@) masked."""
+    """A URL as messages show it: credentials in it (user:password@, or a
+    query parameter such as api_key=) masked."""
     try:
         parts = urlsplit(url)
     except ValueError:
         return url
-    if "@" not in parts.netloc:
-        return url
-    return urlunsplit(parts._replace(netloc="***@" + parts.netloc.rsplit("@", 1)[1]))
+    if "@" in parts.netloc:
+        parts = parts._replace(netloc="***@" + parts.netloc.rsplit("@", 1)[1])
+    query = "&".join(_shown_parameter(parameter) for parameter in parts.query.split("&"))
+    return urlunsplit(parts._replace(query=query))
 
 
 def _describe_failure(exc: Exception, endpoint: str = "", *, custom_url: bool = False) -> str:

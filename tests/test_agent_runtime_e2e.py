@@ -2503,6 +2503,27 @@ def test_login_works_without_a_system_keyring(tmp_path: Path, scratch_repo: Path
     assert status["active_source"] == "file", status
 
 
+def test_login_masks_a_key_in_the_urls_it_reports(tmp_path: Path, scratch_repo: Path) -> None:
+    """/login says which URL it saved and which is in use; a key either
+    carries in its query is masked, like everywhere a URL is shown."""
+    env = _worker_env(tmp_path, tmp_path / "x.json")
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+    env["OPENAI_COMPATIBLE_BASE_URL"] = "http://127.0.0.1:9/v1?token=env-secret"
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        saved = harness.wait_response(harness.send("command.execute", {
+            "session_id": session_id,
+            "command": "/login openai-compatible sk-e2e http://127.0.0.1:8/v1?api_key=typed-secret",
+        }))["result"]
+    finally:
+        harness.close()
+    message = saved["message"]
+    assert ("Saved http://127.0.0.1:8/v1?api_key=***, but http://127.0.0.1:9/v1?token=*** "
+            "is in use") in message, message
+    assert "env-secret" not in message and "typed-secret" not in message
+
+
 def test_login_brings_back_the_remembered_model_of_that_provider(
     tmp_path: Path, scratch_repo: Path
 ) -> None:
@@ -2997,6 +3018,15 @@ def test_a_failed_connection_names_the_host_and_why(tmp_path: Path, scratch_repo
     assert f"could not reach http://***@127.0.0.1:{closed_port}/v1 (" in refused.stderr, \
         refused.stderr
     assert "sk-in-the-url" not in refused.stderr
+
+    # A key some gateways take in the query, masked too; other parameters shown.
+    env["OPENAI_COMPATIBLE_BASE_URL"] = (
+        f"http://127.0.0.1:{closed_port}/v1?region=eu&api_key=sk-in-the-query&x-token=t0k")
+    queried = subprocess.run(command, cwd=scratch_repo, env=env, capture_output=True, text=True,
+                             timeout=120)
+    assert (f"could not reach http://127.0.0.1:{closed_port}/v1?region=eu&api_key=***&x-token=***"
+            in queried.stderr), queried.stderr
+    assert "sk-in-the-query" not in queried.stderr and "t0k" not in queried.stderr
 
     env["OPENAI_COMPATIBLE_BASE_URL"] = f"127.0.0.1:{closed_port}/v1"  # no scheme
     unusable = subprocess.run(command, cwd=scratch_repo, env=env, capture_output=True, text=True,

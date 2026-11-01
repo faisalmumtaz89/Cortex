@@ -269,10 +269,10 @@ class ModelService:
             variable = URL_ENV_VARIABLE[provider]
             return {
                 "ok": True,
-                "message": f"Saved {url}, but {in_effect} is in use: {variable} or "
+                "message": f"Saved {shown_url(url)}, but {shown_url(in_effect)} is in use: {variable} or "
                 "~/.cortex/config.yaml sets it, and takes precedence.",
             }
-        return {"ok": True, "message": f"Using {url}."}
+        return {"ok": True, "message": f"Using {shown_url(url)}."}
 
     def auth_delete_key(self, provider: CloudProvider) -> Dict[str, Any]:
         ok, message = self.credential_store.delete_api_key(provider)
