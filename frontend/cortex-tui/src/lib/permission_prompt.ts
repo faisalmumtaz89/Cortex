@@ -157,7 +157,8 @@ export function permissionLayout(
   }
 
   // The call's rows: the panel's but the prompt's own, and at least a few.
-  const room = Math.max(MIN_BODY_ROWS, panelRows(screen) - PROMPT_ROWS)
+  const budget = panelRows(screen) - PROMPT_ROWS
+  const room = Math.max(MIN_BODY_ROWS, budget)
   const window = Math.min(rows.length, Math.max(1, room - pinned.length))
   const last = rows.length - window
   let start = offset
@@ -177,6 +178,8 @@ export function permissionLayout(
     rows,
     offset: start,
     window,
-    full: window === rows.length && !diff?.truncated && !clipped && !hidden,
+    // Whole only in the rows the panel has: on a screen with fewer, the few
+    // rows still drawn may be cut off, the choices with them.
+    full: pinned.length + rows.length <= budget && !diff?.truncated && !clipped && !hidden,
   }
 }

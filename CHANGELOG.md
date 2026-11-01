@@ -12,6 +12,9 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
 - A long line in a reply's code block goes on in rows that start with
   `↪`, every character kept, wide characters and emoji included; tabs
   show as 4 spaces.
+- A permission prompt that stops showing its call whole while open (the
+  screen shrank, an error took rows) moves to Reject, and on a screen too
+  small to show a call with its choices Enter never approves it.
 
 ## 2.0.10
 

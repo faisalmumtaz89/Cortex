@@ -1241,6 +1241,53 @@ def test_permission_modal_for_a_command_too_long_to_show_starts_on_reject(tui_pr
     assert not (project / "LONG.txt").exists()
 
 
+def test_permission_modal_that_stops_showing_its_call_whole_moves_to_reject(tui_project) -> None:
+    """Enter must not approve what is not in view: a call seen whole starts
+    on Allow once, and a screen that shrinks until the call is cut off moves
+    the choice to Reject."""
+    project, start = tui_project
+    command = "python3 -c \"" + "".join(f"x{i} = {i}; " for i in range(60)) + "\" && touch SHRUNK.txt"
+    session = start(
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+          {"text": "DONE_MARKER"}]]
+    )
+    _select_scripted_model(session)
+    session.send_line("run it")
+    modal = session.wait_for("Permission required")
+    assert "❯ Allow once" in modal and "PgUp/PgDn" not in modal, modal
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80", "-y", "24"],
+                   check=True)
+    shrunk = session.wait_for("PgUp/PgDn")
+    session.wait_for("❯ Reject")
+    session.send_key("Enter")
+    session.wait_for("DONE_MARKER")
+    assert not (project / "SHRUNK.txt").exists(), shrunk
+
+
+def test_permission_modal_on_a_screen_too_small_for_its_call_never_approves_it(tui_project) -> None:
+    """A screen with no room for the prompt still draws a few rows of the
+    call, and the choices fall off the bottom: Enter there must not approve
+    a call that may have been cut off."""
+    project, start = tui_project
+    command = "python3 -c \"" + "".join(f"x{i} = {i}; " for i in range(8)) + "\" && touch TINY.txt"
+    session = start(
+        [[{"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+          {"text": "DONE_MARKER"}]]
+    )
+    _select_scripted_model(session)
+    session.send_line("run it")
+    modal = session.wait_for("Permission required")
+    assert "❯ Allow once" in modal, modal
+    resize = ["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "80"]
+    subprocess.run([*resize, "-y", "8"], check=True)
+    time.sleep(1.0)  # the TUI lays itself out for the new size
+    tiny = session.capture()
+    assert "python3 -c" in tiny and "❯" not in tiny, tiny  # the choices fell off the bottom
+    session.send_key("Enter")
+    subprocess.run([*resize, "-y", "30"], check=True)
+    session.wait_for("DONE_MARKER")
+    assert not (project / "TINY.txt").exists(), tiny
+
 def test_interrupt_during_tool_stops_it_and_resolves_the_tool_row(tui_project) -> None:
     """Esc while a bash command runs stops the command at once, and its tool
     row resolves: no spinner survives the interrupted turn (regression,

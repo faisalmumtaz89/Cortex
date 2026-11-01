@@ -664,6 +664,16 @@ export function SessionRoute(props: {
     if (!pending) return undefined
     return permissionLayout(pending, permissionDiff(), store.screen(), store.state.permissionScroll)
   })
+  // Enter must not approve what is not in view: a prompt that stops showing
+  // its call whole (the screen shrank, an error took rows) moves to Reject.
+  createEffect(
+    on(
+      () => permissionView()?.full,
+      (full, wasFull) => {
+        if (wasFull && full === false) store.setPermissionChoice(2)
+      },
+    ),
+  )
 
 
   const submitFromPrompt = async () => {
