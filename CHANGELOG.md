@@ -6,21 +6,20 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
 
 ## 2.0.11
 
+- A permission prompt that stops showing its call whole while it waits (the
+  screen shrank, an error took rows) moves to Reject. On a screen too small
+  to show a call with its choices, the prompt starts on Reject.
+- While a permission prompt waits, the `/model` and `/login` pickers and a
+  command's hint panel are not drawn: the prompt takes Enter and Esc. A
+  picker opened then shows once the prompt is answered.
+- A key in a URL's query (`?api_key=`, `?code=`, a signature) is masked
+  wherever Cortex shows the URL, like a `user:password@` before the host.
 - An error that wraps to several rows keeps the input in view on a full
   screen, and leaves room for a picker or the slash command list opened
   under it.
 - A long line in a reply's code block goes on in rows that start with
   `↪`, every character kept, wide characters and emoji included; tabs
   show as 4 spaces.
-- A permission prompt that stops showing its call whole while open (the
-  screen shrank, an error took rows) moves to Reject, and on a screen too
-  small to show a call with its choices Enter never approves it.
-- A key in a URL's query (`?api_key=`, `?code=`, a signature) is masked
-  wherever Cortex shows the URL, as credentials before the host already
-  were.
-- While a permission prompt waits, the `/model` and `/login` pickers and a
-  command's hint panel are not drawn: the prompt takes Enter and Esc. A
-  picker opened then shows once the prompt is answered.
 - `cortex -p` with stdout to a pipe or a file: a reply an error or the
   output limit cut off goes to stderr with the reason, so stdout is empty
   when the turn fails.
