@@ -21,6 +21,9 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
 - While a permission prompt waits, the `/model` and `/login` pickers and a
   command's hint panel are not drawn: the prompt takes Enter and Esc. A
   picker opened then shows once the prompt is answered.
+- `cortex -p` with stdout to a pipe or a file: a reply an error or the
+  output limit cut off goes to stderr with the reason, so stdout is empty
+  when the turn fails.
 
 ## 2.0.10
 

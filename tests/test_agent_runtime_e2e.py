@@ -1133,6 +1133,24 @@ def test_the_first_session_after_an_update_says_what_changed(tmp_path: Path, scr
     assert f"last_cortex_version: {version}" in state.read_text()
 
 
+def test_headless_reply_cut_off_by_an_error_is_not_the_answer(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A script reads stdout as the answer: a reply an error cut off goes to
+    stderr, before the error, and the run exits 1 with stdout empty."""
+    script = _write_script(
+        tmp_path / "script.json",
+        [[{"text": "The first half of a reply", "error": "the stream was cut off"}]],
+    )
+    process = _run_headless(cwd=scratch_repo, env=_worker_env(tmp_path, script), prompt="explain",
+                            extra_args=[])
+
+    assert process.returncode == 1, process.stderr
+    assert process.stdout == "", process.stdout
+    reply = process.stderr.index("The first half of a reply")
+    assert process.stderr.index("the stream was cut off") > reply, process.stderr
+
+
 def test_headless_rejects_a_prompt_it_cannot_answer_and_keeps_stdout_clean(
     tmp_path: Path, scratch_repo: Path
 ) -> None:
@@ -1435,8 +1453,10 @@ def test_reply_cut_off_at_the_output_limit_fails_the_turn(
     )
 
     assert process.returncode == 1, process.stdout
-    assert text in process.stdout
-    assert "reached the output limit (max_tokens=32768)" in process.stderr
+    # Not the answer: what was written goes to stderr, before why it stopped.
+    assert process.stdout == "", process.stdout
+    limit = process.stderr.index("reached the output limit (max_tokens=32768)")
+    assert text in process.stderr[:limit], process.stderr
     assert server.requests[0]["max_tokens"] == 32768
 
 

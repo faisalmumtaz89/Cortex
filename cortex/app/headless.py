@@ -187,7 +187,8 @@ class _Printer:
     text streams: text that follows a tool call starts a new paragraph, and a
     tool line never starts partway through a line of text. Sent to a pipe or
     a file, stdout gets the answer alone, the text after the last tool call;
-    what the model wrote before its tool calls goes to stderr."""
+    what the model wrote before its tool calls, or before an error that ended
+    the turn, goes to stderr."""
 
     def __init__(self) -> None:
         self.wrote_text = False
@@ -203,6 +204,13 @@ class _Printer:
         sys.stdout.write(text)
         sys.stdout.flush()
         self.line_open = not text.endswith("\n")
+
+    def held_back_to_stderr(self) -> None:
+        """Text held back for a pipe that turned out not to be the answer:
+        words before a tool call, or a reply an error cut off."""
+        if self.pending:
+            print("".join(self.pending).strip(), file=sys.stderr)
+            self.pending = []
 
     def end_line(self) -> None:
         if self.line_open and not sys.stdout.closed:
@@ -233,10 +241,7 @@ class _Printer:
                 self.wrote_text = True
                 self._write(delta)
             elif part.get("type") == "tool":
-                if self.pending:
-                    # Words before a tool call are not the answer.
-                    print("".join(self.pending).strip(), file=sys.stderr)
-                    self.pending = []
+                self.held_back_to_stderr()
                 self.end_line()
                 self.after_tool = True
                 state = str(part.get("state", ""))
@@ -267,6 +272,7 @@ class _Printer:
                         print(_diff_text(diff), file=sys.stderr)
             return
         if event_type == "session.error":
+            self.held_back_to_stderr()
             self.end_line()
             print(f"error: {payload.get('error', '')}", file=sys.stderr)
 
