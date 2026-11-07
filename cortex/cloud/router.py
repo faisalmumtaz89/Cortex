@@ -40,15 +40,28 @@ class CloudRouter:
 
     def _configured_url(self, env_name: str, config_key: str, state_key: str) -> str:
         """A provider URL from the environment, then ~/.cortex/config.yaml, then persisted state."""
-        url = os.environ.get(env_name, "").strip()
-        if not url:
-            cloud_cfg = getattr(self.config, "cloud", None)
-            url = str(getattr(cloud_cfg, config_key, "") or "").strip()
+        url = os.environ.get(env_name, "").strip().rstrip("/")
+        return url or self._saved_url(config_key, state_key)
+
+    def _saved_url(self, config_key: str, state_key: str) -> str:
+        """A provider URL from ~/.cortex/config.yaml, then persisted state."""
+        cloud_cfg = getattr(self.config, "cloud", None)
+        url = str(getattr(cloud_cfg, config_key, "") or "").strip()
         if not url:
             get_state = getattr(self.config, "get_state_value", None)
             if callable(get_state):
                 url = str(get_state(state_key, "") or "").strip()
         return url.rstrip("/")
+
+    def saved_endpoint_url(self, provider: CloudProvider) -> str:
+        """The Azure endpoint or OpenAI-compatible base URL kept across sessions ("" if none)."""
+        if provider == CloudProvider.AZURE:
+            return self._saved_url("cloud_azure_endpoint", "azure_endpoint")
+        if provider == CloudProvider.OPENAI_COMPATIBLE:
+            return self._saved_url(
+                "cloud_openai_compatible_base_url", "openai_compatible_base_url"
+            )
+        return ""
 
     def _azure_endpoint(self) -> str:
         """Azure resource endpoint."""

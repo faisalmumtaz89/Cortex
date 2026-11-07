@@ -36,6 +36,9 @@ class _FakeCloudRouter:
     def openai_compatible_base_url(self):
         return ""
 
+    def saved_endpoint_url(self, _provider):
+        return ""
+
 
 class _FakeCredentialStore:
     def __init__(self) -> None:

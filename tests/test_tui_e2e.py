@@ -641,10 +641,16 @@ def test_slash_palette_login_masks_api_key(tui_project) -> None:
     assert '"sk-supersecret123"' in saved.read_text(encoding="utf-8")
 
 
-def test_login_picker_shows_each_provider_auth_status(tui_project) -> None:
+@pytest.mark.parametrize("saved", [True, False], ids=["url-saved", "url-from-environment"])
+def test_login_picker_shows_each_provider_auth_status(tui_project, saved: bool) -> None:
     project, start = tui_project
+    url = "http://127.0.0.1:9/v1"
+    if saved:
+        state = project.parent / "home" / ".cortex" / "state.yaml"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(f"openai_compatible_base_url: {url}\n", encoding="utf-8")
     session = start(
-        [[{"text": "IGNORED"}]], extra_env={"OPENAI_COMPATIBLE_BASE_URL": "http://127.0.0.1:9/v1"}
+        [[{"text": "IGNORED"}]], extra_env={} if saved else {"OPENAI_COMPATIBLE_BASE_URL": url}
     )
     session.wait_for("Session ready")
 
@@ -658,8 +664,12 @@ def test_login_picker_shows_each_provider_auth_status(tui_project) -> None:
 
     assert "logged in · environment variable" in row("azure"), picker  # the harness sets its key
     assert "not logged in" in row("anthropic"), picker
-    # A base URL alone is half the setup: the row says the key is what is missing.
-    assert "URL saved, no key" in row("openai-compatible"), picker
+    if saved:
+        # A saved base URL is half the setup: the row says the key is what is missing.
+        assert "URL saved, no key" in row("openai-compatible"), picker
+    else:
+        # A URL in the environment is not saved: logging in asks for one.
+        assert "not logged in" in row("openai-compatible"), picker
 
 
 def test_the_tui_leaves_no_files_in_the_temp_folder(tui_project, tmp_path) -> None:
