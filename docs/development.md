@@ -128,7 +128,7 @@ ruff check cortex/ tests/
 
 ## Releasing
 
-Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml` (one release at a time via a `concurrency` group; re-runs are idempotent — the action updates the existing release by tag and replaces same-named assets). It builds one wheel per platform in `cortex/ui_runtime/platforms.py`, each on a runner of that platform (`macos-14`, `macos-15-intel`, `ubuntu-24.04`, `ubuntu-24.04-arm`):
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml` (one release at a time via a `concurrency` group; re-runs are idempotent — the action updates the existing release by tag and replaces same-named assets). It builds one wheel per platform in `cortex/ui_runtime/platforms.py`, each on a runner of that platform (`macos-15`, `macos-15-intel`, `ubuntu-24.04`, `ubuntu-24.04-arm`):
 
 1. Verifies the tag matches `pyproject.toml`'s `version`.
 2. Builds the OpenTUI sidecar for the runner's platform with a **pinned Bun version** (kept in sync with `frontend/cortex-tui/package.json`), then the wheel with `python -m build --wheel`; `setup.py` tags it for that platform.

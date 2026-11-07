@@ -48,7 +48,7 @@ jobs:
       matrix:
         include:
           # Keep in step with cortex/ui_runtime/platforms.py.
-          - runner: macos-14
+          - runner: macos-15
             wheel_tag: macosx_13_0_arm64
             managed_python: "1"
           - runner: macos-15-intel
