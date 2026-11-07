@@ -4,6 +4,17 @@ What changed in each release of Cortex, newest first. The release workflow
 publishes a version's section as its release notes, and stops when a version
 has none. Releases before 2.0.9 are described on their GitHub release pages.
 
+## 2.0.12
+
+- Selecting a model saves the model, not the Azure endpoint or
+  OpenAI-compatible base URL in effect: only a URL given to `/login` or
+  `cortex login` is saved. A later run that does not set
+  `AZURE_OPENAI_ENDPOINT` or `OPENAI_COMPATIBLE_BASE_URL` does not send
+  your key to the URL an earlier run set there; give the URL to `/login` to
+  keep it. A URL saved this way before 2.0.12 stays in
+  `~/.cortex/state.yaml` until `/login` or `cortex login` replaces it or
+  you delete its line. `/login` shows "URL saved" only for a saved URL.
+
 ## 2.0.11
 
 - A permission prompt that stops showing its call whole while it waits (the

@@ -199,7 +199,7 @@ model as `/model openai-compatible:<model>`; the model you select is listed in
 the `/model` picker from then on. Once you are logged in, the picker also has a
 row `openai-compatible:… type a model name` that starts that command for you. Outside the app, set `OPENAI_COMPATIBLE_API_KEY`
 and `OPENAI_COMPATIBLE_BASE_URL` instead (or `cloud_openai_compatible_base_url` in
-`~/.cortex/config.yaml`); these take precedence over what `/login` saved. A base URL in use is also saved in `~/.cortex/state.yaml`, so a later session needs only the key. The `openai` and `anthropic` providers always use their official hosts: `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`, which their SDKs read, are ignored (the startup notice names one that is set), so a variable left in an environment cannot send their keys elsewhere. Any other endpoint is `openai-compatible`. The reasoning such models stream
+`~/.cortex/config.yaml`); these take precedence over what `/login` saved. A URL set in a variable or `config.yaml` is not saved: it applies while it is set. The `openai` and `anthropic` providers always use their official hosts: `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`, which their SDKs read, are ignored (the startup notice names one that is set), so a variable left in an environment cannot send their keys elsewhere. Any other endpoint is `openai-compatible`. The reasoning such models stream
 (`reasoning_content` or `reasoning`) is sent back with the reply step it belongs
 to, in the same field, for the rest of the conversation: the model continues
 from it at each tool step, and DeepSeek requires it whenever tools are offered.

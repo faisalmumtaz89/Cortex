@@ -40,7 +40,7 @@ def run_login(argv: List[str]) -> int:
             "usage: cortex login PROVIDER [URL]\n\n"
             f"Saves PROVIDER's API key ({_PROVIDERS}) where /login saves it. The key\n"
             "is read from stdin, or asked for in a terminal. azure takes its endpoint\n"
-            "and openai-compatible its base URL, unless one is saved already.\n"
+            "and openai-compatible its base URL, unless one is saved or set already.\n"
         )
         return 0 if argv else 2
     name = argv[0].strip().lower()

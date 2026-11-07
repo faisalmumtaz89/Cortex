@@ -1425,6 +1425,40 @@ def test_openai_compatible_provider_runs_tool_turn(tmp_path: Path, scratch_repo:
     assert len(tool_messages) == 1
 
 
+def test_a_base_url_set_for_one_run_is_not_kept_for_later_runs(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """OPENAI_COMPATIBLE_BASE_URL applies to the run it is set for: selecting a
+    model does not save it, so a later run without it asks for a URL instead of
+    sending the key to the earlier one."""
+    server = ChatCompletionsServer([{"text": "fine"}])
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+
+    def run(extra_env: dict) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-P", "-m", "cortex", "-p", "hi",
+             "--model", f"openai-compatible:{server.model}"],
+            cwd=scratch_repo, env={**env, **extra_env}, capture_output=True, text=True,
+            timeout=120,
+        )
+
+    try:
+        first = run({"OPENAI_COMPATIBLE_BASE_URL": server.base_url})
+        later = run({})
+    finally:
+        server.close()
+
+    assert first.returncode == 0, first.stderr
+    assert "fine" in first.stdout
+    state = tmp_path / "home" / ".cortex" / "state.yaml"
+    assert server.base_url not in state.read_text(encoding="utf-8")
+    assert later.returncode != 0
+    assert "OPENAI_COMPATIBLE_BASE_URL" in later.stderr, later.stderr
+    assert len(server.requests) == 1
+
+
 def _run_against_gateway(tmp_path: Path, repo: Path, script, *, full_auto: bool = False):
     server = ChatCompletionsServer(script)
     env = _worker_env(tmp_path, tmp_path / "unused.json")
@@ -1574,7 +1608,8 @@ def test_model_list_reports_provider_auth_and_active_uncatalogued_model(
 
     providers = {row["provider"]: row for row in listing["providers"]}
     assert providers["openai-compatible"]["authenticated"] is True
-    assert providers["openai-compatible"]["url_saved"] is True
+    # The URL comes from the environment for this session only: not saved.
+    assert providers["openai-compatible"]["url_saved"] is False
     assert providers["anthropic"]["authenticated"] is False
     assert providers["azure"]["url_saved"] is False
     active = [row for row in listing["cloud"] if row["active"]]
@@ -2698,6 +2733,8 @@ def test_openai_compatible_setup_finishes_inside_the_app(
         assert "sk-compat-e2e" not in str(result) and "sk-openai-e2e" not in str(result)
     state = (tmp_path / "home" / ".cortex" / "state.yaml").read_text(encoding="utf-8")
     assert "openai_compatible_base_url: http://127.0.0.1:9/v1" in state
+    providers = {row["provider"]: row for row in listed["providers"]}
+    assert providers["openai-compatible"]["url_saved"] is True
     # The /model picker keeps listing a model picked by name after a switch.
     selectors = [row["selector"] for row in listed["cloud"]]
     assert "openai-compatible:deepseek/deepseek-v4.1-flash" in selectors, selectors

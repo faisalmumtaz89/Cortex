@@ -132,7 +132,7 @@ class ModelService:
                     "provider": provider.value,
                     "authenticated": bool(is_auth),
                     "auth_source": source,
-                    "url_saved": bool(self.endpoint_url(provider)),
+                    "url_saved": bool(self.cloud_router.saved_endpoint_url(provider)),
                 }
                 for provider, (is_auth, source) in auth.items()
             ],
@@ -215,13 +215,6 @@ class ModelService:
                         "variable": variable,
                     },
                 }
-            # Persist so later sessions work without the env var.
-            if remember:
-                state_key = (
-                    "azure_endpoint" if provider_enum == CloudProvider.AZURE
-                    else "openai_compatible_base_url"
-                )
-                self.config.set_state_value(state_key, url)
 
         ref = CloudModelRef(provider=provider_enum, model_id=normalized_model_id)
         self.active_target = ActiveModelTarget.cloud(ref)
