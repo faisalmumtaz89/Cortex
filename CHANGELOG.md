@@ -14,6 +14,10 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   `config.yaml` or its `CORTEX_CLOUD_*` variable, or saved with `/login`.
   A `/login` or `cortex login` that saves only a key names its provider's
   URL the same way.
+- A run stopped by a signal while a command runs (`timeout`, a cancelled
+  CI job) exits as soon as the command has ended, instead of always waiting
+  3 seconds: the 3 seconds before SIGKILL are now only for a command that
+  keeps running.
 
 ## 2.0.12
 

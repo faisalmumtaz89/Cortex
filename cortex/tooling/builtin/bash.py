@@ -27,11 +27,13 @@ _TAIL_BYTES = 230_000
 _DRAIN_SECONDS = 1.0
 _KILL_GRACE_SECONDS = 3.0
 
-# The process groups of the commands running now. Cortex stops them when it
-# is told to end (SIGTERM, SIGHUP), since exiting on a signal skips every
-# finally that would: a command must not run on after Cortex.
-_running: set[int] = set()
-_running_lock = threading.Lock()
+# The commands running now, each the leader of its own process group. Cortex
+# stops them when it is told to end (SIGTERM, SIGHUP), since exiting on a
+# signal skips every finally that would: a command must not run on after Cortex.
+# Reentrant: a headless turn runs commands on the main thread, where the
+# signal handler that stops them also runs.
+_running: set[subprocess.Popen] = set()
+_running_lock = threading.RLock()
 
 
 class BashArgs(BaseModel):
@@ -201,7 +203,7 @@ def run_command(
         start_new_session=True,
     )
     with _running_lock:
-        _running.add(proc.pid)
+        _running.add(proc)
     assert proc.stdout is not None
     pipe = proc.stdout
     output = _Output()
@@ -238,7 +240,7 @@ def run_command(
         raise
     finally:
         with _running_lock:
-            _running.discard(proc.pid)
+            _running.discard(proc)
     if closed:
         pipe.close()
     else:
@@ -261,9 +263,8 @@ def _stop(proc: subprocess.Popen) -> None:
         return
     deadline = time.monotonic() + _KILL_GRACE_SECONDS
     while time.monotonic() < deadline:
-        proc.poll()
-        if not _signal_group(proc.pid, 0):
-            return  # the whole group is gone
+        if not _group_running(proc):
+            return
         time.sleep(0.05)
     _signal_group(proc.pid, signal.SIGKILL)
     try:
@@ -276,14 +277,50 @@ def stop_running_commands() -> None:
     """SIGTERM the process group of every command running now, and SIGKILL
     the groups still running after the grace period."""
     with _running_lock:
-        groups = list(_running)
-    groups = [pgid for pgid in groups if _signal_group(pgid, signal.SIGTERM)]
+        procs = list(_running)
+    procs = [proc for proc in procs if _signal_group(proc.pid, signal.SIGTERM)]
     deadline = time.monotonic() + _KILL_GRACE_SECONDS
-    while groups and time.monotonic() < deadline:
+    while procs and time.monotonic() < deadline:
         time.sleep(0.05)
-        groups = [pgid for pgid in groups if _signal_group(pgid, 0)]
-    for pgid in groups:
-        _signal_group(pgid, signal.SIGKILL)
+        procs = [proc for proc in procs if _group_running(proc)]
+    for proc in procs:
+        _signal_group(proc.pid, signal.SIGKILL)
+
+
+def _group_running(proc: subprocess.Popen) -> bool:
+    """Whether anything in the command's process group still runs. A zombie
+    does not: the command is reaped first, and a child of it that ended stays
+    a zombie until init reaps it, which may be slow or never."""
+    proc.poll()
+    return _signal_group(proc.pid, 0) and _group_has_live_member(proc.pid)
+
+
+def _group_has_live_member(pgid: int) -> bool:
+    """Whether a process of the group is not a zombie, read from /proc. A
+    process whose main thread ended shows as one while its other threads
+    run, so it is one only with a single thread left. When /proc shows none
+    of the group (macOS has none; there a group of only zombies already
+    answers EPERM), every member counts."""
+    try:
+        pids = [entry for entry in os.listdir("/proc") if entry.isdigit()]
+    except OSError:
+        return True
+    group = str(pgid).encode()
+    zombies = 0
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as stat:
+                fields = stat.read().rsplit(b")", 1)[1].split()
+        except (OSError, IndexError):
+            continue  # it ended meanwhile
+        # After the command name: state, parent pid, process group, ...;
+        # the thread count is the 18th.
+        if len(fields) < 18 or fields[2] != group:
+            continue
+        if fields[0] != b"Z" or fields[17] != b"1":
+            return True
+        zombies += 1
+    return zombies == 0
 
 
 def _signal_group(pgid: int, signum: int) -> bool:
