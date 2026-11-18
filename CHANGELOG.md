@@ -4,6 +4,12 @@ What changed in each release of Cortex, newest first. The release workflow
 publishes a version's section as its release notes, and stops when a version
 has none. Releases before 2.0.9 are described on their GitHub release pages.
 
+## 2.0.13
+
+- The CLI docs no longer imply that `timeout` reports exit code `143`:
+  Cortex exits `143` on SIGTERM, but `timeout` itself exits `124` unless
+  given `--preserve-status`.
+
 ## 2.0.12
 
 - Selecting a model saves the model, not the Azure endpoint or
