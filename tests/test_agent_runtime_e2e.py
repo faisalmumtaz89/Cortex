@@ -3069,8 +3069,12 @@ def test_a_run_ended_by_a_signal_stops_the_command_it_runs(
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     _wait_for_sleep(process)
+    signalled = time.monotonic()
     process.send_signal(signal.SIGTERM)
     _out, err = process.communicate(timeout=30)
+    # A command that ends at once on SIGTERM is not waited for: the grace
+    # period before SIGKILL (3 s) is for one that keeps running.
+    assert time.monotonic() - signalled < 2.0
     assert process.returncode == 128 + signal.SIGTERM, err
     _assert_sleep_ends()
     assert not (scratch_repo / "late.txt").exists()

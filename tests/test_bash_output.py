@@ -1,3 +1,6 @@
+import io
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -57,6 +60,72 @@ def test_stopping_a_command_also_ends_children_that_ignore_sigterm(tmp_path):
     assert ended_by == "interrupt"
     time.sleep(5)
     assert not (tmp_path / "escaped.txt").exists()
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="reads /proc")
+def test_a_group_left_with_only_zombies_counts_as_ended():
+    """An exited child that nobody has reaped yet stays in its group as a
+    zombie (one whose parent is init is reaped only when init gets to it):
+    it runs nothing, so waiting for it would only delay Cortex."""
+    ended = subprocess.Popen(["true"], start_new_session=True)
+    running = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        deadline = time.monotonic() + 10
+        while _state(ended.pid) != "Z" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert _state(ended.pid) == "Z"
+        assert bash._signal_group(ended.pid, 0)  # still in its group...
+        assert not bash._group_has_live_member(ended.pid)  # ...but not running
+        assert bash._group_has_live_member(running.pid)
+    finally:
+        running.kill()
+        running.wait()
+        ended.wait()
+
+
+@pytest.mark.parametrize(
+    ("members", "live"),
+    [
+        ([("Z", 1)], False),  # only a zombie left
+        ([("Z", 2)], True),  # its main thread ended, another thread runs on
+        ([("Z", 1), ("S", 1)], True),
+        ([], True),  # /proc shows none of a group that answers a signal
+    ],
+)
+def test_a_group_is_live_while_a_member_runs_a_thread(monkeypatch, members, live):
+    pgid = 4242
+    stats = {
+        str(5000 + i): f"{5000 + i} (a) b) {state} 1 {pgid} {' '.join(['0'] * 14)} {threads} 0 0"
+        for i, (state, threads) in enumerate(members)
+    }
+    stats["7"] = f"7 (other) S 1 7 {' '.join(['0'] * 14)} 1 0 0"
+    monkeypatch.setattr(bash.os, "listdir", lambda _path: [*stats, "self"])
+    monkeypatch.setattr(
+        bash, "open", lambda path, _mode: io.BytesIO(stats[path.split("/")[2]].encode()),
+        raising=False,
+    )
+    assert bash._group_has_live_member(pgid) is live
+
+
+def _state(pid: int) -> str:
+    with open(f"/proc/{pid}/stat", "rb") as stat:
+        return stat.read().rsplit(b")", 1)[1].split()[0].decode()
+
+
+def test_a_signal_stops_commands_while_the_same_thread_registers_one():
+    """A headless turn runs commands on the main thread, where the signal
+    handler runs too: a signal between taking the lock and releasing it must
+    not deadlock the handler. In a process of its own: a deadlock hangs it."""
+    script = (
+        "import os, signal, time\n"
+        "from cortex.tooling.builtin import bash\n"
+        "signal.signal(signal.SIGTERM, lambda signum, _: (bash.stop_running_commands(), os._exit(7)))\n"
+        "with bash._running_lock:\n"
+        "    os.kill(os.getpid(), signal.SIGTERM)\n"
+        "    time.sleep(10)\n"
+    )
+    process = subprocess.run([sys.executable, "-c", script], timeout=30, capture_output=True)
+    assert process.returncode == 7, process.stderr
 
 
 def test_interrupt_keeps_the_output_when_the_system_answers_eperm_for_a_dead_group(
