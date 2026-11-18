@@ -241,7 +241,9 @@ class CommandService:
             if result.get("ok") and url_argument:
                 if len(values) == 2:
                     message = f"{message} {url_result['message']}"
-                elif not self.model_service.endpoint_url(provider):
+                elif url_in_use := self.model_service.url_in_use(provider):
+                    message = f"{message} URL: {url_in_use}."
+                else:
                     message = f"{message} {provider.value} also needs its URL: {usage}"
             active = self.model_service.active_target.cloud_model
             remembered = self._remembered_model(provider)

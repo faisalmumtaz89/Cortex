@@ -97,6 +97,8 @@ def run_login(argv: List[str]) -> int:
         if not saved_url["ok"]:
             return _fail(str(saved_url["message"]))
         messages.append(str(saved_url["message"]))
+    elif url_in_use := service.url_in_use(provider):
+        messages.append(f"URL: {url_in_use}.")
     saved = service.auth_save_key(provider, key)
     if not saved["ok"]:
         return _fail(str(saved["message"]))

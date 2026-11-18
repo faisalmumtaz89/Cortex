@@ -2002,6 +2002,25 @@ def test_status_names_the_version_and_the_directory(tui_project) -> None:
     assert f"Cortex: {cortex.__version__}" in panel, panel
 
 
+def test_status_names_the_url_the_active_model_uses(tui_project) -> None:
+    """An OpenAI-compatible model's base URL, and where it is set, is in /status."""
+    project, start = tui_project
+    state = project.parent / "home" / ".cortex" / "state.yaml"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(
+        "last_used_cloud_provider: openai-compatible\n"
+        "last_used_cloud_model: org/m\n"
+        "openai_compatible_base_url: http://127.0.0.1:9/v1\n",
+        encoding="utf-8",
+    )
+    session = start([[{"text": "IGNORED"}]],
+                    extra_env={"OPENAI_COMPATIBLE_API_KEY": "sk-tui-compatible"})
+    session.wait_for("Session ready")
+    session.send_line("/status")
+    panel = session.wait_for("Directory:", timeout=15)
+    assert "URL: http://127.0.0.1:9/v1 (saved with /login)" in panel, panel
+
+
 def test_an_error_that_wraps_keeps_the_input_in_view(tui_project) -> None:
     """B11 saw an error of several rows drawn over the input box at 80x24 after
     a long reply: when the screen was full the error was squeezed with the

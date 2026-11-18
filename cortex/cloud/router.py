@@ -20,6 +20,17 @@ from cortex.tooling.types import TurnInterrupt, TurnInterruptedError
 
 logger = logging.getLogger(__name__)
 
+# A provider's URL settings: its environment variable, its config.yaml key,
+# and the state key /login saves it under.
+_URL_SETTINGS = {
+    CloudProvider.AZURE: ("AZURE_OPENAI_ENDPOINT", "cloud_azure_endpoint", "azure_endpoint"),
+    CloudProvider.OPENAI_COMPATIBLE: (
+        "OPENAI_COMPATIBLE_BASE_URL",
+        "cloud_openai_compatible_base_url",
+        "openai_compatible_base_url",
+    ),
+}
+
 
 class CloudRouter:
     """Route generation requests to cloud providers."""
@@ -38,42 +49,41 @@ class CloudRouter:
         retries = int(getattr(cloud_cfg, "cloud_max_retries", 2))
         return max(0, retries)
 
-    def _configured_url(self, env_name: str, config_key: str, state_key: str) -> str:
-        """A provider URL from the environment, then ~/.cortex/config.yaml, then persisted state."""
+    def url_in_effect(self, provider: CloudProvider) -> Tuple[str, str]:
+        """The Azure endpoint or OpenAI-compatible base URL requests go to, and
+        where it is set: its environment variable, else ~/.cortex/config.yaml,
+        else saved with /login (("", "") if none)."""
+        if provider not in _URL_SETTINGS:
+            return "", ""
+        env_name = _URL_SETTINGS[provider][0]
         url = os.environ.get(env_name, "").strip().rstrip("/")
-        return url or self._saved_url(config_key, state_key)
+        return (url, env_name) if url else self._saved_url(provider)
 
-    def _saved_url(self, config_key: str, state_key: str) -> str:
-        """A provider URL from ~/.cortex/config.yaml, then persisted state."""
+    def _saved_url(self, provider: CloudProvider) -> Tuple[str, str]:
+        _env_name, config_key, state_key = _URL_SETTINGS[provider]
         cloud_cfg = getattr(self.config, "cloud", None)
         url = str(getattr(cloud_cfg, config_key, "") or "").strip()
-        if not url:
-            get_state = getattr(self.config, "get_state_value", None)
-            if callable(get_state):
-                url = str(get_state(state_key, "") or "").strip()
-        return url.rstrip("/")
+        if url:
+            # Set there, it is in effect even when it is only slashes.
+            setting_source = getattr(self.config, "setting_source", None)
+            source = setting_source(config_key) if callable(setting_source) else ""
+            return (url.rstrip("/"), source or "config.yaml") if url.rstrip("/") else ("", "")
+        get_state = getattr(self.config, "get_state_value", None)
+        if callable(get_state):
+            url = str(get_state(state_key, "") or "").strip().rstrip("/")
+        return (url, "saved with /login") if url else ("", "")
 
     def saved_endpoint_url(self, provider: CloudProvider) -> str:
         """The Azure endpoint or OpenAI-compatible base URL kept across sessions ("" if none)."""
-        if provider == CloudProvider.AZURE:
-            return self._saved_url("cloud_azure_endpoint", "azure_endpoint")
-        if provider == CloudProvider.OPENAI_COMPATIBLE:
-            return self._saved_url(
-                "cloud_openai_compatible_base_url", "openai_compatible_base_url"
-            )
-        return ""
+        return self._saved_url(provider)[0] if provider in _URL_SETTINGS else ""
 
     def _azure_endpoint(self) -> str:
         """Azure resource endpoint."""
-        return self._configured_url("AZURE_OPENAI_ENDPOINT", "cloud_azure_endpoint", "azure_endpoint")
+        return self.url_in_effect(CloudProvider.AZURE)[0]
 
     def openai_compatible_base_url(self) -> str:
         """Base URL of the OpenAI-compatible endpoint."""
-        return self._configured_url(
-            "OPENAI_COMPATIBLE_BASE_URL",
-            "cloud_openai_compatible_base_url",
-            "openai_compatible_base_url",
-        )
+        return self.url_in_effect(CloudProvider.OPENAI_COMPATIBLE)[0]
 
     def _build_client(self, provider: CloudProvider, api_key: str):
         timeout_seconds = self._timeout_seconds()
