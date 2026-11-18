@@ -9,6 +9,11 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
 - The CLI docs no longer imply that `timeout` reports exit code `143`:
   Cortex exits `143` on SIGTERM, but `timeout` itself exits `124` unless
   given `--preserve-status`.
+- `/status` shows the Azure endpoint or OpenAI-compatible base URL the
+  active model uses, and where it is set: its environment variable,
+  `config.yaml` or its `CORTEX_CLOUD_*` variable, or saved with `/login`.
+  A `/login` or `cortex login` that saves only a key names its provider's
+  URL the same way.
 
 ## 2.0.12
 

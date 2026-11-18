@@ -88,7 +88,7 @@ printf %s "$OPENAI_API_KEY" | cortex login openai          # the key from stdin
 cortex login openai-compatible https://llm.example.com/v1    # in a terminal: asks for the key
 ```
 
-`cortex login PROVIDER [URL]` saves the key where `/login` does (the system keyring, else `~/.cortex/credentials.json`, readable only by you), so later `cortex -p` runs on that machine find it. It reads the key from stdin, or asks for it without showing it when run in a terminal; it never takes the key as an argument, which would keep it in shell history and process listings. `azure` takes its endpoint and `openai-compatible` its base URL, unless one is saved or set already. On a CI runner, a secret in the `*_API_KEY` variable is usually simpler.
+`cortex login PROVIDER [URL]` saves the key where `/login` does (the system keyring, else `~/.cortex/credentials.json`, readable only by you), so later `cortex -p` runs on that machine find it. It reads the key from stdin, or asks for it without showing it when run in a terminal; it never takes the key as an argument, which would keep it in shell history and process listings. `azure` takes its endpoint and `openai-compatible` its base URL, unless one is saved or set already; then it names the URL in use and where it is set. On a CI runner, a secret in the `*_API_KEY` variable is usually simpler.
 
 ### A pre-commit check: the tests decide, the review explains
 
@@ -139,7 +139,7 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 | Command | Description |
 |---|---|
 | `/help` | List available commands |
-| `/status` | The Cortex version, the directory it works in, the active model, the model that answered the last turn, and the settings `config.yaml` and `CORTEX_*` variables changed (each with where it comes from) |
+| `/status` | The Cortex version, the directory it works in, the active model (with the Azure endpoint or base URL it uses, and where that is set), the model that answered the last turn, and the settings `config.yaml` and `CORTEX_*` variables changed (each with where it comes from) |
 | `/model [provider:model]` | Pick a model interactively, or switch by `provider:model` |
 | `/login <provider> [api_key] [url]` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials (Azure and OpenAI-compatible also take the URL) |
 | `/update [cortex]` | Show the installed version and any newer one, with a link to its release notes, or update Cortex (the download is checked against its published checksum before anything is installed) |

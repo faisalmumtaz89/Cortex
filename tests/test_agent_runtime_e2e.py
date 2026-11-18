@@ -1102,6 +1102,60 @@ def test_status_lists_the_settings_in_effect(tmp_path: Path, scratch_repo: Path)
     assert "- Settings: the defaults" in status, status
 
 
+def test_status_and_a_key_only_login_name_the_url_in_use(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The URL requests go to, and where it comes from, is visible: in
+    /status for the active model, and when a login saves only a key."""
+    env = _worker_env(tmp_path, _write_script(tmp_path / "script.json", [[{"text": "Hi."}]]))
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-test-compatible"
+    state = tmp_path / "home" / ".cortex" / "state.yaml"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(
+        "last_used_cloud_provider: openai-compatible\n"
+        "last_used_cloud_model: org/m\n"
+        "openai_compatible_base_url: http://127.0.0.1:9/v1\n",
+        encoding="utf-8",
+    )
+
+    def status_and_login(env: dict) -> tuple:
+        harness = WorkerHarness(cwd=scratch_repo, env=env)
+        try:
+            session_id = _start_session(harness)
+            status = harness.wait_response(harness.send("command.execute", {
+                "session_id": session_id, "command": "/status"}))["result"]["message"]
+            login = harness.wait_response(harness.send("command.execute", {
+                "session_id": session_id,
+                "command": "/login openai-compatible sk-e2e"}))["result"]["message"]
+        finally:
+            harness.close()
+        return status, login
+
+    status, login = status_and_login(env)
+    assert "- URL: http://127.0.0.1:9/v1 (saved with /login)" in status, status
+    assert "URL: http://127.0.0.1:9/v1 (saved with /login)." in login, login
+
+    for variable, url in [
+        ("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:8/v1"),
+        ("CORTEX_CLOUD_OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:7/v1"),
+    ]:
+        status, login = status_and_login({**env, variable: url})
+        assert f"- URL: {url} ({variable})" in status, status
+        assert f"URL: {url} ({variable})." in login, login
+
+    cli = _cortex_login(env, scratch_repo, ["openai-compatible"], "sk-from-stdin")
+    assert cli.returncode == 0, cli.stderr
+    assert "URL: http://127.0.0.1:9/v1 (saved with /login)." in cli.stdout, cli.stdout
+
+    # One requests refuse is named all the same, with where to fix it.
+    state.write_text("openai_compatible_base_url: ftp://127.0.0.1/v1\n", encoding="utf-8")
+    _status, login = status_and_login(env)
+    assert "URL: ftp://127.0.0.1/v1 (saved with /login)." in login, login
+    cli = _cortex_login(env, scratch_repo, ["openai-compatible"], "sk-from-stdin")
+    assert cli.returncode == 0, cli.stderr
+    assert "URL: ftp://127.0.0.1/v1 (saved with /login)." in cli.stdout, cli.stdout
+
+
 def test_the_first_session_after_an_update_says_what_changed(tmp_path: Path, scratch_repo: Path) -> None:
     """Once, in the app: a headless run leaves the notice for the next session."""
     import cortex

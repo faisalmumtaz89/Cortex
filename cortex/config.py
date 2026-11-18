@@ -296,16 +296,21 @@ class Config:
         settings = []
         for name, section in _SECTIONS.items():
             for key in section.model_fields:
-                if key in self._invalid:
-                    continue
-                if key in self._env_values:
-                    source = f"CORTEX_{key.upper()}"
-                elif self._file_values.get(key) is not None:
-                    source = self.config_path.name
-                else:
-                    continue
-                settings.append((key, getattr(getattr(self, name), key), source))
+                source = self.setting_source(key)
+                if source:
+                    settings.append((key, getattr(getattr(self, name), key), source))
         return sorted(settings)
+
+    def setting_source(self, key: str) -> str:
+        """Where a setting in effect comes from: its CORTEX_* variable or
+        config.yaml ("" when its default applies)."""
+        if key in self._invalid:
+            return ""
+        if key in self._env_values:
+            return f"CORTEX_{key.upper()}"
+        if self._file_values.get(key) is not None:
+            return self.config_path.name
+        return ""
 
     def is_setting_explicit(self, key: str) -> bool:
         """Return True if a config key was explicitly set in config.yaml."""

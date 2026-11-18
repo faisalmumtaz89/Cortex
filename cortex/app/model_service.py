@@ -146,10 +146,17 @@ class ModelService:
             served = self.last_turn_provenance
             suffix = " (verified)" if served.get("verified") else " (unverified)"
             last_turn = f"{served.get('label')}{suffix}"
+        active = self.active_target.cloud_model
         return {
             "active_model": self.get_active_model_label(),
+            "url": self.url_in_use(active.provider) if active else "",
             "last_turn_served_by": last_turn,
         }
+
+    def url_in_use(self, provider: CloudProvider) -> str:
+        """The URL requests to the provider go to, and where it is set ("" if none)."""
+        url, source = self.cloud_router.url_in_effect(provider)
+        return f"{shown_url(url)} ({source})" if url else ""
 
     # ---- selection ---------------------------------------------------------
 
