@@ -30,6 +30,7 @@ _URL_SETTINGS = {
         "openai_compatible_base_url",
     ),
 }
+URL_CONFIG_KEYS = frozenset(setting[1] for setting in _URL_SETTINGS.values())
 # How url_in_effect names the source of a URL that /login, cortex login or
 # a version before 2.0.12 saved.
 _SAVED = "saved in ~/.cortex/state.yaml"
@@ -229,6 +230,9 @@ def url_origin(provider: CloudProvider, source: str) -> str:
 _SECRET_PARAMETER = re.compile(r"key|token|secret|sig|pass|pwd|auth|credential|code", re.IGNORECASE)
 
 
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+
+
 def _shown_parameter(parameter: str) -> str:
     name, equals, value = parameter.partition("=")
     return f"{name}=***" if equals and value and _SECRET_PARAMETER.search(name) else parameter
@@ -240,11 +244,23 @@ def shown_url(url: str) -> str:
     try:
         parts = urlsplit(url)
     except ValueError:
-        return url
+        return _without_userinfo(url)
     if "@" in parts.netloc:
         parts = parts._replace(netloc="***@" + parts.netloc.rsplit("@", 1)[1])
     query = "&".join(_shown_parameter(parameter) for parameter in parts.query.split("&"))
-    return urlunsplit(parts._replace(query=query))
+    shown = urlunsplit(parts._replace(query=query))
+    return shown if _SCHEME.match(url) else _without_userinfo(shown)
+
+
+def _without_userinfo(shown: str) -> str:
+    """Text shown for a URL in which urlsplit read no host, because it does
+    not start with scheme:// (the URL the "must start with https:// or
+    http://" error is about) or cannot be parsed: what comes before an @ is
+    masked in each part between slashes, up to a ? or #, so a
+    user:password@ does not show. It only ever masks more of what is shown."""
+    end = re.search(r"[?#]", shown)
+    address = shown[: end.start()] if end else shown
+    return re.sub(r"[^/]*@", "***@", address) + shown[len(address):]
 
 
 def _describe_failure(

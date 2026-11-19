@@ -204,3 +204,66 @@ def test_a_failure_at_openai_or_anthropic_names_no_url_of_the_users(status, said
         _events(router)
 
     assert str(exc.value) == f"Cloud generation failed for openai:gpt-5.5 (the saved key): {said}"
+
+
+@pytest.mark.parametrize(
+    ("url", "shown"),
+    [
+        ("https://u:sekret@h:9/v1?api_key=K&region=eu", "https://***@h:9/v1?api_key=***&region=eu"),
+        ("ws://u:sekret@h/v1", "ws://***@h/v1"),
+        ("HTTP://u:sekret@h/v1", "http://***@h/v1"),
+        # No scheme, as in the error that says the URL needs one.
+        ("u:sekret@h:9/v1?api_key=K", "***@h:9/v1?api_key=***"),
+        ("sekret@h/v1", "***@h/v1"),
+        ("u:sekret@h?x=1", "***@h?x=1"),
+        ("u:sek@ret@h#x", "***@h#x"),
+        ("u:sekret@h/v1?next=http://x", "***@h/v1?next=http://x"),
+        # A scheme mistyped, or with something around it.
+        ("//u:sekret@h/v1", "//***@h/v1"),
+        ("https:/u:sekret@h/v1", "https:///***@h/v1"),
+        ("https//u:sekret@h/v1", "https//***@h/v1"),
+        ("://u:sekret@h", "://***@h"),
+        ("1http://u:sekret@h", "1http://***@h"),
+        ('"https://u:sekret@h"', '"https://***@h"'),
+        ("https ://u:sekret@h", "https ://***@h"),
+        (" http://u:sekret@h/v1", "http://***@h/v1"),
+        ("http:\t//u:sekret@h", "http://***@h"),
+        ("\x01https://u:sekret@h", "https://***@h"),
+        ("a@b/u:sekret@h/v1", "***@b/***@h/v1"),
+        # A URL that cannot be parsed.
+        ("http://u:sekret@[::1", "http://***@[::1"),
+        ("u:sekret@[::1", "***@[::1"),
+        # An @ that is no credential: after the host of a URL with a scheme,
+        # or after a ? or #.
+        ("https://h/users/a@b", "https://h/users/a@b"),
+        ("a+b://h/x@y", "a+b://h/x@y"),
+        ("h/v1?email=a@b", "h/v1?email=a@b"),
+        ("h#a@b", "h#a@b"),
+        # Nothing to mask.
+        ("h:9/v1", "h:9/v1"),
+        ("not-a-url", "not-a-url"),
+        ("/v1", "/v1"),
+        ("", ""),
+    ],
+)
+def test_a_shown_url_masks_its_credentials_with_or_without_a_scheme(url, shown):
+    from cortex.cloud.router import shown_url
+
+    assert shown_url(url) == shown
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "shown"),
+    [
+        ("cloud_openai_compatible_base_url", "u:sekret@h/v1", "***@h/v1"),
+        ("cloud_azure_endpoint", "sekret@h", "***@h"),
+        ("cloud_default_openai_model", "ft:gpt@org", "ft:gpt@org"),  # not a URL
+        ("cloud_default_openai_model", "http://u:sekret@h/v1", "http://***@h/v1"),
+        ("temperature", 0.3, "0.3"),
+        ("auto_update_check", False, "false"),
+    ],
+)
+def test_status_reads_only_a_url_setting_as_a_url_without_a_scheme(key, value, shown):
+    from cortex.app.command_service import _setting_text
+
+    assert _setting_text(key, value) == shown
