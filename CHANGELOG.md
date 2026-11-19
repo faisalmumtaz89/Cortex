@@ -27,8 +27,8 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   does not start with `https://` or `http://`) says where that URL is set,
   as `/status` does. For a saved one, which may be left from an earlier
   run, it gives the `/login` and `cortex login` commands that change it.
-  The "must start with" error names only the place the URL is set, not
-  also `/login`.
+  The "must start with" error names only the place the URL is set; it
+  used to name both the variable and `/login`, whichever that place was.
 - A password in an Azure endpoint or OpenAI-compatible base URL
   (`user:password@`) is masked also when the URL does not start with
   `https://` or `http://` and a host, or cannot be parsed. Before, the
