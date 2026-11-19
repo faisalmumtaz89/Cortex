@@ -123,3 +123,84 @@ def test_openai_and_anthropic_never_take_a_base_url_from_the_environment(monkeyp
     assert openai.endpoint == "https://api.openai.com/v1"
     assert str(anthropic.client.base_url) == "https://api.anthropic.com"
     assert anthropic.endpoint == "https://api.anthropic.com"
+
+
+def _status_error(status: int, message: str) -> Exception:
+    import httpx2 as httpx
+    import openai
+
+    response = httpx.Response(status, request=httpx.Request("POST", "http://h/v1"))
+    return openai.APIStatusError(message, response=response, body=None)
+
+
+@pytest.mark.parametrize(
+    ("exc", "named", "said"),
+    [
+        (_status_error(401, "Bad key."), "http://h/v1",
+         "Bad key. The URL in use, http://***@h/v1, is set in X."),
+        (_status_error(403, "No"), "http://u:p@h/v1",
+         "No. Check the model name and that your key may use it, and that http://***@h/v1 is "
+         "where the API's paths start (often /v1). That URL is set in X."),
+        # Azure sends requests to a longer URL than the endpoint that is set.
+        (_status_error(404, "No"), "http://u:p@h/v1/openai/v1/",
+         "No. Check the model name and that your key may use it, and that "
+         "http://***@h/v1/openai/v1/ is where the API's paths start (often /v1). "
+         "The URL in use, http://***@h/v1, is set in X."),
+        # The server's message keeps the way it ends.
+        (_status_error(401, "Really?"), "", "Really? The URL in use, http://***@h/v1, is set in X."),
+        (_status_error(401, "Wait...\n"), "", "Wait... The URL in use, http://***@h/v1, is set in X."),
+        (_status_error(401, "Denied"), "", "Denied. The URL in use, http://***@h/v1, is set in X."),
+        (_status_error(400, "Bad request"), "http://u:p@h/v1", "Bad request"),
+        (_status_error(429, "Slow down"), "http://u:p@h/v1", "Slow down"),
+    ],
+)
+def test_a_failure_the_url_may_explain_says_where_the_url_is_set(exc, named, said):
+    from cortex.cloud.router import _describe_failure
+
+    described = _describe_failure(
+        exc, named, custom_url=True, url="http://u:p@h/v1", origin="set in X")
+    assert described == said
+
+
+def test_a_timeout_and_a_connection_with_no_cause_say_where_the_url_is_set():
+    import httpx2 as httpx
+    import openai
+
+    from cortex.cloud.router import _describe_failure
+
+    request = httpx.Request("POST", "http://h/v1")
+    for exc, said in (
+        (openai.APITimeoutError(request=request),
+         "timed out waiting for http://h/v1. That URL is set in X."),
+        (openai.APIConnectionError(request=request),
+         "could not reach http://h/v1. That URL is set in X."),
+    ):
+        assert _describe_failure(
+            exc, "http://h/v1", custom_url=True, url="http://h/v1", origin="set in X") == said
+        # At OpenAI or Anthropic there is no URL of the user's to name.
+        assert _describe_failure(exc, "http://h/v1") == said.split(". That URL")[0]
+
+
+@pytest.mark.parametrize(
+    ("status", "said"),
+    [
+        (401, "Bad key."),
+        (404, "No. Check the model name and that your key may use it."),
+    ],
+)
+def test_a_failure_at_openai_or_anthropic_names_no_url_of_the_users(status, said):
+    router = _make_router(_DummyCredentials(key="abc", source="keychain"))
+
+    class _Client:
+        base_url = "https://api.openai.com/v1"
+
+        def stream_events(self, **_kwargs):
+            raise _status_error(status, "Bad key." if status == 401 else "No")
+            yield
+
+    router._build_client = lambda _provider, _api_key: _Client()
+
+    with pytest.raises(RuntimeError) as exc:
+        _events(router)
+
+    assert str(exc.value) == f"Cloud generation failed for openai:gpt-5.5 (the saved key): {said}"

@@ -13,7 +13,8 @@ import re
 import sys
 from typing import List
 
-from cortex.app.model_service import LOGIN_URL_ARGUMENT, ModelService
+from cortex.app.model_service import ModelService
+from cortex.cloud.router import LOGIN_URL_ARGUMENT
 from cortex.cloud.types import CloudProvider
 
 _PROVIDERS = ", ".join(sorted(provider.value for provider in CloudProvider))

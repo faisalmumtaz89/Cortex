@@ -11,9 +11,9 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   given `--preserve-status`.
 - `/status` shows the Azure endpoint or OpenAI-compatible base URL the
   active model uses, and where it is set: its environment variable,
-  `config.yaml` or its `CORTEX_CLOUD_*` variable, or saved with `/login`.
-  A `/login` or `cortex login` that saves only a key names its provider's
-  URL the same way.
+  `config.yaml` or its `CORTEX_CLOUD_*` variable, or saved in
+  `~/.cortex/state.yaml`. A `/login` or `cortex login` that saves only a
+  key names its provider's URL the same way.
 - A run stopped by a signal while a command runs (`timeout`, a cancelled
   CI job) exits as soon as the command has ended, instead of always waiting
   3 seconds: the 3 seconds before SIGKILL are now only for a command that
@@ -22,6 +22,14 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   saved only after it answers, so a mistyped name is not restored next
   session or kept in the picker. Until then, in the app, a failed reply
   says the model is not saved and how to choose another.
+- An error the URL may explain (an Azure endpoint or OpenAI-compatible base
+  URL that could not be reached, timed out, answered 401, 403 or 404, or
+  does not start with `https://` or `http://`) says where that URL is set:
+  its environment variable, `config.yaml` or its `CORTEX_CLOUD_*` variable,
+  or saved in `~/.cortex/state.yaml`. For a saved one, which may be left
+  from an earlier run, it gives the `/login` and `cortex login` commands
+  that change it. The "must start with" error names the one place the URL
+  is set, where it always named both the variable and `/login`.
 
 ## 2.0.12
 
