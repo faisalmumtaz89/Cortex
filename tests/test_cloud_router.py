@@ -230,6 +230,8 @@ def test_a_failure_at_openai_or_anthropic_names_no_url_of_the_users(status, said
         ("http:\t//u:sekret@h", "http://***@h"),
         ("\x01https://u:sekret@h", "https://***@h"),
         ("a@b/u:sekret@h/v1", "***@b/***@h/v1"),
+        # A scheme with no host after it.
+        ("https:///u:sekret@h/v1", "https:///***@h/v1"),
         # A URL that cannot be parsed.
         ("http://u:sekret@[::1", "http://***@[::1"),
         ("u:sekret@[::1", "***@[::1"),

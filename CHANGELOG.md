@@ -24,18 +24,16 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   says the model is not saved and how to choose another.
 - An error the URL may explain (an Azure endpoint or OpenAI-compatible base
   URL that could not be reached, timed out, answered 401, 403 or 404, or
-  does not start with `https://` or `http://`) says where that URL is set:
-  its environment variable, `config.yaml` or its `CORTEX_CLOUD_*` variable,
-  or saved in `~/.cortex/state.yaml`. For a saved one, which may be left
-  from an earlier run, it gives the `/login` and `cortex login` commands
-  that change it. The "must start with" error now names only the place the
-  URL is set; before, it named both the variable and `/login`, wherever
-  the URL was set.
-- An Azure endpoint or OpenAI-compatible base URL that does not start with
-  `scheme://` (no scheme, `https:/`, a quote before it), or that cannot be
-  parsed, is shown with its `user:password@` masked: in the "must start
-  with" error, in `/login` and `cortex login`, and among the settings
-  `/status` lists.
+  does not start with `https://` or `http://`) says where that URL is set,
+  as `/status` does. For a saved one, which may be left from an earlier
+  run, it gives the `/login` and `cortex login` commands that change it.
+  The "must start with" error names only the place the URL is set, not
+  also `/login`.
+- A password in an Azure endpoint or OpenAI-compatible base URL
+  (`user:password@`) is masked also when the URL does not start with
+  `https://` or `http://` and a host, or cannot be parsed. Before, the
+  "must start with" error, `/login`, `cortex login` and the settings
+  `/status` lists printed it, CI logs included.
 
 ## 2.0.12
 
