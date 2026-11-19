@@ -28,8 +28,14 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   its environment variable, `config.yaml` or its `CORTEX_CLOUD_*` variable,
   or saved in `~/.cortex/state.yaml`. For a saved one, which may be left
   from an earlier run, it gives the `/login` and `cortex login` commands
-  that change it. The "must start with" error names the one place the URL
-  is set, where it always named both the variable and `/login`.
+  that change it. The "must start with" error now names only the place the
+  URL is set; before, it named both the variable and `/login`, wherever
+  the URL was set.
+- An Azure endpoint or OpenAI-compatible base URL that does not start with
+  `scheme://` (no scheme, `https:/`, a quote before it), or that cannot be
+  parsed, is shown with its `user:password@` masked: in the "must start
+  with" error, in `/login` and `cortex login`, and among the settings
+  `/status` lists.
 
 ## 2.0.12
 

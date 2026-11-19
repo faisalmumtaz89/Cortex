@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Dict, cast
 
 from cortex.app.command_output import format_auth_status, format_status_summary
-from cortex.cloud.router import LOGIN_URL_ARGUMENT, shown_url
+from cortex.cloud.router import LOGIN_URL_ARGUMENT, URL_CONFIG_KEYS, shown_url
 from cortex.cloud.types import CloudProvider
 from cortex.update_check import running_cortex_version
 
@@ -18,12 +18,15 @@ _CLOUD_LOGIN_PROVIDERS = {"openai", "anthropic", "azure", "openai-compatible"}
 _MODEL_USAGE = "Usage: /model <provider>:<model> (example: /model openai:gpt-5.5)"
 
 
-def _setting_text(value: object) -> str:
+def _setting_text(key: str, value: object) -> str:
     """A setting's value as config.yaml writes it; a URL with any credentials
-    in it masked."""
+    in it masked. A value with no scheme is read as a URL only for a URL
+    setting: a model name may have an @ in it too."""
     if isinstance(value, bool):
         return "true" if value else "false"
-    return shown_url(value) if isinstance(value, str) else str(value)
+    if isinstance(value, str) and (key in URL_CONFIG_KEYS or "://" in value):
+        return shown_url(value)
+    return str(value)
 
 
 class CommandService:
@@ -151,7 +154,7 @@ class CommandService:
             home = str(Path.home())
             cwd = str(Path.cwd())
             settings = [
-                f"{key} {_setting_text(value)} ({source})"
+                f"{key} {_setting_text(key, value)} ({source})"
                 for key, value, source in self.model_service.config.settings_in_effect()
             ]
             status = {

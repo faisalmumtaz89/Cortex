@@ -1071,6 +1071,7 @@ def test_status_lists_the_settings_in_effect(tmp_path: Path, scratch_repo: Path)
     config = tmp_path / "home" / ".cortex" / "config.yaml"
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text("temperature: 0.3\ntools_max_iterations: 1001\n"
+                      "cloud_default_anthropic_model: claude-x@20260101\n"
                       "cloud_openai_compatible_base_url: https://me:hunter2@llm.example.com/v1\n")
     env["CORTEX_MAX_TOKENS"] = "8000"
     harness = WorkerHarness(cwd=scratch_repo, env=env)
@@ -1083,6 +1084,7 @@ def test_status_lists_the_settings_in_effect(tmp_path: Path, scratch_repo: Path)
     # The suite's own CORTEX_AUTO_UPDATE_CHECK is one of them.
     assert (
         "- Settings: auto_update_check false (CORTEX_AUTO_UPDATE_CHECK), "
+        "cloud_default_anthropic_model claude-x@20260101 (config.yaml), "
         "cloud_openai_compatible_base_url https://***@llm.example.com/v1 (config.yaml), "
         "max_tokens 8000 (CORTEX_MAX_TOKENS), temperature 0.3 (config.yaml)"
     ) in status, status
@@ -3282,11 +3284,12 @@ def test_a_failed_connection_names_the_host_and_why(tmp_path: Path, scratch_repo
             in queried.stderr), queried.stderr
     assert "sk-in-the-query" not in queried.stderr and "t0k" not in queried.stderr
 
-    env["OPENAI_COMPATIBLE_BASE_URL"] = f"127.0.0.1:{closed_port}/v1"  # no scheme
+    env["OPENAI_COMPATIBLE_BASE_URL"] = f"ci:sk-in-the-url@127.0.0.1:{closed_port}/v1"  # no scheme
     unusable = subprocess.run(command, cwd=scratch_repo, env=env, capture_output=True, text=True,
                               timeout=120)
     assert unusable.returncode == 2, unusable.stderr
-    assert (f"openai-compatible's URL 127.0.0.1:{closed_port}/v1 must start with https:// or "
+    assert "sk-in-the-url" not in unusable.stderr
+    assert (f"openai-compatible's URL ***@127.0.0.1:{closed_port}/v1 must start with https:// or "
             "http://. It is set in OPENAI_COMPATIBLE_BASE_URL.") in unusable.stderr, unusable.stderr
     assert "/login" not in unusable.stderr  # not the place to fix it
 
