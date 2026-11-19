@@ -18,6 +18,10 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   CI job) exits as soon as the command has ended, instead of always waiting
   3 seconds: the 3 seconds before SIGKILL are now only for a command that
   keeps running.
+- A model picked by typing a name the `/model` picker does not list is
+  saved only after it answers, so a mistyped name is not restored next
+  session or kept in the picker. Until then, in the app, a failed reply
+  says the model is not saved and how to choose another.
 
 ## 2.0.12
 

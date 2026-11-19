@@ -2794,6 +2794,142 @@ def test_openai_compatible_setup_finishes_inside_the_app(
     assert "openai-compatible:deepseek/deepseek-v4.1-flash" in selectors, selectors
 
 
+def test_a_model_chosen_by_name_is_saved_once_it_answers(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A name /model takes may be one the provider does not serve: it is saved
+    as the model to restore, and kept in the picker, once it answers. A turn
+    it fails without answering says so and how to choose another."""
+    refused = {"error": 'Error code: 400 - Model "no-such-model" is not supported'}
+    script = _write_script(
+        tmp_path / "script.json",
+        [
+            [refused],
+            [{"text": "Half an ans", "error": "the stream dropped"}],
+            [{"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]},
+             {"error": "the stream dropped"}],
+            [{"text": ""}],
+            [refused],
+        ],
+    )
+    env = _worker_env(tmp_path, script)
+    state = tmp_path / "home" / ".cortex" / "state.yaml"
+    hint = (
+        "openai:no-such-model is not saved as your model until it answers. "
+        "If the name is wrong, choose another with /model."
+    )
+
+    def turn(harness: WorkerHarness, session_id: str, model: str) -> dict:
+        harness.wait_response(harness.send(
+            "command.execute", {"session_id": session_id, "command": f"/model {model}"}))
+        return harness.wait_response(harness.send(
+            "session.submit_user_input", {"session_id": session_id, "user_input": "Say hi."}
+        ))["result"]
+
+    def saved_model() -> str:
+        text = state.read_text(encoding="utf-8") if state.exists() else ""
+        return next((line.split(": ")[1] for line in text.splitlines()
+                     if line.startswith("last_used_cloud_model:")), "")
+
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        failed = turn(harness, session_id, "openai:no-such-model")
+        after_failed = saved_model()
+        answered = turn(harness, session_id, "openai:half-answer")
+        after_text = saved_model()
+        listed = harness.wait_response(harness.send("model.list", {}))["result"]
+        called = turn(harness, session_id, "openai:calls-a-tool")
+        after_tool_call = saved_model()
+        turn(harness, session_id, "openai:empty-reply")
+        after_empty_reply = saved_model()
+        again = turn(harness, session_id, "openai:no-such-model")
+    finally:
+        harness.close()
+
+    assert (failed["ok"], failed["hint"]) == (False, hint)
+    assert (again["ok"], again["hint"]) == (False, hint)
+    assert after_failed == ""
+    # Still in the picker for this session, after another model is chosen.
+    assert "openai:no-such-model" in [row["selector"] for row in listed["cloud"]]
+    # A model that answered, even with a reply that broke off, is saved.
+    assert (answered["ok"], answered["hint"], after_text) == (False, "", "half-answer")
+    assert (called["ok"], called["hint"], after_tool_call) == (False, "", "calls-a-tool")
+    assert after_empty_reply == "empty-reply"
+    assert saved_model() == "empty-reply"
+    assert "no-such-model" not in state.read_text(encoding="utf-8")
+    # The error event is the same for a headless run, which has no /model.
+    assert all("hint" not in event["payload"] for event in harness.events_of("session.error"))
+
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        _start_session(harness)
+        notices = [event["payload"].get("message") for event in harness.events_of("system.notice")]
+        listed = harness.wait_response(harness.send("model.list", {}))["result"]
+    finally:
+        harness.close()
+    assert any("Restored openai:empty-reply" in str(notice) for notice in notices), notices
+    selectors = [row["selector"] for row in listed["cloud"]]
+    assert "openai:half-answer" in selectors and "openai:no-such-model" not in selectors
+
+
+def test_a_reply_cut_off_before_any_text_still_counts_as_an_answer(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A model that spends its whole output limit thinking did respond: its
+    name is right, so the error must not say to choose another."""
+    server = ChatCompletionsServer([{"text": "", "finish": "length"}])
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        harness.wait_response(harness.send("command.execute", {
+            "session_id": session_id, "command": f"/model openai-compatible:{server.model}"}))
+        result = harness.wait_response(harness.send(
+            "session.submit_user_input", {"session_id": session_id, "user_input": "Say hi."}
+        ))["result"]
+    finally:
+        harness.close()
+        server.close()
+
+    assert (result["ok"], result["hint"]) == (False, ""), result
+    state = (tmp_path / "home" / ".cortex" / "state.yaml").read_text(encoding="utf-8")
+    assert f"last_used_cloud_model: {server.model}" in state
+
+
+def test_a_reply_that_arrives_after_another_model_is_chosen_does_not_save_its_model(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """/model runs at once while a turn is busy: the reply of the model the
+    turn started with must not replace the choice made since."""
+    script = _write_script(tmp_path / "script.json", [[{"delay_ms": 1500, "text": "Late reply."}]])
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    state = tmp_path / "home" / ".cortex" / "state.yaml"
+    try:
+        session_id = _start_session(harness)
+        harness.wait_response(harness.send(
+            "command.execute", {"session_id": session_id, "command": "/model openai:first-name"}))
+        turn = harness.send(
+            "session.submit_user_input", {"session_id": session_id, "user_input": "Say hi."})
+        time.sleep(0.3)
+        catalog = harness.wait_response(harness.send("model.list", {}))["result"]["cloud"]
+        listed = next(row["selector"] for row in catalog if row["selector"] != "openai:first-name")
+        harness.wait_response(harness.send(
+            "command.execute", {"session_id": session_id, "command": f"/model {listed}"}))
+        reply = harness.wait_response(turn)["result"]
+    finally:
+        harness.close()
+
+    assert reply["assistant_text"] == "Late reply."
+    saved = state.read_text(encoding="utf-8")
+    model_id = listed.partition(":")[2]
+    assert f"last_used_cloud_model: {model_id}" in saved
+    assert "- openai:first-name" in saved  # it answered: the picker keeps its name
+
+
 def test_edit_prompts_show_the_change_before_it_is_made(
     tmp_path: Path, scratch_repo: Path
 ) -> None:

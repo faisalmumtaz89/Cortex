@@ -30,7 +30,7 @@ Files Cortex writes outside the project (the folder `~/.cortex` opens only for y
       action: allow
       repo: ~/code/myproject
   ```
-- `~/.cortex/cloud_models.json` — optional models to add to the `/model` picker, by provider, such as `{"openai-compatible": ["deepseek/deepseek-v4.1-flash"], "azure": ["my-deployment"]}`. `openai-compatible` has no built-in models: a model you select by name is listed from then on, and this file lists models before you have used them.
+- `~/.cortex/cloud_models.json` — optional models to add to the `/model` picker, by provider, such as `{"openai-compatible": ["deepseek/deepseek-v4.1-flash"], "azure": ["my-deployment"]}`. `openai-compatible` has no built-in models: a model you select by name is listed in later sessions once it has answered, and this file lists models before you have used them.
 
 ## Template
 

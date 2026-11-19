@@ -256,6 +256,7 @@ class SessionService:
                     # Never surface a new tool row for a turn that is unwinding.
                     raise TurnInterruptedError()
                 pending_tool_calls[event.call.id] = event.call.name
+                self.model_service.model_answered(active_target.cloud_model)
                 emit_event(
                     session_id=session_id,
                     event_type="message.part.updated",
@@ -305,6 +306,7 @@ class SessionService:
                 if not delta:
                     return
                 assistant_chunks.append(delta)
+                self.model_service.model_answered(active_target.cloud_model)
                 emit_event(
                     session_id=session_id,
                     event_type="message.part.updated",
@@ -419,6 +421,8 @@ class SessionService:
                         message_id=assistant_message_id,
                         parts=exc.parts,
                     )
+                if isinstance(exc, ReplyCutOffError):  # the model replied, to its limit
+                    self.model_service.model_answered(active_target.cloud_model)
                 emit_event(
                     session_id=session_id,
                     event_type="session.error",
@@ -455,6 +459,9 @@ class SessionService:
                     "active_model_label": active_model_label,
                     "ok": False,
                     "error": str(exc),
+                    # The app's next step; a headless run, which has no /model,
+                    # does not print it.
+                    "hint": self.model_service.unanswered_hint(active_target.cloud_model),
                 }
         finally:
             self.tooling_bridge.unbind_turn()
@@ -467,6 +474,7 @@ class SessionService:
         # answered), not just intent — a mismatch never reaches this point
         # because the orchestrator rejects the turn.
         served_model_label = turn_result.served_model_label or active_model_label
+        self.model_service.model_answered(active_target.cloud_model)
         self.model_service.record_turn_provenance(
             label=served_model_label,
             verified=turn_result.provenance_verified,

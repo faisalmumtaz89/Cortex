@@ -349,7 +349,8 @@ def run_headless(
         return 2
 
     # The state a --model run would overwrite, put back if the provider
-    # refuses the model: a mistyped name must not become the saved choice.
+    # refuses the model: one it does not let this key use must not become the
+    # saved choice (a name the catalog does not list is saved only once it answers).
     saved_state = {key: config.get_state_value(key) for key in _MODEL_STATE_KEYS}
     if model:
         selection = runtime.command_service.execute(
