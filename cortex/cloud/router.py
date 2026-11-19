@@ -249,15 +249,16 @@ def shown_url(url: str) -> str:
         parts = parts._replace(netloc="***@" + parts.netloc.rsplit("@", 1)[1])
     query = "&".join(_shown_parameter(parameter) for parameter in parts.query.split("&"))
     shown = urlunsplit(parts._replace(query=query))
-    return shown if _SCHEME.match(url) else _without_userinfo(shown)
+    host_read = bool(parts.netloc) and _SCHEME.match(url)
+    return shown if host_read else _without_userinfo(shown)
 
 
 def _without_userinfo(shown: str) -> str:
-    """Text shown for a URL in which urlsplit read no host, because it does
-    not start with scheme:// (the URL the "must start with https:// or
-    http://" error is about) or cannot be parsed: what comes before an @ is
-    masked in each part between slashes, up to a ? or #, so a
-    user:password@ does not show. It only ever masks more of what is shown."""
+    """Text shown for a URL that does not start with scheme:// and a host
+    (the URL the "must start with https:// or http://" error is about) or
+    that cannot be parsed: what comes before an @ is masked in each part
+    between slashes, up to a ? or #, so a user:password@ does not show. It
+    only ever masks more of what is shown."""
     end = re.search(r"[?#]", shown)
     address = shown[: end.start()] if end else shown
     return re.sub(r"[^/]*@", "***@", address) + shown[len(address):]
