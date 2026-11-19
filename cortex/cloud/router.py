@@ -30,6 +30,14 @@ _URL_SETTINGS = {
         "openai_compatible_base_url",
     ),
 }
+# How url_in_effect names the source of a URL that /login, cortex login or
+# a version before 2.0.12 saved.
+_SAVED = "saved in ~/.cortex/state.yaml"
+# Providers whose /login also takes the URL requests go to.
+LOGIN_URL_ARGUMENT = {
+    CloudProvider.AZURE: "<endpoint>",
+    CloudProvider.OPENAI_COMPATIBLE: "<base_url>",
+}
 
 
 class CloudRouter:
@@ -52,7 +60,7 @@ class CloudRouter:
     def url_in_effect(self, provider: CloudProvider) -> Tuple[str, str]:
         """The Azure endpoint or OpenAI-compatible base URL requests go to, and
         where it is set: its environment variable, else ~/.cortex/config.yaml,
-        else saved with /login (("", "") if none)."""
+        else saved state (("", "") if none)."""
         if provider not in _URL_SETTINGS:
             return "", ""
         env_name = _URL_SETTINGS[provider][0]
@@ -71,7 +79,7 @@ class CloudRouter:
         get_state = getattr(self.config, "get_state_value", None)
         if callable(get_state):
             url = str(get_state(state_key, "") or "").strip().rstrip("/")
-        return (url, "saved with /login") if url else ("", "")
+        return (url, _SAVED) if url else ("", "")
 
     def saved_endpoint_url(self, provider: CloudProvider) -> str:
         """The Azure endpoint or OpenAI-compatible base URL kept across sessions ("" if none)."""
@@ -195,10 +203,26 @@ class CloudRouter:
             logger.error("Cloud generation failed for %s: %s", model_ref.selector, exc)
             endpoint = str(getattr(client, "endpoint", "") or getattr(client, "base_url", ""))
             custom = model_ref.provider in (CloudProvider.AZURE, CloudProvider.OPENAI_COMPATIBLE)
+            url, url_source = self.url_in_effect(model_ref.provider)
+            failure = _describe_failure(
+                exc, endpoint, custom_url=custom,
+                url=url, origin=url_origin(model_ref.provider, url_source) if url else "",
+            )
             raise RuntimeError(
-                f"Cloud generation failed for {model_ref.selector}{key_label}: "
-                f"{_describe_failure(exc, endpoint, custom_url=custom)}"
+                f"Cloud generation failed for {model_ref.selector}{key_label}: {failure}"
             ) from exc
+
+
+def url_origin(provider: CloudProvider, source: str) -> str:
+    """Where a provider's URL is set, as url_in_effect names it, worded for a
+    message; for a saved one, also how to replace it."""
+    if source != _SAVED:
+        return f"set in {source}"
+    argument = LOGIN_URL_ARGUMENT[provider]
+    return (
+        f"{_SAVED}; to change it: /login {provider.value} <api_key> {argument} in the app, "
+        f"or `cortex login {provider.value} {argument}`"
+    )
 
 
 # A query parameter whose name has one of these in it holds a credential.
@@ -223,17 +247,22 @@ def shown_url(url: str) -> str:
     return urlunsplit(parts._replace(query=query))
 
 
-def _describe_failure(exc: Exception, endpoint: str = "", *, custom_url: bool = False) -> str:
+def _describe_failure(
+    exc: Exception, endpoint: str = "", *, custom_url: bool = False, url: str = "", origin: str = ""
+) -> str:
     """The error, with what to check: for a connection that failed, the host
     and why; else the reason the server gave in its status line when the
     message lacks it (a gateway that answers "403 model not allowed: ..."
-    with no body)."""
+    with no body). When the URL may be what is wrong (no connection, or the
+    server answered 401, 403 or 404) and it is a URL of the user's (`url`,
+    set where `origin` says), also where it is set."""
     if isinstance(exc, (openai.APIConnectionError, anthropic.APIConnectionError)):
         timed_out = isinstance(exc, (openai.APITimeoutError, anthropic.APITimeoutError))
         cause = exc.__cause__ or exc.__context__
         why = f" ({cause})" if cause is not None and str(cause) and not timed_out else ""
         verb = "timed out waiting for" if timed_out else "could not reach"
-        return f"{verb} {shown_url(endpoint) or 'the provider'}{why}"
+        failure = f"{verb} {shown_url(endpoint) or 'the provider'}{why}"
+        return _where_set(failure, url, origin, named=endpoint) or failure
     text = str(exc)
     response = getattr(exc, "response", None)
     reason = str(getattr(response, "reason_phrase", "") or "").strip()
@@ -243,11 +272,26 @@ def _describe_failure(exc: Exception, endpoint: str = "", *, custom_url: bool = 
         standard = ""
     if reason and reason != standard and reason.lower() not in text.lower():
         text = f"{text} ({reason})"
-    if getattr(response, "status_code", None) in (403, 404):
+    status = getattr(response, "status_code", None)
+    if status in (403, 404):
         # The usual cause: a model name the provider does not know, or one
         # this key may not use; with a URL of your own, also the URL.
         text = f"{text}. Check the model name and that your key may use it"
         if custom_url and endpoint:
             text += f", and that {shown_url(endpoint)} is where the API's paths start (often /v1)"
-        text += "."
+        return _where_set(text, url, origin, named=endpoint) or f"{text}."
+    if status == 401:
+        return _where_set(text, url, origin) or text
     return text
+
+
+def _where_set(failure: str, url: str, origin: str, *, named: str = "") -> str:
+    """The failure, followed by where the user's URL is set ("" when it is
+    not a URL of theirs). `named` is the URL the failure has shown: Azure
+    requests go to a longer one than the endpoint that is set."""
+    if not origin:
+        return ""
+    which = "That URL" if named == url else f"The URL in use, {shown_url(url)},"
+    failure = failure.rstrip()  # a server's message, as it ends it
+    ended = failure.endswith((".", "?", "!"))
+    return f"{failure}{' ' if ended else '. '}{which} is {origin}."

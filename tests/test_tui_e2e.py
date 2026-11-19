@@ -2045,7 +2045,7 @@ def test_status_names_the_url_the_active_model_uses(tui_project) -> None:
     session.wait_for("Session ready")
     session.send_line("/status")
     panel = session.wait_for("Directory:", timeout=15)
-    assert "URL: http://127.0.0.1:9/v1 (saved with /login)" in panel, panel
+    assert "URL: http://127.0.0.1:9/v1 (saved in ~/.cortex/state.yaml)" in panel, panel
 
 
 def test_an_error_that_wraps_keeps_the_input_in_view(tui_project) -> None:

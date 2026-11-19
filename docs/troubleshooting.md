@@ -186,6 +186,7 @@ chmod -R u+rwX ~/.cortex/
 | "No model loaded" | No model selected | `/login <provider> <key>`, then `/model` |
 | `error: no model selected` from `cortex -p` (exit 2) | No `--model`, and no remembered model (it lives in `~/.cortex/state.yaml`) | Pass `--model provider:model`; the model a run uses is remembered for the next |
 | "No API key configured for <provider>" | Model selected without credentials | `/login <provider> <key>` or the environment variable named in the message |
+| An error that contains "... is saved in ~/.cortex/state.yaml; to change it: ..." | The URL in use for Azure or `openai-compatible` is a saved one (by `/login` or `cortex login`, or by a version before 2.0.12 from an environment variable), which may no longer be right | If it is wrong: `/login <provider> <api_key> <url>` in the app, or `cortex login <provider> <url>`; `/status` shows the URL in use |
 | "Unsupported provider" | `/model` selector without a known provider | `/model <provider>:<model>` with openai, anthropic, azure, or openai-compatible |
 | `[tool] bash refused (needs --full-auto)` in a headless run | Headless runs refuse edits and commands without `--full-auto` | Pass `--full-auto`, or allow chosen commands in `~/.cortex/tool_permissions.yaml` (see the [Configuration Guide](configuration.md)) |
 | "Not allowed: a rule in ~/.cortex/tool_permissions.yaml denies this ..." | A deny rule you saved | Edit `~/.cortex/tool_permissions.yaml` |

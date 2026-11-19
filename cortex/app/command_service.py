@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Callable, Dict, cast
 
 from cortex.app.command_output import format_auth_status, format_status_summary
-from cortex.app.model_service import LOGIN_URL_ARGUMENT
-from cortex.cloud.router import shown_url
+from cortex.cloud.router import LOGIN_URL_ARGUMENT, shown_url
 from cortex.cloud.types import CloudProvider
 from cortex.update_check import running_cortex_version
 

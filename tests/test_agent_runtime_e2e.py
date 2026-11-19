@@ -1132,8 +1132,8 @@ def test_status_and_a_key_only_login_name_the_url_in_use(
         return status, login
 
     status, login = status_and_login(env)
-    assert "- URL: http://127.0.0.1:9/v1 (saved with /login)" in status, status
-    assert "URL: http://127.0.0.1:9/v1 (saved with /login)." in login, login
+    assert "- URL: http://127.0.0.1:9/v1 (saved in ~/.cortex/state.yaml)" in status, status
+    assert "URL: http://127.0.0.1:9/v1 (saved in ~/.cortex/state.yaml)." in login, login
 
     for variable, url in [
         ("OPENAI_COMPATIBLE_BASE_URL", "http://127.0.0.1:8/v1"),
@@ -1145,15 +1145,15 @@ def test_status_and_a_key_only_login_name_the_url_in_use(
 
     cli = _cortex_login(env, scratch_repo, ["openai-compatible"], "sk-from-stdin")
     assert cli.returncode == 0, cli.stderr
-    assert "URL: http://127.0.0.1:9/v1 (saved with /login)." in cli.stdout, cli.stdout
+    assert "URL: http://127.0.0.1:9/v1 (saved in ~/.cortex/state.yaml)." in cli.stdout, cli.stdout
 
     # One requests refuse is named all the same, with where to fix it.
     state.write_text("openai_compatible_base_url: ftp://127.0.0.1/v1\n", encoding="utf-8")
     _status, login = status_and_login(env)
-    assert "URL: ftp://127.0.0.1/v1 (saved with /login)." in login, login
+    assert "URL: ftp://127.0.0.1/v1 (saved in ~/.cortex/state.yaml)." in login, login
     cli = _cortex_login(env, scratch_repo, ["openai-compatible"], "sk-from-stdin")
     assert cli.returncode == 0, cli.stderr
-    assert "URL: ftp://127.0.0.1/v1 (saved with /login)." in cli.stdout, cli.stdout
+    assert "URL: ftp://127.0.0.1/v1 (saved in ~/.cortex/state.yaml)." in cli.stdout, cli.stdout
 
 
 def test_the_first_session_after_an_update_says_what_changed(tmp_path: Path, scratch_repo: Path) -> None:
@@ -3250,8 +3250,9 @@ def _assert_sleep_ends() -> None:
 
 def test_a_failed_connection_names_the_host_and_why(tmp_path: Path, scratch_repo: Path) -> None:
     """`Connection error.` gives a CI author nothing to act on: the message
-    names the URL (credentials in it masked) and the cause. A 404 from an
-    endpoint of your own also points at its base URL."""
+    names the URL (credentials in it masked), the cause and where the URL is
+    set; for a saved one, which no variable shows, also how to replace it. A
+    404 from an endpoint of your own also points at its base URL."""
     env = _worker_env(tmp_path, tmp_path / "unused.json")
     env.pop("CORTEX_SCRIPTED_MODEL")
     env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
@@ -3268,6 +3269,8 @@ def test_a_failed_connection_names_the_host_and_why(tmp_path: Path, scratch_repo
     assert refused.returncode == 1, refused.stderr
     assert f"could not reach http://***@127.0.0.1:{closed_port}/v1 (" in refused.stderr, \
         refused.stderr
+    assert refused.stderr.rstrip().endswith(
+        "). That URL is set in OPENAI_COMPATIBLE_BASE_URL."), refused.stderr
     assert "sk-in-the-url" not in refused.stderr
 
     # A key some gateways take in the query, masked too; other parameters shown.
@@ -3284,7 +3287,51 @@ def test_a_failed_connection_names_the_host_and_why(tmp_path: Path, scratch_repo
                               timeout=120)
     assert unusable.returncode == 2, unusable.stderr
     assert (f"openai-compatible's URL 127.0.0.1:{closed_port}/v1 must start with https:// or "
-            "http://: fix OPENAI_COMPATIBLE_BASE_URL") in unusable.stderr, unusable.stderr
+            "http://. It is set in OPENAI_COMPATIBLE_BASE_URL.") in unusable.stderr, unusable.stderr
+    assert "/login" not in unusable.stderr  # not the place to fix it
+
+    # A URL saved by an earlier run or /login: nothing in this run's environment shows it.
+    change = ("saved in ~/.cortex/state.yaml; to change it: /login {0} <api_key> {1} in the app, "
+              "or `cortex login {0} {1}`.")
+    compatible = change.format("openai-compatible", "<base_url>")
+    home = tmp_path / "home" / ".cortex"
+    home.mkdir(exist_ok=True)
+    del env["OPENAI_COMPATIBLE_BASE_URL"]
+    env["AZURE_OPENAI_API_KEY"] = "sk-azure-test"
+    closed = f"http://127.0.0.1:{closed_port}"
+    rejecting = ChatCompletionsServer([{"status": 401}, {"status": 404}, {"status": 500}])
+    try:
+        for file, line, extra_env, model, code, said in (
+            ("state.yaml", f"openai_compatible_base_url: {closed}/v1", {},
+             "openai-compatible:test-model", 1, f"). That URL is {compatible}"),
+            ("state.yaml", f"openai_compatible_base_url: 127.0.0.1:{closed_port}/v1", {},
+             "openai-compatible:test-model", 2, f"http://. It is {compatible}"),
+            # Azure requests go to a longer URL than the endpoint that is set.
+            ("state.yaml", f"azure_endpoint: {closed}", {}, "azure:test-model", 1,
+             f"). The URL in use, {closed}, is {change.format('azure', '<endpoint>')}"),
+            ("config.yaml", f"cloud_openai_compatible_base_url: {closed}/v1", {},
+             "openai-compatible:test-model", 1, "). That URL is set in config.yaml."),
+            ("config.yaml", "", {"CORTEX_CLOUD_OPENAI_COMPATIBLE_BASE_URL": f"{closed}/v1"},
+             "openai-compatible:test-model", 1,
+             "). That URL is set in CORTEX_CLOUD_OPENAI_COMPATIBLE_BASE_URL."),
+            # A host that answers but rejects the key: the URL may be the wrong one.
+            ("state.yaml", f"openai_compatible_base_url: {rejecting.base_url}", {},
+             "openai-compatible:test-model", 1,
+             f"scripted 401. The URL in use, {rejecting.base_url}, is {compatible}"),
+            ("state.yaml", f"openai_compatible_base_url: {rejecting.base_url}", {},
+             "openai-compatible:test-model", 1, f"(often /v1). That URL is {compatible}"),
+            # Not a failure the URL explains.
+            ("state.yaml", f"openai_compatible_base_url: {rejecting.base_url}", {},
+             "openai-compatible:test-model", 1, "scripted 500"),
+        ):
+            (home / file).write_text(f"{line}\n", encoding="utf-8")
+            run = subprocess.run(
+                [*command[:-1], model], cwd=scratch_repo, env={**env, **extra_env},
+                capture_output=True, text=True, timeout=120)
+            assert (run.returncode, run.stderr.rstrip().endswith(said)) == (code, True), run.stderr
+            (home / file).unlink()
+    finally:
+        rejecting.close()
 
     server = ChatCompletionsServer([{"status": 404}])
     try:
@@ -3295,4 +3342,5 @@ def test_a_failed_connection_names_the_host_and_why(tmp_path: Path, scratch_repo
         server.close()
     assert missing.returncode == 1, missing.stderr
     assert (f"and that {server.base_url.removesuffix('/v1')} is where the API's paths start "
-            "(often /v1).") in missing.stderr, missing.stderr
+            "(often /v1). That URL is set in OPENAI_COMPATIBLE_BASE_URL.") in missing.stderr, \
+        missing.stderr

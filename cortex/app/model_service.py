@@ -6,15 +6,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from cortex.cloud import CloudCredentialStore, CloudModelCatalog, CloudRouter
 from cortex.cloud.credentials import ENV_KEY_MAP
-from cortex.cloud.router import shown_url
+from cortex.cloud.router import LOGIN_URL_ARGUMENT, shown_url, url_origin
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
-
-# Providers whose /login also takes the URL requests go to.
-LOGIN_URL_ARGUMENT = {
-    CloudProvider.AZURE: "<endpoint>",
-    CloudProvider.OPENAI_COMPATIBLE: "<base_url>",
-}
-
 
 # How many models picked by name the /model picker keeps listing.
 _REMEMBERED_MODELS = 5
@@ -198,15 +191,13 @@ class ModelService:
 
         url_argument = LOGIN_URL_ARGUMENT.get(provider_enum)
         if url_argument:
-            url = self.endpoint_url(provider_enum)
+            url, source = self.cloud_router.url_in_effect(provider_enum)
             if url and not url.startswith(("https://", "http://")):
-                variable = URL_ENV_VARIABLE[provider_enum]
                 return {
                     "ok": False,
                     "message": (
                         f"{provider_enum.value}'s URL {shown_url(url)} must start with https:// "
-                        f"or http://: fix {variable}, or the one saved with "
-                        f"/login {provider_enum.value} <api_key> {url_argument}."
+                        f"or http://. It is {url_origin(provider_enum, source)}."
                     ),
                 }
             if not url:
