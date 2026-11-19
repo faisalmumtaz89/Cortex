@@ -46,7 +46,8 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   your key to the URL an earlier run set there; give the URL to `/login` to
   keep it. A URL saved this way before 2.0.12 stays in
   `~/.cortex/state.yaml` until `/login` or `cortex login` replaces it or
-  you delete its line. `/login` shows "URL saved" only for a saved URL.
+  you delete its line. The `/login` picker shows "URL saved, no key" for a
+  provider only when a URL is saved for it and no key is.
 
 ## 2.0.11
 
