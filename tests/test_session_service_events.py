@@ -74,6 +74,12 @@ class _FakeModelService:
     def record_turn_provenance(self, *, label, verified, record) -> None:
         self.recorded_provenance.append({"label": label, "verified": verified, "record": record})
 
+    def model_answered(self, ref) -> None:
+        pass
+
+    def unanswered_hint(self, ref) -> str:
+        return ""
+
 
 class _FakeBridge:
     def bind_turn(self, *, session_id: str, emit_event) -> None:

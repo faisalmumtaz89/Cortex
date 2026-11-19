@@ -54,6 +54,10 @@ class ModelService:
         self.cloud_catalog = cloud_catalog
 
         self.active_target = ActiveModelTarget()
+        # Models chosen by name this session that have not answered yet, newest
+        # first: the name may be one the provider does not serve, so it is
+        # saved only once the model answers.
+        self._unanswered: list[CloudModelRef] = []
         # Last verified turn provenance: what actually answered the most
         # recent turn (set by the session service after verification).
         self.last_turn_provenance: dict | None = None
@@ -95,7 +99,7 @@ class ModelService:
         }
         refs = self.cloud_catalog.list_models()
         active_ref = self.active_target.cloud_model
-        for ref in [*self._selected_elsewhere(), active_ref]:
+        for ref in [*self._unanswered, *self._selected_elsewhere(), active_ref]:
             if ref is not None and ref not in refs:
                 refs.append(ref)
         cloud = []
@@ -229,14 +233,51 @@ class ModelService:
         result = {"ok": True, "message": f"{ref.selector} — now active.", "active_model": ref.selector}
         if not remember:
             return result
-        self.config.set_state_value("last_used_cloud_provider", provider_enum.value)
-        self.config.set_state_value("last_used_cloud_model", ref.model_id)
+        if self._known(ref):
+            self._save(ref)
+        else:
+            self._unanswered = [ref, *(other for other in self._unanswered if other != ref)]
+        return result
+
+    def _known(self, ref: CloudModelRef) -> bool:
+        """Whether the model is one the catalog lists or one that answered before."""
+        return (
+            ref in self.cloud_catalog.list_models()
+            or ref.selector in self._selected_selectors()
+            or (
+                self.config.get_state_value("last_used_cloud_provider") == ref.provider.value
+                and self.config.get_state_value("last_used_cloud_model") == ref.model_id
+            )
+        )
+
+    def _save(self, ref: CloudModelRef, *, to_restore: bool = True) -> None:
+        """Keep a model picked by name in the /model picker's list and, unless
+        told not to, save the model as the one to restore next session."""
+        if to_restore:
+            self.config.set_state_value("last_used_cloud_provider", ref.provider.value)
+            self.config.set_state_value("last_used_cloud_model", ref.model_id)
         if ref not in self.cloud_catalog.list_models():
-            # Picked by name (an OpenAI-compatible model, an Azure deployment):
-            # the /model picker lists it from now on.
+            # An OpenAI-compatible model, an Azure deployment.
             recent = [ref.selector, *(s for s in self._selected_selectors() if s != ref.selector)]
             self.config.set_state_value("selected_models", recent[:_REMEMBERED_MODELS])
-        return result
+
+    def model_answered(self, ref: CloudModelRef | None) -> None:
+        """The model replied (text or a tool call): a name chosen for it holds.
+        It becomes the model to restore only while it is still the one
+        selected: a reply that arrives after the user chose another must not
+        replace that choice."""
+        if ref is not None and ref in self._unanswered:
+            self._unanswered.remove(ref)
+            self._save(ref, to_restore=ref == self.active_target.cloud_model)
+
+    def unanswered_hint(self, ref: CloudModelRef | None) -> str:
+        """What a turn that failed before the model answered adds to its error."""
+        if ref is None or ref not in self._unanswered:
+            return ""
+        return (
+            f"{ref.selector} is not saved as your model until it answers. "
+            "If the name is wrong, choose another with /model."
+        )
 
     def auth_status(self, provider: CloudProvider) -> Dict[str, Any]:
         summary = self.credential_store.get_auth_summary(provider)

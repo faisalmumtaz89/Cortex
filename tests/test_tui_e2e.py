@@ -1496,6 +1496,33 @@ def test_turn_at_its_request_limit_shows_the_limit_and_can_continue(tui_project)
     session.wait_for("CONTINUED_MARKER", timeout=30)
 
 
+def test_a_model_name_that_fails_before_answering_says_how_to_choose_another(
+    tui_project,
+) -> None:
+    """The error comes at once, as from a provider that refuses the name: the
+    hint is on its own line under it, once, and the name is not saved."""
+    project, start = tui_project
+    session = start([[{"error": "Error code: 400 - no such model"}], [{"text": "SECOND_OK"}]])
+    session.wait_for("Session ready")
+    session.send_line("/model azure:no-such-model")
+    session.wait_for("azure:no-such-model — now active.")
+    session.send_key("Escape")
+    time.sleep(0.5)
+
+    session.send_line("Say hi.")
+    frame = session.wait_for("If the name is wrong, choose another with /model.", timeout=30)
+    assert "Error code: 400 - no such model" in frame
+    hint = "azure:no-such-model is not saved as your model until it answers."
+    assert [line.strip().startswith(hint) for line in frame.splitlines()].count(True) == 1, frame
+    state = project.parent / "home" / ".cortex" / "state.yaml"
+    assert not state.exists() or "no-such-model" not in state.read_text(encoding="utf-8")
+
+    session.send_line("again")
+    frame = session.wait_for("SECOND_OK", timeout=30)
+    assert "is not saved as your model" not in frame
+    assert "last_used_cloud_model: no-such-model" in state.read_text(encoding="utf-8")
+
+
 def test_failed_request_shows_retry_and_recovers(tui_project) -> None:
     from tests.chat_completions_server import ChatCompletionsServer
 

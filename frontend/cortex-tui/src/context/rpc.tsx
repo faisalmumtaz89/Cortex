@@ -250,7 +250,8 @@ export function RpcProvider(props: ParentProps) {
         // already in the transcript, so keep the input cleared and surface
         // the error instead of re-filling the prompt.
         const message = typeof result.error === "string" ? result.error : String(result.message ?? "Request failed")
-        store.setError(message)
+        store.flushPendingEvents() // a queued session.error must not replace the hint
+        store.setError(typeof result.hint === "string" && result.hint ? `${message}\n${result.hint}` : message)
         return true
       }
       store.flushPendingEvents()
