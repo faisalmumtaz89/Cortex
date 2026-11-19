@@ -1111,6 +1111,7 @@ def test_status_and_a_key_only_login_name_the_url_in_use(
     /status for the active model, and when a login saves only a key."""
     env = _worker_env(tmp_path, _write_script(tmp_path / "script.json", [[{"text": "Hi."}]]))
     env["OPENAI_COMPATIBLE_API_KEY"] = "sk-test-compatible"
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
     state = tmp_path / "home" / ".cortex" / "state.yaml"
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(
