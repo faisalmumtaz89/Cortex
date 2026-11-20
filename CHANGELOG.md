@@ -31,6 +31,11 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   while you run commands. That holds for an error shown above the input,
   such as that of a reply that failed. A command that fails shows its
   message as its result, and the next command's result replaces it.
+- A start no longer reads the conversation history: Cortex cannot reopen a
+  conversation, and loaded up to 100 earlier ones at every start for
+  nothing. `max_conversation_history`, which set that number, has no
+  effect and is named at startup if a config file still sets it. The
+  app's protocol no longer accepts a conversation to resume.
 
 ## 2.0.14
 

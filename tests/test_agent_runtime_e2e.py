@@ -1450,6 +1450,30 @@ def test_a_slash_command_runs_a_skill_and_the_worker_lists_skills(
     assert {"name": "look-only", "description": "Use to look around."} in listed
 
 
+def test_a_start_reads_no_earlier_conversation(tmp_path: Path, scratch_repo: Path) -> None:
+    """A start is a new conversation: what the history database holds is not
+    read, so a row in it that cannot be read is no matter and no warning."""
+    import sqlite3
+
+    script = _write_script(tmp_path / "script.json", [[{"text": "REPLY"}]])
+    env = _worker_env(tmp_path, script)
+    database = tmp_path / "home" / ".cortex" / "conversations" / "conversations.db"
+    said = []
+    for _start in range(2):
+        harness = WorkerHarness(cwd=scratch_repo, env=env)
+        try:
+            session_id = _start_session(harness)
+            harness.wait_response(harness.send("session.submit_user_input", {
+                "session_id": session_id, "user_input": "hi", "active_target": CLOUD_TARGET}))
+        finally:
+            harness.close()
+        assert harness.process.stderr is not None
+        said.append(harness.process.stderr.read())
+        with sqlite3.connect(database) as connection:  # the second start meets this
+            connection.execute("UPDATE conversations SET created_at = 'not a date'")
+    assert said[1] == "", said[1]
+
+
 def test_each_start_is_a_new_conversation(tmp_path: Path, scratch_repo: Path) -> None:
     """/save and the docs say Cortex cannot reopen a conversation: a second
     start sends the model nothing of the first, whose model it names."""

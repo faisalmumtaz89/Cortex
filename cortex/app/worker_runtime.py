@@ -505,10 +505,7 @@ class WorkerRuntime:
 
     def _rpc_session_create_or_resume(self, params: SessionCreateOrResumeParams):
         session_id = uuid.uuid4().hex
-        result = self.session_service.create_or_resume(
-            session_id=session_id,
-            conversation_id=params.conversation_id,
-        )
+        result = self.session_service.create_or_resume(session_id=session_id)
         # One compact startup notice instead of a stack of boxes.
         notice_parts = ["Session ready"]
         if not self._startup_notices_emitted:
