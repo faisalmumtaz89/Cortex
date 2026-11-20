@@ -1450,6 +1450,38 @@ def test_a_slash_command_runs_a_skill_and_the_worker_lists_skills(
     assert {"name": "look-only", "description": "Use to look around."} in listed
 
 
+def test_each_start_is_a_new_conversation(tmp_path: Path, scratch_repo: Path) -> None:
+    """/save and the docs say Cortex cannot reopen a conversation: a second
+    start sends the model nothing of the first, whose model it names."""
+    server = ChatCompletionsServer([{"text": "FIRST_REPLY"}, {"text": "SECOND_REPLY"}])
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    env.pop("OPENAI_API_KEY")
+    notices: list = []
+    try:
+        for said in ("remember the word apple", "what was the word?"):
+            harness = WorkerHarness(cwd=scratch_repo, env=env)
+            try:
+                session_id = _start_session(harness)
+                notices = [event["payload"].get("message") for event in harness.events_of("system.notice")]
+                if not server.requests:  # the first start chooses the model; the second finds it
+                    harness.wait_response(harness.send("command.execute", {
+                        "session_id": session_id, "command": f"/model openai-compatible:{server.model}"}))
+                harness.wait_response(harness.send(
+                    "session.submit_user_input", {"session_id": session_id, "user_input": said}))
+            finally:
+                harness.close()
+    finally:
+        server.close()
+
+    second = server.requests[1]["messages"]
+    assert "what was the word?" in str(second) and "apple" not in str(second), second
+    assert any(f"Using openai-compatible:{server.model}, the model you last chose" in str(notice)
+               for notice in notices), notices
+
+
 def test_openai_compatible_provider_runs_tool_turn(tmp_path: Path, scratch_repo: Path) -> None:
     server = ChatCompletionsServer(
         [
@@ -2872,7 +2904,9 @@ def test_a_model_chosen_by_name_is_saved_once_it_answers(
         listed = harness.wait_response(harness.send("model.list", {}))["result"]
     finally:
         harness.close()
-    assert any("Restored openai:empty-reply" in str(notice) for notice in notices), notices
+    # The line names the model: nothing of an earlier conversation is restored.
+    assert any("Using openai:empty-reply, the model you last chose" in str(notice)
+               for notice in notices), notices
     selectors = [row["selector"] for row in listed["cloud"]]
     assert "openai:half-answer" in selectors and "openai:no-such-model" not in selectors
 

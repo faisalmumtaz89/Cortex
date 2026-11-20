@@ -17,7 +17,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "model", description: "Pick a model (or /model <provider:model>)", argHint: "<provider:model>" },
   { name: "login", description: "Log in to a cloud provider (picker, then paste the key)", argHint: "<provider> <api_key> [url]" },
   { name: "clear", description: "Clear the conversation" },
-  { name: "save", description: "Save the conversation to disk" },
+  { name: "save", description: "Save a copy of the conversation (a record: it cannot be reopened)" },
   { name: "update", description: "Check for updates, or update Cortex", argHint: "[cortex]" },
   { name: "quit", description: "Exit Cortex" },
 ]

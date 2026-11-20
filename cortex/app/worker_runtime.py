@@ -203,7 +203,7 @@ class WorkerRuntime:
                 notices.append(f"Failed to restore model: {exc}")
             else:
                 if bool(result.get("ok")):
-                    notices.append(f"Restored {last_provider}:{last_model}")
+                    notices.append(f"Using {last_provider}:{last_model}, the model you last chose")
                     return notices
                 notices.append(str(result.get("message", "Failed to restore model.")))
 
@@ -302,8 +302,6 @@ class WorkerRuntime:
             return str(result["message"])
         if "status" in result:
             return json.dumps(result["status"], ensure_ascii=True)
-        if "path" in result:
-            return f"Saved conversation: {result['path']}"
         if "auth" in result:
             return json.dumps(result["auth"], ensure_ascii=True)
         return None

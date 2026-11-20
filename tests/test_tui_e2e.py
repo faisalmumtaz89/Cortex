@@ -408,6 +408,8 @@ def test_slash_palette_opens_filters_executes_without_polluting_transcript(tui_p
     assert "✓ /help" in result
     assert "Esc to dismiss" in result
     assert "/quit (/exit)" in result  # alias surfaced
+    # /save is not a way back to this conversation, and says so where it is chosen.
+    assert re.search(r"/save +Save a copy of the conversation \(a record: it cannot be reopened\)", result), result
     assert "[1]" not in result and "[2]" not in result  # no numbered rows
     # Every name, the longest skill's included, keeps a gap before its text.
     for name in ("/reproduce-and-fix", "/review-changes", "/quit (/exit)"):
@@ -2289,8 +2291,11 @@ def test_a_result_starts_at_the_panel_edge_after_help(tui_project) -> None:
     session.send_line("/help")
     session.wait_for("✓ /help", timeout=15)
     session.send_line("/save")
-    frame = session.wait_for("Saved conversation", timeout=15)
-    saved = frame[frame.index("Saved conversation"):]
+    # What the copy is for is said before the path, so it is in view first.
+    frame = session.wait_until(
+        lambda shown: "Cortex cannot reopen it" in " ".join(shown.replace("┃", " ").split()),
+        description="the result of /save", timeout=15)
+    saved = frame[frame.index("Saved a copy of this"):]
     rows = [row for row in saved.splitlines() if "┃" in row and row.split("┃", 1)[1].strip()]
     assert len(rows) >= 3, frame  # the path wrapped
     assert all(re.match(r"\s*┃  \S", row) for row in rows), frame
@@ -2336,3 +2341,18 @@ def test_the_choices_take_one_row_each_on_a_narrow_screen(tui_project, columns: 
     choices = [row.split("┃", 1)[1].strip() for row in frame.splitlines()
                if "┃" in row and re.search(r"Allow once|Allow always|Reject", row)]
     assert [choice.lstrip("❯ ") for choice in choices] == ["Allow once", always, "Reject"], frame
+
+
+def test_a_new_start_names_the_model_and_shows_no_earlier_conversation(tui_project) -> None:
+    """Each start is a new conversation: the line at the start names the
+    model last chosen, and nothing of the earlier session is on screen."""
+    project, start = tui_project
+    first = start([[{"text": "EARLIER_REPLY"}]])
+    _select_scripted_model(first)
+    first.send_line("earlier question")
+    first.wait_for("EARLIER_REPLY")
+    first.close()
+
+    second = start([[{"text": "UNUSED"}]])
+    frame = second.wait_for("Using azure:scripted, the model you last chose")
+    assert "EARLIER_REPLY" not in frame and "earlier question" not in frame, frame

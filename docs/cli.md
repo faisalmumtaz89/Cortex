@@ -144,7 +144,7 @@ cortex -p "review this diff for bugs" --model openai:gpt-5.5
 | `/login <provider> [api_key] [url]` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials (Azure and OpenAI-compatible also take the URL) |
 | `/update [cortex]` | Show the installed version and any newer one, with a link to its release notes, or update Cortex (the download is checked against its published checksum before anything is installed) |
 | `/clear` | Clear conversation history |
-| `/save` | Save the conversation as JSON |
+| `/save` | Save a copy of the conversation as a JSON file (a record: Cortex cannot reopen it) |
 | `/quit` or `/exit` | Exit Cortex |
 | `/<skill> [request]` | Run a skill on a request (see [Skills](#skills)) |
 

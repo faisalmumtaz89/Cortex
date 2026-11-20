@@ -130,7 +130,7 @@ def test_restore_startup_target_prefers_cloud_state(runtime_factory) -> None:
 
     notices = fake_runtime._restore_startup_target()
     assert fake_runtime.model_service.cloud_calls == [("openai", "gpt-5-nano")]
-    assert notices == ["Restored openai:gpt-5-nano"]
+    assert notices == ["Using openai:gpt-5-nano, the model you last chose"]
     assert fake_runtime.model_service.active_target.label == "openai:gpt-5-nano"
 
 

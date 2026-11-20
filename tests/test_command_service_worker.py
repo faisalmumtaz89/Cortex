@@ -172,7 +172,10 @@ def test_execute_save_sets_default_message_from_path() -> None:
     service, _ = _build()
     result = service.execute(session_id="s1", command="/save")
     assert result["ok"] is True
-    assert result["message"] == "Saved conversation: /tmp/x.json."
+    assert result["message"] == (
+        "Saved a copy of this conversation to keep: Cortex cannot reopen it, and each start is a "
+        "new conversation. File: /tmp/x.json"
+    )
 
 
 def test_execute_unknown_command_returns_error() -> None:

@@ -251,7 +251,7 @@ def test_worker_command_matrix_covers_all_core_command_paths(tmp_path: Path) -> 
             ("/login openai", True, "openai: "),
             ("/update everything", False, "Usage: /update [cortex]"),
             ("/clear", True, "cleared"),
-            ("/save", True, "Saved conversation:"),
+            ("/save", True, "Cortex cannot reopen it, and each start is a new conversation. File: "),
             ("status", False, "Not a slash command: status"),
             ("/unknown", False, "Unknown command: /unknown"),
             ("/quit", True, None),

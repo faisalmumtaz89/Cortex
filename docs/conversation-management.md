@@ -2,7 +2,7 @@
 
 ## Overview
 
-Cortex keeps each session's conversation and, by default, saves it to `~/.cortex/conversations/conversations.db`; `/save` also writes it as a JSON file, and `/clear` starts over. In the interactive app a session's conversation continues across turns; each headless `-p` run starts a new one.
+Cortex keeps each session's conversation and, by default, saves it to `~/.cortex/conversations/conversations.db`; `/save` also writes it as a JSON file, and `/clear` starts over. In the interactive app a session's conversation continues across turns; each headless `-p` run starts a new one. Each start of the app is a new conversation too: Cortex cannot reopen an earlier one, from the database or from a file `/save` wrote. At the start it names the model you last chose, and remembers nothing else.
 
 ## Storage and Autosave
 
@@ -36,4 +36,4 @@ Every turn sends the whole conversation to the model, after the system prompt, i
 
 ## Export
 
-`/save` writes the conversation as JSON. There is no other export format, and no branching of a conversation, yet.
+`/save` writes the conversation as JSON: a record to keep, which Cortex cannot reopen. There is no other export format, and no branching of a conversation, yet.
