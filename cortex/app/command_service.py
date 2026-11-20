@@ -171,7 +171,11 @@ class CommandService:
             if "message" not in result:
                 path = str(result.get("path", "")).strip()
                 if path:
-                    result["message"] = f"Saved conversation: {path}."
+                    # The path last: the sentence stays in view where the panel is short.
+                    result["message"] = (
+                        "Saved a copy of this conversation to keep: Cortex cannot reopen it, and "
+                        f"each start is a new conversation. File: {path}"
+                    )
             return result
         if cmd == "/update":
             return self._handle_update(args, progress_callback=progress_callback)

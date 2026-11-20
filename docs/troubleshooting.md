@@ -17,7 +17,7 @@ Cortex uses a split runtime:
 | `/model` | List and switch models |
 | `/login` | Manage OpenAI, Anthropic, Azure, and OpenAI-compatible credentials |
 | `/update` | Show the installed version and any newer one, or update Cortex |
-| `/save` | Save current conversation |
+| `/save` | Save a copy of the conversation (a record: it cannot be reopened) |
 | `/clear` | Clear conversation history |
 | `/quit` or `/exit` | Exit Cortex |
 | `/<skill> [request]` | Run a skill on a request (see [Skills](cli.md#skills)) |

@@ -13,6 +13,11 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
 - "Allow always" says what it covers: this exact command, or this file. It
   says so beside the choice, where the screen has room, and on the call's
   row once saved. What it covers has not changed.
+- `/save` says what it saves: a copy to keep, which Cortex cannot reopen,
+  each start being a new conversation. Its result says so before the
+  file's path, and so does its line in `/help`. The line at the start
+  that named the model as "Restored" now reads "Using ..., the model you
+  last chose".
 
 ## 2.0.14
 
