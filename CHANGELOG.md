@@ -4,6 +4,17 @@ What changed in each release of Cortex, newest first. The release workflow
 publishes a version's section as its release notes, and stops when a version
 has none. Releases before 2.0.9 are described on their GitHub release pages.
 
+## 2.0.14
+
+- A password or key in an Azure endpoint or OpenAI-compatible base URL no
+  longer reaches the log (`~/.cortex/cortex.log`, or your `log_file`), or
+  the terminal with `debug_mode` on. The HTTP library, and some versions
+  of the provider SDKs, log requests with their whole URL; every log line
+  now has the credentials of the URLs in it masked. 2.0.13 masked such a
+  URL in Cortex's own messages only. If your URL carried a password or a
+  key, an earlier log and any CI output captured with `debug_mode` may
+  hold it: delete the log and replace that password or key.
+
 ## 2.0.13
 
 - The CLI docs no longer imply that `timeout` reports exit code `143`:
