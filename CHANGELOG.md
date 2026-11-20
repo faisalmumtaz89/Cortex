@@ -4,6 +4,13 @@ What changed in each release of Cortex, newest first. The release workflow
 publishes a version's section as its release notes, and stops when a version
 has none. Releases before 2.0.9 are described on their GitHub release pages.
 
+## 2.0.15
+
+- A long line in a command's result shown while `/help` is still open
+  wraps to the panel's left edge; it was indented like the help list's.
+  `/help` opened while `/update cortex` runs stays open when the update
+  ends.
+
 ## 2.0.14
 
 - A password or key in an Azure endpoint or OpenAI-compatible base URL no
