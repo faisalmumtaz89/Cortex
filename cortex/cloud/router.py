@@ -227,7 +227,7 @@ def url_origin(provider: CloudProvider, source: str) -> str:
 
 
 # A query parameter whose name has one of these in it holds a credential.
-_SECRET_PARAMETER = re.compile(r"key|token|secret|sig|pass|pwd|auth|credential|code", re.IGNORECASE)
+SECRET_PARAMETER = re.compile(r"key|token|secret|sig|pass|pwd|auth|credential|code", re.IGNORECASE)
 
 
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
@@ -235,7 +235,7 @@ _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 
 def _shown_parameter(parameter: str) -> str:
     name, equals, value = parameter.partition("=")
-    return f"{name}=***" if equals and value and _SECRET_PARAMETER.search(name) else parameter
+    return f"{name}=***" if equals and value and SECRET_PARAMETER.search(name) else parameter
 
 
 def shown_url(url: str) -> str:

@@ -3251,6 +3251,38 @@ def _assert_sleep_ends() -> None:
     assert not _sleeping(), "the command outlived Cortex"
 
 
+def test_a_password_in_the_url_reaches_neither_the_log_nor_debug_output(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The HTTP library and the SDKs log requests with their whole URL. No
+    line of Cortex's log shows a URL's password, also at the DEBUG level and
+    with debug_mode writing the log to stderr: the log is what a bug report
+    or a CI job shows."""
+    server = ChatCompletionsServer([{"text": "fine"}, {"text": "fine"}])
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url.replace("://", "://ci:sk-in-the-url@")
+    command = [sys.executable, "-P", "-m", "cortex", "-p", "hi",
+               "--model", f"openai-compatible:{server.model}"]
+    try:
+        plain = subprocess.run(command, cwd=scratch_repo, env=env, capture_output=True,
+                               text=True, timeout=120)
+        debug = subprocess.run(
+            command, cwd=scratch_repo,
+            env={**env, "CORTEX_DEBUG_MODE": "true", "CORTEX_LOG_LEVEL": "DEBUG"},
+            capture_output=True, text=True, timeout=120)
+    finally:
+        server.close()
+
+    log = (tmp_path / "home" / ".cortex" / "cortex.log").read_text(encoding="utf-8")
+    for run in (plain, debug):
+        assert run.returncode == 0 and "fine" in run.stdout, run.stderr
+    assert "Logging initialized" in log and "Logging initialized" in debug.stderr
+    for shown in (log, plain.stderr, debug.stderr):
+        assert "sk-in-the-url" not in shown, shown
+
+
 def test_a_failed_connection_names_the_host_and_why(tmp_path: Path, scratch_repo: Path) -> None:
     """`Connection error.` gives a CI author nothing to act on: the message
     names the URL (credentials in it masked), the cause and where the URL is
