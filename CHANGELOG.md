@@ -27,6 +27,10 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   result, its error, its output with details open, and the path and lines
   of an edit. An emoji made of several characters shows the invisible ones
   that join it.
+- A correction to the 2.0.14 notes, which said an error stays on screen
+  while you run commands. That holds for an error shown above the input,
+  such as that of a reply that failed. A command that fails shows its
+  message as its result, and the next command's result replaces it.
 
 ## 2.0.14
 
