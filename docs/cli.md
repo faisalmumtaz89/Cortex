@@ -65,6 +65,7 @@ A GitHub Actions job that installs a pinned version and asks about the change:
     CORTEX_AUTO_UPDATE_CHECK: "false"   # no release check on the runner
     CORTEX_AUTO_SAVE: "false"           # no conversation history kept
     CORTEX_CLOUD_MAX_RETRIES: "4"       # ride out a provider's brief outage
+    CORTEX_REASONING_EFFORT: "high"     # optional: how much reasoning to ask for
   run: git diff origin/main...HEAD | ~/.local/bin/cortex -p "summarize this change for a reviewer" --model openai:gpt-5.5
 ```
 

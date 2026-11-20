@@ -145,6 +145,7 @@ class CloudRouter:
         max_tool_iterations: int = 100,
         on_retry: Optional[RetryCallback] = None,
         interrupt: Optional[TurnInterrupt] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         """Yield normalized events from selected cloud provider."""
         script_path = os.environ.get("CORTEX_SCRIPTED_MODEL", "").strip()
@@ -189,6 +190,7 @@ class CloudRouter:
                 interrupt=interrupt,
                 retries=self._max_retries(),
                 on_retry=on_retry,
+                reasoning_effort=reasoning_effort,
             )
         except TurnInterruptedError:
             raise
@@ -209,6 +211,14 @@ class CloudRouter:
                 exc, endpoint, custom_url=custom,
                 url=url, origin=url_origin(model_ref.provider, url_source) if url else "",
             )
+            refused = getattr(getattr(exc, "response", None), "status_code", 0) in (400, 422)
+            if reasoning_effort and refused:
+                # A fact for the reader, who knows the model: the request is not
+                # sent again without the setting, which would answer at another effort.
+                setting_source = getattr(self.config, "setting_source", None)
+                where = setting_source("reasoning_effort") if callable(setting_source) else ""
+                failure = (f"{_ended(failure)} This request asked for reasoning_effort "
+                           f"{reasoning_effort}{f', set in {where}' if where else ''}.")
             raise RuntimeError(
                 f"Cloud generation failed for {model_ref.selector}{key_label}: {failure}"
             ) from exc

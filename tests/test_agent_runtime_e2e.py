@@ -1506,6 +1506,52 @@ def test_each_start_is_a_new_conversation(tmp_path: Path, scratch_repo: Path) ->
                for notice in notices), notices
 
 
+def test_reasoning_effort_is_sent_with_every_request_of_a_run(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The setting reaches the provider on each request of the tool loop;
+    without it the requests ask for no effort, as before. A provider that
+    answers 400 is not asked again without it: the error says what was asked."""
+    def run(script: list, **settings: str):
+        server = ChatCompletionsServer(script)
+        env = _worker_env(tmp_path, tmp_path / "unused.json")
+        env.pop("CORTEX_SCRIPTED_MODEL")
+        env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+        env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+        env.update(settings)
+        try:
+            process = subprocess.run(
+                [sys.executable, "-m", "cortex", "-p", "look", "--model",
+                 f"openai-compatible:{server.model}"],
+                cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+            )
+        finally:
+            server.close()
+        return process, server.requests
+
+    turn = [{"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]}, {"text": "Looked."}]
+    done, requests = run(list(turn), CORTEX_REASONING_EFFORT="high")
+    assert done.returncode == 0, done.stderr
+    assert [request.get("reasoning_effort") for request in requests] == ["high", "high"]
+
+    done, requests = run(list(turn))
+    assert done.returncode == 0, done.stderr
+    assert not [key for request in requests for key in request if "reasoning" in key or key == "thinking"]
+
+    said = "This request asked for reasoning_effort high, set in CORTEX_REASONING_EFFORT."
+    for status in (400, 422):  # how a provider refuses a field's value
+        refused, requests = run([{"status": status}], CORTEX_REASONING_EFFORT="high")
+        assert refused.returncode == 1 and said in refused.stderr, refused.stderr
+        assert len(requests) == 1
+    refused, _requests = run([{"status": 400}])
+    assert "reasoning_effort" not in refused.stderr, refused.stderr
+
+    (tmp_path / "home" / ".cortex").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "home" / ".cortex" / "config.yaml").write_text("reasoning_effort: low\n")
+    refused, _requests = run([{"status": 400}])
+    assert "asked for reasoning_effort low, set in config.yaml." in refused.stderr, refused.stderr
+
+
 def test_openai_compatible_provider_runs_tool_turn(tmp_path: Path, scratch_repo: Path) -> None:
     server = ChatCompletionsServer(
         [

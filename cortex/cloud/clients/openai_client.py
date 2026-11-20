@@ -203,6 +203,7 @@ class OpenAIClient:
         tools=None,
         tool_choice: str = "auto",
         previous_response_id: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, object]:
         include_sampling_controls = self._supports_sampling_controls(model_id)
         kwargs: Dict[str, object] = {
@@ -220,6 +221,8 @@ class OpenAIClient:
             kwargs["tool_choice"] = tool_choice
         if previous_response_id:
             kwargs["previous_response_id"] = previous_response_id
+        if reasoning_effort:
+            kwargs["reasoning"] = {"effort": reasoning_effort}
         return kwargs
 
     @staticmethod
@@ -276,6 +279,7 @@ class OpenAIClient:
         interrupt: Optional[TurnInterrupt] = None,
         retries: int = 0,
         on_retry: Optional[RetryCallback] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         """Yield normalized events from OpenAI responses."""
         interrupt = interrupt or TurnInterrupt()
@@ -300,6 +304,7 @@ class OpenAIClient:
                 tools=tools if use_tools else None,
                 tool_choice=tool_choice,
                 previous_response_id=previous_response_id,
+                reasoning_effort=reasoning_effort,
             )
             response, emitted = yield from with_retries(
                 lambda: self._request(kwargs, interrupt),

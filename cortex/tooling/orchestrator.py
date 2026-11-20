@@ -514,6 +514,7 @@ class ToolingOrchestrator:
             max_tool_iterations=max_iterations,
             on_retry=on_retry,
             interrupt=interrupt,
+            reasoning_effort=self.cli.config.inference.reasoning_effort,
         )
 
         finish_reason = ""

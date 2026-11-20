@@ -181,6 +181,7 @@ class AnthropicClient:
         interrupt: Optional[TurnInterrupt] = None,
         retries: int = 0,
         on_retry: Optional[RetryCallback] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         """Yield normalized events from Anthropic messages API."""
         interrupt = interrupt or TurnInterrupt()
@@ -206,6 +207,8 @@ class AnthropicClient:
                 kwargs["system"] = system_text
             if use_tools:
                 kwargs["tools"] = self._serialize_tools(tools)
+            if reasoning_effort:
+                kwargs["output_config"] = {"effort": reasoning_effort}
 
             response, emitted = yield from with_retries(
                 lambda: self._request(kwargs, interrupt),

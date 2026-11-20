@@ -22,6 +22,8 @@ def _setting_text(key: str, value: object) -> str:
     """A setting's value as config.yaml writes it; a URL with any credentials
     in it masked. A value with no scheme is read as a URL only for a URL
     setting: a model name may have an @ in it too."""
+    if value is None:  # a variable set to nothing, over a value in config.yaml
+        return "unset"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str) and (key in URL_CONFIG_KEYS or "://" in value):

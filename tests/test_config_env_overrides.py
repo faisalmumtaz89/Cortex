@@ -97,3 +97,68 @@ def test_a_setting_that_does_nothing_is_named_so_it_can_be_deleted(tmp_path: Pat
         f"Ignored ui_theme in {path}: it has no effect in Cortex, and can be deleted",
     ]
     assert not hasattr(config, "ui") and not hasattr(config, "paths")
+
+
+def test_reasoning_effort_is_a_level_or_unset(tmp_path: Path, monkeypatch) -> None:
+    """Unset by default, so nothing is asked of the model; a level from the
+    file or its variable, whichever word the provider has for it; what is
+    not one lower-case word is named and not used."""
+    monkeypatch.delenv("CORTEX_REASONING_EFFORT", raising=False)
+    path = tmp_path / "config.yaml"
+    path.write_text("max_tokens: 1000\n")
+    assert Config(config_path=path).inference.reasoning_effort is None
+
+    path.write_text("reasoning_effort: low\n")
+    assert Config(config_path=path).inference.reasoning_effort == "low"
+
+    monkeypatch.setenv("CORTEX_REASONING_EFFORT", "high")
+    config = Config(config_path=path)
+    assert config.inference.reasoning_effort == "high"
+    assert ("reasoning_effort", "high", "CORTEX_REASONING_EFFORT") in config.settings_in_effect()
+
+    # A provider's own word for a level, which YAML reads as a switch: the
+    # variable takes it as written, the file needs it in quotes.
+    monkeypatch.setenv("CORTEX_REASONING_EFFORT", "off")
+    assert Config(config_path=path).inference.reasoning_effort == "off"
+    monkeypatch.delenv("CORTEX_REASONING_EFFORT")
+    path.write_text('reasoning_effort: "off"\n')
+    assert Config(config_path=path).inference.reasoning_effort == "off"
+    path.write_text("reasoning_effort: off\n")
+    config = Config(config_path=path)
+    assert config.inference.reasoning_effort is None
+    assert [line for line in config.warnings if "reasoning_effort" in line] == [
+        "Ignored reasoning_effort: False (Value error, YAML reads this word as a switch: "
+        'write it in quotes, as in "off"); using the default']
+
+    path.write_text("reasoning_effort: low\n")
+    for written in ("Very High", "5", "x-high", "[high]", "2024-01-01"):
+        monkeypatch.setenv("CORTEX_REASONING_EFFORT", written)
+        config = Config(config_path=path)
+        assert config.inference.reasoning_effort == "low"  # the file's value stands
+        assert [line for line in config.warnings if "REASONING_EFFORT" in line] == [
+            f"Ignored CORTEX_REASONING_EFFORT: {written!r} (Value error, a level is one lower-case "
+            "word, such as high); using the value in the config file"]
+
+
+def test_a_text_setting_takes_its_variable_as_written(tmp_path: Path, monkeypatch) -> None:
+    """A model's name that YAML would read as a number is the name."""
+    path = tmp_path / "config.yaml"
+    path.write_text("cloud_default_openai_model: from-file\n")
+    monkeypatch.setenv("CORTEX_CLOUD_DEFAULT_OPENAI_MODEL", "4.10")
+    config = Config(config_path=path)
+    assert config.cloud.cloud_default_openai_model == "4.10"
+    assert not [line for line in config.warnings if "OPENAI_MODEL" in line]
+
+
+def test_a_variable_set_to_nothing_unsets_the_files_level_and_status_says_so(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cortex.app.command_service import _setting_text
+
+    path = tmp_path / "config.yaml"
+    path.write_text("reasoning_effort: low\n")
+    monkeypatch.setenv("CORTEX_REASONING_EFFORT", "")
+    config = Config(config_path=path)
+    assert config.inference.reasoning_effort is None
+    (setting,) = [found for found in config.settings_in_effect() if found[0] == "reasoning_effort"]
+    assert (_setting_text(setting[0], setting[1]), setting[2]) == ("unset", "CORTEX_REASONING_EFFORT")

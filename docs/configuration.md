@@ -6,7 +6,7 @@ Cortex reads configuration from `~/.cortex/config.yaml` when it starts: restart 
 
 A setting that is unknown or not valid (for example a number above its maximum) is ignored, and the others still apply: it falls back to its default, or, for a `CORTEX_*` variable that is not valid, to the value in `config.yaml`. Cortex lists what it ignored in the notice when a session starts (on stderr for a headless `-p` run) and in `~/.cortex/cortex.log`.
 
-Any flat key can also be overridden with a `CORTEX_<KEY>` environment variable (values parsed as YAML): `CORTEX_TOOLS_MAX_ITERATIONS=80` overrides `tools_max_iterations`, `CORTEX_TOOLS_ENABLED=false` disables tooling. Env overrides beat `config.yaml`. Unknown `CORTEX_*` variables are ignored; the installer's own, such as `CORTEX_MANAGED_PYTHON`, are in the [Installation Guide](installation.md#installer-variables).
+Any flat key can also be overridden with a `CORTEX_<KEY>` environment variable (its value is read as YAML, except that a setting that is text takes it as written, so a model named `4.10` stays `4.10`): `CORTEX_TOOLS_MAX_ITERATIONS=80` overrides `tools_max_iterations`, `CORTEX_TOOLS_ENABLED=false` disables tooling. Env overrides beat `config.yaml`. Unknown `CORTEX_*` variables are ignored; the installer's own, such as `CORTEX_MANAGED_PYTHON`, are in the [Installation Guide](installation.md#installer-variables).
 
 Files Cortex writes outside the project (the folder `~/.cortex` opens only for you, so the files in it are private too):
 
@@ -39,6 +39,7 @@ Files Cortex writes outside the project (the folder `~/.cortex` opens only for y
 temperature: 0.7
 top_p: 0.95
 max_tokens: 32768
+# reasoning_effort: high
 
 # Models
 cloud_default_openai_model: gpt-5.5
@@ -76,6 +77,7 @@ auto_update_check: true      # false: no daily check for a new release
 - `temperature` (default: `0.7`, 0 to 2)
 - `top_p` (default: `0.95`, 0 to 1)
 - `max_tokens` (default: `32768`) — output budget per model request, including reasoning tokens. A reply that reaches it fails the turn with a message naming the limit.
+- `reasoning_effort` (default: unset) — how much reasoning to ask of the model, as one of the provider's levels, such as `low` or `high`. It is sent as `reasoning_effort` to an OpenAI-compatible endpoint, as `reasoning.effort` to OpenAI and Azure, and as `output_config.effort` to Anthropic. Unset, nothing is sent and the provider's default applies. The levels are the provider's own, so Cortex passes on any one lower-case word: a level the provider does not take fails the request with the provider's message, and the error says what was asked and where it is set (Cortex does not send the request again without it). In `config.yaml`, write `"off"`, `"no"` or `"false"` in quotes, since YAML reads them as a switch; `CORTEX_REASONING_EFFORT` takes the word as written, and set to nothing it unsets the file's level for that run.
 
 ### Cloud
 
