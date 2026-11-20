@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, cast
 
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
+from cortex.config import keep_private
 from cortex.conversation_manager import MessageRole
 from cortex.tooling.permissions import PermissionDecision
 from cortex.tooling.types import (
@@ -161,6 +162,7 @@ class SessionService:
         export_data = self.conversation_manager.export_conversation(conversation_id=conversation_id, format="json")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = Path(self.config.conversation.save_directory) / f"conversation_{timestamp}.json"
+        keep_private(output_path)
         output_path.write_text(export_data, encoding="utf-8")
         return {"ok": True, "path": str(output_path)}
 

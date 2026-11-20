@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from cortex.config import keep_private
+
 
 class MessageRole(Enum):
     """Role of message sender."""
@@ -200,6 +202,7 @@ class ConversationManager:
     def _init_database(self) -> None:
         """Initialize SQLite database for persistence."""
         self.db_path = self.save_dir / "conversations.db"
+        keep_private(self.db_path)
 
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
