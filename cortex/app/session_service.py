@@ -91,7 +91,15 @@ class SessionService:
         self.tooling_bridge = tooling_bridge
         self._session_to_conversation: Dict[str, str] = {}
         self._interrupts: Dict[str, TurnInterrupt] = {}
+        # How many turns each session has in progress, from before a turn
+        # reads its conversation until after its last event. The app sends
+        # one at a time; another client may not.
+        self._running: Dict[str, int] = {}
         self._lock = threading.Lock()
+
+    def turn_running(self, session_id: str) -> bool:
+        with self._lock:
+            return session_id in self._running
 
     def request_interrupt(self, session_id: str) -> bool:
         """Signal the session's active turn to stop. True if a turn was live."""
@@ -150,8 +158,19 @@ class SessionService:
         }
 
     def clear_session(self, session_id: str) -> Dict[str, object]:
-        conversation = self.conversation_manager.new_conversation()
         with self._lock:
+            # A running reply belongs to the conversation this would drop.
+            # One lock section: a turn cannot start between the check and
+            # the new conversation.
+            if session_id in self._running:
+                return {
+                    "ok": False,
+                    "message": (
+                        "A reply is running: /clear works once it ends, or after you "
+                        "stop it with Esc."
+                    ),
+                }
+            conversation = self.conversation_manager.new_conversation()
             self._session_to_conversation[session_id] = conversation.conversation_id
         return {"ok": True, "message": "Conversation cleared.", "conversation_id": conversation.conversation_id}
 
@@ -169,6 +188,31 @@ class SessionService:
         return {"ok": True, "path": str(output_path)}
 
     def submit_user_input(
+        self,
+        *,
+        session_id: str,
+        user_input: str,
+        active_target_input,
+        stop_sequences: Optional[List[str]],
+        emit_event,
+    ) -> Dict[str, object]:
+        with self._lock:
+            self._running[session_id] = self._running.get(session_id, 0) + 1
+        try:
+            return self._run_turn(
+                session_id=session_id,
+                user_input=user_input,
+                active_target_input=active_target_input,
+                stop_sequences=stop_sequences,
+                emit_event=emit_event,
+            )
+        finally:
+            with self._lock:
+                self._running[session_id] -= 1
+                if not self._running[session_id]:
+                    del self._running[session_id]
+
+    def _run_turn(
         self,
         *,
         session_id: str,

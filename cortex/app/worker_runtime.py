@@ -568,24 +568,29 @@ class WorkerRuntime:
             # /update status fall through to the synchronous handler.
             return self._intercept_update(session_id=params.session_id)
 
-        self._emit_event(
-            session_id=params.session_id,
-            event_type="session.status",
-            payload={"status": "busy"},
-        )
+        # While a reply runs, the status is the turn's: a command run during
+        # it must not report idle, or the app would stop offering to stop the
+        # reply. The background update never owns session.status.
+        owns_status = not self.session_service.turn_running(params.session_id)
+        if owns_status:
+            self._emit_event(
+                session_id=params.session_id,
+                event_type="session.status",
+                payload={"status": "busy"},
+            )
 
         try:
             result = self.command_service.execute(
                 session_id=params.session_id, command=params.command
             )
         finally:
-            # The background update never owns session.status, so the sync
-            # command's busy is always ours to clear.
-            self._emit_event(
-                session_id=params.session_id,
-                event_type="session.status",
-                payload={"status": "idle"},
-            )
+            # A reply that began while the command ran owns the status now.
+            if owns_status and not self.session_service.turn_running(params.session_id):
+                self._emit_event(
+                    session_id=params.session_id,
+                    event_type="session.status",
+                    payload={"status": "idle"},
+                )
 
         notice_message = self._notice_message_for_result(result)
         if notice_message:

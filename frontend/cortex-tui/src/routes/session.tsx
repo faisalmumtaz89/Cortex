@@ -798,6 +798,9 @@ export function SessionRoute(props: {
       // Esc handled here (the focused textarea otherwise swallows it before the
       // global handler): palette → clear; result panel → dismiss; busy → interrupt.
       if (key === "escape" || key === "esc") {
+        if (event.defaultPrevented) {
+          return // the app's handler took this press
+        }
         if (paletteVisible()) {
           event.preventDefault()
           closePaletteAndClearInput()

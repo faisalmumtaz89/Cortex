@@ -3124,6 +3124,43 @@ def test_a_reply_cut_off_before_any_text_still_counts_as_an_answer(
     assert f"last_used_cloud_model: {server.model}" in state
 
 
+def test_clear_is_refused_while_a_turn_runs(tmp_path: Path, scratch_repo: Path) -> None:
+    """The reply in progress belongs to the conversation /clear would drop:
+    it is refused with what to do, the session stays busy (a command run
+    during a reply does not report idle), the turn ends in the conversation
+    it began in, and /clear works once it has ended."""
+    script = _write_script(tmp_path / "script.json", [[{"delay_ms": 1500, "text": "Late reply."}]])
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    try:
+        session_id = _start_session(harness)
+
+        def run(command: str) -> dict:
+            return harness.wait_response(harness.send(
+                "command.execute", {"session_id": session_id, "command": command}))["result"]
+
+        run("/model openai:scripted")
+        before_turn = len(harness.events)
+        turn = harness.send(
+            "session.submit_user_input", {"session_id": session_id, "user_input": "Say hi."})
+        harness.wait_event("session.status", after=before_turn)  # the turn's busy
+        during = run("/clear")
+        run("/status")
+        reply = harness.wait_response(turn)["result"]
+        statuses = [event["payload"]["status"] for event in harness.events[before_turn:]
+                    if event["event_type"] == "session.status"]
+        saved = Path(run("/save")["path"]).read_text(encoding="utf-8")
+        after = run("/clear")
+    finally:
+        harness.close()
+
+    assert during == {"ok": False, "message": (
+        "A reply is running: /clear works once it ends, or after you stop it with Esc.")}
+    assert statuses == ["busy", "idle"], statuses
+    assert reply["assistant_text"] == "Late reply."
+    assert "Say hi." in saved and "Late reply." in saved
+    assert after["ok"] is True and after["message"] == "Conversation cleared."
+
+
 def test_a_reply_that_arrives_after_another_model_is_chosen_does_not_save_its_model(
     tmp_path: Path, scratch_repo: Path
 ) -> None:

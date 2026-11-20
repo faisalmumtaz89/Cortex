@@ -73,3 +73,54 @@ describe("system.notice transcription gate (store event path)", () => {
     })
   })
 })
+
+describe("/clear empties the transcript's records, not only its order", () => {
+  const textEvent = (seq: number, delta: string): EventEnvelope => ({
+    session_id: "s1",
+    seq,
+    ts_ms: 1_000_000 + seq,
+    event_type: "message.part.updated",
+    payload: { message_id: "m1", part: { type: "text", delta } },
+  })
+
+  test("a message that goes on after /clear is shown again, with only what came after", () => {
+    withStore((store) => {
+      store.applyEvent(textEvent(1, "before"))
+      store.flushPendingEvents()
+      expect(transcribedContents(store)).toEqual(["before"])
+
+      store.clearTranscript()
+      expect(Object.keys(store.state.messages)).toEqual([])
+      expect(Object.keys(store.state.toolDedupe)).toEqual([])
+
+      // As a background update's last line does: under the id of a message begun before.
+      store.applyEvent(textEvent(2, "after"))
+      store.flushPendingEvents()
+      expect(transcribedContents(store)).toEqual(["after"])
+    })
+  })
+
+  test("a tool call seen before /clear is not held back after it", () => {
+    withStore((store) => {
+      const toolEvent = (seq: number): EventEnvelope => ({
+        session_id: "s1",
+        seq,
+        ts_ms: 1_000_000 + seq,
+        event_type: "message.part.updated",
+        payload: {
+          message_id: "m1",
+          part: { type: "tool", id: "call-1", tool: "bash", state: "completed", input: { command: "ls" }, output: "x" },
+        },
+      })
+      store.applyEvent(toolEvent(1))
+      store.flushPendingEvents()
+      expect(store.state.messages.m1?.parts.length).toBe(1)
+
+      store.clearTranscript()
+      store.applyEvent(toolEvent(2))
+      store.flushPendingEvents()
+      expect(store.state.orderedMessageIDs).toEqual(["m1"])
+      expect(store.state.messages.m1?.parts.length).toBe(1)
+    })
+  })
+})

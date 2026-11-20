@@ -4,6 +4,18 @@ What changed in each release of Cortex, newest first. The release workflow
 publishes a version's section as its release notes, and stops when a version
 has none. Releases before 2.0.9 are described on their GitHub release pages.
 
+## 2.0.16
+
+- `/clear` typed while a reply is running is refused, and says how to
+  stop the reply. Before, the screen cleared while the model went on
+  working unseen, and the rest of its reply was never shown.
+- A command run while a reply is running, such as `/status`, leaves the
+  reply shown as running: Esc closes the command's result, and the next
+  Esc stops the reply. Before, the "Working…" line went away and Esc did
+  nothing until the reply ended.
+- What a background update writes after `/clear` is shown. It was left
+  out when it continued a message begun before the `/clear`.
+
 ## 2.0.15
 
 - A long line in a command's result shown while `/help` is still open

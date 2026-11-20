@@ -18,7 +18,7 @@ The `/save` command exports the current conversation as JSON to:
 ~/.cortex/conversations/conversation_<timestamp>.json
 ```
 
-`/clear` starts a fresh conversation for the session.
+`/clear` starts a fresh conversation for the session. While a reply is running it is refused and clears nothing: wait for the reply to end, or stop it with `Esc` first.
 
 ## Message Model
 
