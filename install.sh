@@ -211,11 +211,16 @@ detect_platform() {
       fi
       ;;
     Linux)
-      if ldd --version 2>&1 | grep -qi musl; then
+      # musl's ldd names itself and exits 1: with pipefail, its status must
+      # not decide the pipeline's. Asked only where there is an ldd, so that
+      # the shell's "not found" line is never what is searched.
+      if command -v ldd >/dev/null 2>&1 && { ldd --version 2>&1 || true; } | grep -qi musl; then
         die "This Linux uses musl libc (for example Alpine). Cortex needs a glibc-based distribution such as Debian, Ubuntu, Fedora or Arch."
       fi
+      # "glibc 2.39"; nothing where there is no getconf, which must not end the script.
       local glibc
-      glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+      glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+      glibc="${glibc##* }"
       if [[ -n "${glibc}" ]] && ! version_at_least "${glibc}" "2.28"; then
         die "Cortex needs glibc 2.28 or later (Debian 10, Ubuntu 20.04, RHEL 8 or newer); this system has ${glibc}."
       fi

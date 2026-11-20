@@ -13,6 +13,8 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   reply shown as running: Esc closes the command's result, and the next
   Esc stops the reply. Before, the "Working…" line went away and Esc did
   nothing until the reply ended.
+- The installer says why it stops on a system with musl libc, such as
+  Alpine. Before, it ended there with no message.
 - What a background update writes after `/clear` is shown. It was left
   out when it continued a message begun before the `/clear`.
 
