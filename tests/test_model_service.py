@@ -58,7 +58,7 @@ def test_select_cloud_model_sets_active_target_and_state_when_authenticated() ->
     result = service.select_cloud_model(provider="openai", model_id="gpt-5.1")
 
     assert result["ok"] is True
-    assert result["message"] == "openai:gpt-5.1 — now active."
+    assert result["message"] == "openai:gpt-5.1 — now active. Saved as your model once it answers."
     assert service.active_target.cloud_model is not None
     assert service.active_target.cloud_model.selector == "openai:gpt-5.1"
     service.select_cloud_model(provider="openai", model_id="gpt-5.1")  # picked twice

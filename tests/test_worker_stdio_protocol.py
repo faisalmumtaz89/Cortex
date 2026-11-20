@@ -333,7 +333,8 @@ def test_worker_model_list_reports_active_target_and_providers(tmp_path: Path) -
         )
         selected, _ = recv_until(4)
         assert selected["result"]["ok"] is True
-        assert selected["result"]["message"] == "openai-compatible:test-model — now active."
+        assert selected["result"]["message"] == (
+            "openai-compatible:test-model — now active. Saved as your model once it answers.")
 
         send(5, "model.list", {})
         listing, _ = recv_until(5)

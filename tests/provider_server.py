@@ -114,7 +114,8 @@ class ProviderServer:
     """Script entries: {"tool": True} for a tool call, else a text reply;
     "header_delay" / "body_delay" seconds before the headers / the body;
     {"reset": True} resets the connection after the first event, {"error": True}
-    sends the API's error event (overloaded / server error) after it."""
+    sends the API's error event (overloaded / server error) after it;
+    {"status": int, "answer": dict} answers with that HTTP error and JSON body."""
 
     def __init__(self, kind: str, script: List[Dict[str, object]]):
         self.script = list(script)
@@ -134,6 +135,14 @@ class ProviderServer:
                 server.requests.append(time.time())
                 step = server.script.pop(0) if server.script else {}
                 time.sleep(float(step.get("header_delay", 0)))
+                if step.get("status"):
+                    answer = json.dumps(step["answer"]).encode()
+                    self.send_response(int(step["status"]))
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(answer)))
+                    self.end_headers()
+                    self.wfile.write(answer)
+                    return
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Transfer-Encoding", "chunked")

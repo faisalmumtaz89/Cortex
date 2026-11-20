@@ -2981,6 +2981,122 @@ def test_a_model_chosen_by_name_is_saved_once_it_answers(
     assert "openai:half-answer" in selectors and "openai:no-such-model" not in selectors
 
 
+def test_a_saved_name_the_provider_no_longer_knows_is_removed(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A model chosen by name says when it will be saved. Once saved, it is
+    removed when the provider answers that it does not know the model, and
+    the error says so; a 404 or 403 that does not say that removes nothing.
+    It is saved again once it answers."""
+    unknown = {"message": "The model `gone` does not exist", "type": "invalid_request_error",
+               "code": "model_not_found"}
+    server = ChatCompletionsServer([
+        {"text": "Hello."},
+        {"status": 404},
+        {"status": 403},
+        {"status": 404, "error": unknown},
+        {"text": "Back."},
+    ])
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    state = tmp_path / "home" / ".cortex" / "state.yaml"
+    removed = ("openai-compatible:gone was removed from your saved models because the provider "
+               "answered that it does not know this model.")
+
+    def saved() -> bool:
+        return "gone" in (state.read_text(encoding="utf-8") if state.exists() else "")
+
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+
+        def turn() -> dict:
+            return harness.wait_response(harness.send(
+                "session.submit_user_input", {"session_id": session_id, "user_input": "Say hi."}
+            ))["result"]
+
+        chosen = harness.wait_response(harness.send(
+            "command.execute", {"session_id": session_id, "command": "/model openai-compatible:gone"}
+        ))["result"]
+        before_any_answer = saved()
+        turn()
+        after_answer = saved()
+        bare = turn()
+        after_bare_404 = saved()
+        forbidden = turn()
+        after_403 = saved()
+        refused = turn()
+        after_unknown = saved()
+        again = turn()
+    finally:
+        harness.close()
+        server.close()
+
+    assert chosen["message"] == (
+        "openai-compatible:gone — now active. Saved as your model once it answers.")
+    assert (before_any_answer, after_answer) == (False, True)
+    for kept in (bare, forbidden):
+        assert kept["ok"] is False and "removed" not in kept["error"] and kept["hint"] == ""
+    assert (after_bare_404, after_403) == (True, True)
+    assert refused["ok"] is False and refused["error"].endswith(removed), refused["error"]
+    assert refused["hint"] == (
+        "openai-compatible:gone is not saved as your model until it answers. "
+        "If the name is wrong, choose another with /model.")
+    errors = [event["payload"]["error"] for event in harness.events_of("session.error")]
+    assert errors[-1] == refused["error"]  # what the app shows is what the turn returned
+    assert after_unknown is False
+    assert again.get("ok", True) and again["assistant_text"] == "Back." and saved()
+
+
+def test_a_headless_run_removes_a_saved_name_the_provider_no_longer_knows(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The run fails and says the name was removed. Without --model it was
+    the saved model, and the next run has none to fail on; with --model, the
+    saved model is another, and stays."""
+    unknown = {"message": "The model `gone` does not exist", "type": "invalid_request_error",
+               "code": "model_not_found"}
+    state = tmp_path / "home" / ".cortex" / "state.yaml"
+    state.parent.mkdir(parents=True)
+    removed = ("openai-compatible:gone was removed from your saved models because the provider "
+               "answered that it does not know this model.")
+
+    def run(script: list, last_used: str, *arguments: str) -> subprocess.CompletedProcess:
+        server = ChatCompletionsServer(script)
+        env = _worker_env(tmp_path, tmp_path / "unused.json")
+        env.pop("CORTEX_SCRIPTED_MODEL")
+        env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+        env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+        if last_used:
+            state.write_text(
+                f"last_used_cloud_provider: openai-compatible\nlast_used_cloud_model: {last_used}\n"
+                "selected_models:\n- openai-compatible:gone\n- openai-compatible:other\n",
+                encoding="utf-8")
+        try:
+            return subprocess.run(
+                [sys.executable, "-m", "cortex", "-p", "look", *arguments],
+                cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120,
+            )
+        finally:
+            server.close()
+
+    refused = run([{"status": 404, "error": unknown}], "gone")
+    assert refused.returncode == 1 and removed in refused.stderr, refused.stderr
+    kept = state.read_text(encoding="utf-8")
+    assert "gone" not in kept and "openai-compatible:other" in kept, kept
+    following = run([{"text": "unused"}], "")
+    assert following.returncode == 2 and "error: no model selected." in following.stderr
+
+    refused = run([{"status": 404, "error": unknown}], "other", "--model", "openai-compatible:gone")
+    assert refused.returncode == 1 and removed in refused.stderr, refused.stderr
+    kept = state.read_text(encoding="utf-8")
+    assert "gone" not in kept and "last_used_cloud_model: other" in kept, kept
+    following = run([{"text": "Still here."}], "")
+    assert following.returncode == 0 and "Still here." in following.stdout, following.stderr
+
+
 def test_a_reply_cut_off_before_any_text_still_counts_as_an_answer(
     tmp_path: Path, scratch_repo: Path
 ) -> None:

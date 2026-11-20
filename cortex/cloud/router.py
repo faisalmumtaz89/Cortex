@@ -219,7 +219,7 @@ class CloudRouter:
                 where = setting_source("reasoning_effort") if callable(setting_source) else ""
                 failure = (f"{_ended(failure)} This request asked for reasoning_effort "
                            f"{reasoning_effort}{f', set in {where}' if where else ''}.")
-            raise RuntimeError(
+            raise (UnknownModelError if _unknown_model(exc) else RuntimeError)(
                 f"Cloud generation failed for {model_ref.selector}{key_label}: {failure}"
             ) from exc
 
@@ -272,6 +272,26 @@ def _without_userinfo(shown: str) -> str:
     end = re.search(r"[?#]", shown)
     address = shown[: end.start()] if end else shown
     return re.sub(r"[^/]*@", "***@", address) + shown[len(address):]
+
+
+class UnknownModelError(RuntimeError):
+    """The provider answered that it does not know the model asked for."""
+
+
+def _unknown_model(exc: Exception) -> bool:
+    """Whether the provider answered that it does not know the model: a 404
+    that says so in the provider's own terms. A 404 that does not is as
+    likely a wrong URL, and a 403 a key that may not use the model."""
+    if getattr(getattr(exc, "response", None), "status_code", 0) != 404:
+        return False
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return False
+    error = body["error"] if isinstance(body.get("error"), dict) else body
+    if isinstance(exc, anthropic.APIStatusError):
+        # Its one path here takes a model and nothing else that can be missing.
+        return error.get("type") == "not_found_error"
+    return error.get("code") in ("model_not_found", "DeploymentNotFound")
 
 
 def _describe_failure(

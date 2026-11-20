@@ -23,8 +23,9 @@ class ChatCompletionsServer:
     {"reasoning": str} to stream the model's reasoning first, in the delta fields
     {"reasoning_field": str or list} (default "reasoning_content").
     Failures: {"status": int} answers with that HTTP error (and {"retry_after":
-    seconds}; {"reason": str} sends that reason phrase and no body, as some
-    gateways do); {"reset": True} resets the connection after the reply's first
+    seconds}; {"error": dict} is its error object, in place of a plain one;
+    {"reason": str} sends that reason phrase and no body, as some gateways
+    do); {"reset": True} resets the connection after the reply's first
     chunk; {"cut": True} ends the stream before its finish reason."""
 
     def __init__(self, script: List[Dict[str, object]], *, model: str = "test-model"):
@@ -52,7 +53,8 @@ class ChatCompletionsServer:
                     self.end_headers()
                     return
                 if step.get("status"):
-                    error = {"error": {"message": f"scripted {step['status']}", "type": "test"}}
+                    plain = {"message": f"scripted {step['status']}", "type": "test"}
+                    error = {"error": step.get("error") or plain}
                     headers = {}
                     if "retry_after" in step:
                         headers["Retry-After"] = str(step["retry_after"])
