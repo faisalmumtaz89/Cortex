@@ -7,6 +7,7 @@ import { displayPath } from "../lib/paths"
 import { shellSummary } from "../lib/shell_summary"
 import { spinnerFrame } from "../lib/spinner"
 import { proseColumns, terminalColumns } from "../lib/terminal_size"
+import { drawn, visibleCode, visibleRow } from "../lib/visible_text"
 import { DiffView } from "./diff_view"
 import { UI_PALETTE } from "./ui_palette"
 import { WrappedText } from "./wrapped_text"
@@ -26,21 +27,40 @@ const TOOL_VERB: Record<string, string> = {
   git: "Git",
 }
 
-function toolVerb(tool: string): string {
-  return TOOL_VERB[tool] ?? tool
+export function toolVerb(tool: string): string {
+  // A name that is no tool of Cortex's is the model's text.
+  return Object.hasOwn(TOOL_VERB, tool) ? TOOL_VERB[tool] : truncate(tool, 40)
 }
 
 const SUMMARY_MAX_CHARS = 72
 const PATH_MAX_CHARS = 56
 
+// Everything a row draws from a call (its arguments, its result, its error)
+// goes through visibleRow or visibleCode: the text is the model's, or a
+// file's or a command's, and none of it reaches the terminal unseen. It is
+// marked before it is cut, so a run of marked characters cannot outgrow the
+// row, and cut between characters and between markers.
 function truncate(text: string, max: number = SUMMARY_MAX_CHARS): string {
-  const flat = text.replace(/\s+/g, " ").trim()
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+  const shown = visibleRow(text)
+  if ([...shown].length <= max) return shown
+  let kept = ""
+  for (const piece of drawn(shown)) {
+    if ([...kept].length + [...piece].length > max - 1) break
+    kept += piece
+  }
+  return `${kept}…`
 }
 
 /** Keep the informative tail (filename + parents) of a long path on one line. */
 function truncatePath(path: string, max: number): string {
-  return path.length > max ? `…${path.slice(path.length - max + 1)}` : path
+  const shown = visibleRow(path)
+  if ([...shown].length <= max) return shown
+  let kept = ""
+  for (const piece of drawn(shown).reverse()) {
+    if ([...kept].length + [...piece].length > max - 1) break
+    kept = piece + kept
+  }
+  return `…${kept}`
 }
 
 /** Path budget for the headline, derived from the live terminal width (minus
@@ -153,7 +173,7 @@ export function ToolBlock(props: {
       // Use the tool's stable verb (edit→Update, write→Write) rather than the
       // diff op, so the label never flips between the running and completed
       // states (write_file would otherwise go Write→Create for a new file).
-      return `${toolVerb(props.tool)} ${props.diff.path}`
+      return `${toolVerb(props.tool)} ${visibleRow(props.diff.path)}`
     }
     const verb = toolVerb(props.tool)
     const summary = toolCallSummary(props.tool, props.input)
@@ -167,9 +187,10 @@ export function ToolBlock(props: {
     if (!props.expanded || displayState() !== "completed" || !props.output) {
       return undefined
     }
-    const lines = String(props.output).split("\n")
+    const lines = String(props.output).replace(/\r\n/g, "\n").split("\n")
+      .map((line) => visibleCode(line.replace(/\t/g, "    ")))
     if (lines.length <= 40) {
-      return props.output
+      return lines.join("\n")
     }
     return `${lines.slice(0, 40).join("\n")}\n… (${lines.length - 40} more lines)`
   }

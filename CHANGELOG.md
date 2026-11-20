@@ -18,6 +18,15 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   file's path, and so does its line in `/help`. The line at the start
   that named the model as "Restored" now reads "Using ..., the model you
   last chose".
+- A tool call's row in the transcript shows control characters,
+  text-direction overrides, zero-width characters and blanks that are not
+  spaces as markers such as `⟨U+001B⟩`, the ones the permission prompt
+  uses; before, they reached the terminal as written. This holds for the name of
+  a tool that is none of Cortex's, for what a call names (a command, path
+  or search, where a tab or a line break reads as a space), and for its
+  result, its error, its output with details open, and the path and lines
+  of an edit. An emoji made of several characters shows the invisible ones
+  that join it.
 
 ## 2.0.14
 

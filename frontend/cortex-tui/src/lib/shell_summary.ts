@@ -30,18 +30,21 @@ function firstStageEnd(command: string): number {
   return -1
 }
 
-const LEADING_CD = /^cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)\s*(&&|;)\s*/
+// A blank here is a space: the summary has folded tabs and line breaks into
+// spaces, and any other blank is part of a word, to be marked where it is.
+const LEADING_CD = /^cd +("[^"]*"|'[^']*'|[^ ;&|]+) *(&&|;) */
 
 /** What a bash row names: the first stage of the command, after any leading
  * `cd <dir> &&` steps, with line breaks folded into spaces. Chains of
  * &&/|/; are execution detail; the first real stage identifies the action. */
 export function shellSummary(command: string): string {
-  let rest = command.replace(/\s+/g, " ").trim()
+  // Spaces, tabs and line breaks only: another blank is not a space, and stays to be marked.
+  let rest = command.replace(/[ \t\n\r\v\f]+/g, " ").replace(/^ | $/g, "")
   for (let match = LEADING_CD.exec(rest); match && match[0].length < rest.length; match = LEADING_CD.exec(rest)) {
     rest = rest.slice(match[0].length)
   }
   const end = firstStageEnd(rest)
   if (end < 0) return rest
-  const stage = rest.slice(0, end).trim()
+  const stage = rest.slice(0, end).replace(/^ | $/g, "")
   return stage ? `${stage} …` : rest
 }

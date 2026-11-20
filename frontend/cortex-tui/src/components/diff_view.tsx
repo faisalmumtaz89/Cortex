@@ -1,6 +1,7 @@
 import { createMemo, For, Show } from "solid-js"
 import type { DiffData, DiffRow } from "../context/store"
 import { diffWindow } from "../lib/diff_window"
+import { visibleCode, visibleRow } from "../lib/visible_text"
 import { highlightLine } from "./syntax_highlight"
 import { UI_PALETTE } from "./ui_palette"
 
@@ -95,7 +96,8 @@ export function DiffView(props: { diff: DiffData; expanded: boolean }) {
               )
             }
             const row = entry.row
-            const code = () => row.text.replace(/\t/g, "    ")
+            // Marked as the permission prompt marked it: nothing an edit wrote is hidden.
+            const code = () => visibleCode(row.text.replace(/\t/g, "    "))
             // The gutter has its own column, so a long line wraps under its code.
             if (row.kind === "add") {
               return (
@@ -134,7 +136,7 @@ export function DiffView(props: { diff: DiffData; expanded: boolean }) {
           <text fg={UI_PALETTE.textMuted}>{`  … +${hiddenRows()} more line${plural(hiddenRows())} (Ctrl+O)`}</text>
         </Show>
         <Show when={props.expanded && diff().truncated}>
-          <text fg={UI_PALETTE.textMuted}>{`  … +${diff().truncatedRows} more — open ${diff().path} to view`}</text>
+          <text fg={UI_PALETTE.textMuted}>{`  … +${diff().truncatedRows} more — open ${visibleRow(diff().path)} to view`}</text>
         </Show>
       </box>
     </box>

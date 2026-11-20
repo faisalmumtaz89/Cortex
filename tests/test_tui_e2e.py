@@ -2356,3 +2356,51 @@ def test_a_new_start_names_the_model_and_shows_no_earlier_conversation(tui_proje
     second = start([[{"text": "UNUSED"}]])
     frame = second.wait_for("Using azure:scripted, the model you last chose")
     assert "EARLIER_REPLY" not in frame and "earlier question" not in frame, frame
+
+
+def test_a_tool_row_shows_nothing_invisible(tui_project) -> None:
+    """What a call's row draws comes from the model, or from the files and
+    commands it touched. An escape sequence in it would be obeyed by the
+    terminal, and a text-direction override would show a command other than
+    the one that ran: every such character is shown as a marker, in the tool
+    named, what the call names, its result, its error, its output with
+    details open, and the path and lines of an edit."""
+    project, start = tui_project
+    escape, override = "\u001b", "\u202e"
+    session = start([[
+        {"text": "CANARY_LINE", "tool_calls": [
+            {"name": "bash", "arguments": {"command": f"echo one{escape}[2Jline"}}]},
+        {"tool_calls": [{"name": "bash", "arguments": {
+            "command": f"printf 'first\\tx\\r\\nsecond{escape}[31m\\n'"}}]},
+        {"tool_calls": [{"name": "read_file", "arguments": {"path": f"missing{escape}[31m.txt"}}]},
+        {"tool_calls": [{"name": f"zz{escape}]0;T", "arguments": {"k": "v"}}]},
+        {"tool_calls": [{"name": "write_file", "arguments": {
+            "path": f"no{override}te.txt", "content": f"plain{override}reversed\n"}}]},
+        {"text": "ALL_DONE"},
+    ]])
+    _select_scripted_model(session)
+    session.send_line("go")
+    for _ in range(3):
+        session.wait_for("Permission required")
+        session.send_key("Enter")
+        time.sleep(0.6)
+    frame = session.wait_for("ALL_DONE")
+    assert "CANARY_LINE" in frame, frame
+    rows = frame.splitlines()
+
+    def after(needle: str) -> str:
+        """The row that has `needle`, and the one under it."""
+        index = next(i for i, line in enumerate(rows) if needle in line)
+        return " ".join((rows[index] + rows[index + 1]).split())
+
+    # What the call names, and its one-line result.
+    assert "Bash echo one⟨U+001B⟩[2Jline · one⟨U+001B⟩[2Jline" in after("echo one"), frame
+    # A call that failed: what it names, and its error.
+    assert re.search(r"Read missing⟨U\+001B⟩\[31m\.txt ⎿ .*missing⟨U\+001B⟩\[31m\.txt", after("Read missing")), frame
+    # A tool that is none of Cortex's: its name.
+    assert "◆ zz⟨U+001B⟩]0;T" in after("◆ zz"), frame
+    # An edit: its path, and its lines.
+    assert "Write no⟨U+202E⟩te.txt" in frame and "plain⟨U+202E⟩reversed" in frame, frame
+    session.send_key("C-o")
+    opened = session.wait_for("second⟨U+001B⟩[31m", timeout=10)  # output, with details open
+    assert "first    x" in opened and "⟨CR⟩" not in opened, opened  # a tab is 4 spaces, CRLF a line break
