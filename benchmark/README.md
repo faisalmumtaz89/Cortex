@@ -1,49 +1,59 @@
-# Benchmarking Cortex on Terminal-Bench 2.0
+# Running Cortex under Harbor
 
-The empirical scoreboard for Cortex-as-a-coding-agent: real tasks, real
-containers, observable pass/fail — the same doctrine as the E2E suite, scaled
-up.
+`cortex_agent.py` is a [Harbor](https://github.com/harbor-framework/harbor)
+adapter: it runs a benchmark task, such as one of Terminal-Bench's, with a
+released Cortex inside the task's container.
 
-## Setup (once)
+## What it does
+
+- **Install:** runs the release's own `install.sh`, taken from the release's
+  tag, with the version given, as the task's user. The installer checks the
+  wheel against the release's checksum and does not touch the user's shell
+  files. The image must have `bash`, a glibc userland (Cortex has no musl
+  build, so not Alpine) and a home directory the task's user can write to;
+  `curl` is installed if it is missing. The container needs to reach
+  github.com and PyPI.
+- **Run:** one headless turn,
+  `cortex -p "<the task>" --model <provider:model> --full-auto`, as the
+  task's user. Its output, the answer and the tool lines, is kept in the
+  trial's logs as `agent/cortex.txt`.
+- **Settings:** Cortex's documented maximums, since a task is one long turn:
+  `CORTEX_TOOLS_MAX_ITERATIONS=1000`, `CORTEX_CLOUD_TIMEOUT_SECONDS=600`,
+  `CORTEX_CLOUD_MAX_RETRIES=10`. Every other setting is Cortex's default.
+  Pass a setting yourself (below) to change any of them, these three
+  included.
+- **Exit code:** Cortex's own. When the turn fails, Harbor records the error
+  for the trial; the task's tests still run and decide the score.
+- **A task whose text starts with `/`** is refused, with an error on the
+  trial: Cortex would read it as a command.
+
+Cortex prints no token counts, so Harbor's results carry none: meter the
+model's use at the provider or with a proxy.
+
+## Run it
+
+Docker must be running. Install Harbor (`uv tool install harbor`), then, from
+the repository's root:
 
 ```bash
-# Harness (needs Docker running)
-python3 -m venv ~/.harbor-venv && ~/.harbor-venv/bin/pip install harbor
-
-# Lean cloud-only wheel for the task containers
-./benchmark/build_wheel.sh
+PYTHONPATH=benchmark harbor run \
+  -d terminal-bench/terminal-bench-2-1 \
+  -a cortex_agent:CortexAgent --ak version=2.0.15 \
+  -m openai-compatible:deepseek/deepseek-v4.1-flash \
+  --ae OPENAI_COMPATIBLE_BASE_URL=https://example.com/v1 \
+  --ae OPENAI_COMPATIBLE_API_KEY="$YOUR_KEY" \
+  --ae CORTEX_REASONING_EFFORT=high
 ```
 
-## Run
+- `--ak version=` is the release to install, and is required: a run names
+  what it measured.
+- `-m` is the model as Cortex names it, `provider:model`.
+- Each `--ae NAME=value` is set for Cortex in the container: the provider's
+  key and URL (see [the CLI reference](../docs/cli.md)), and any `CORTEX_*`
+  setting (see [Configuration](../docs/configuration.md)). A setting must be
+  one the installed release has: Cortex ignores a `CORTEX_*` variable it
+  does not know, and one whose value it does not accept falls back to the
+  default (the run's log says so). `reasoning_effort` came with 2.0.15.
 
-```bash
-export AZURE_OPENAI_API_KEY=...   # or OPENAI_API_KEY / ANTHROPIC_API_KEY
-export AZURE_OPENAI_ENDPOINT=https://<resource>.cognitiveservices.azure.com
-
-# One task
-PYTHONPATH=benchmark ~/.harbor-venv/bin/harbor run \
-  -d terminal-bench@2.0 -a "cortex_agent:CortexAgent" -m azure/gpt-5.5 \
-  -i chess-best-move -y
-
-# Full 89-task set, 4 concurrent
-PYTHONPATH=benchmark ~/.harbor-venv/bin/harbor run \
-  -d terminal-bench@2.0 -a "cortex_agent:CortexAgent" -m azure/gpt-5.5 -n 4 -y
-```
-
-Results land in `jobs/<timestamp>/`: job-level `result.json`, per-trial
-`result.json`, agent transcript at `<trial>/agent/cortex.txt`, verifier output
-under `<trial>/verifier/`.
-
-## How the adapter works
-
-`benchmark/cortex_agent.py` implements Harbor's `BaseInstalledAgent`:
-
-- `install()` bootstraps python3 (>=3.11) in the task container, uploads the
-  wheel from `benchmark/dist/`, and installs it cloud-only (`--no-deps` +
-  minimal deps) into `/installed-agent/venv`.
-- `run()` executes one headless turn:
-  `cortex -p "<instruction>" --model azure:gpt-5.5 --full-auto`, with runtime
-  tuning via `CORTEX_*` env-config overrides (iterations, timeouts, max
-  tokens).
-
-Rebuild the wheel (`./benchmark/build_wheel.sh`) after changing Cortex source.
+Results are written under `jobs/`: each trial has its `result.json`, the
+agent's output in `agent/cortex.txt` and the tests' output in `verifier/`.
