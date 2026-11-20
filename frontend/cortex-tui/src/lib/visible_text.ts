@@ -44,6 +44,20 @@ const CODE_MARKED = new RegExp(
   "gu",
 )
 
+/** `text` on one row, for a row that names a call or sums up its result: a
+ * run of spaces, tabs and line breaks reads as one space, and whatever else
+ * is invisible is marked, a blank that is not a space included. */
+export function visibleRow(text: string): string {
+  return visibleCode(text.replace(/[ \t\n\r\v\f]+/g, " ").replace(/^ | $/g, ""))
+}
+
+/** Marked text as what it draws: each marker whole, each other character.
+ * A cut made between these never leaves part of a marker (a `⟨` in the text
+ * is itself a marker, so `⟨...⟩` here is always one the marking wrote). */
+export function drawn(marked: string): string[] {
+  return marked.match(/⟨[^⟩]*⟩|[\s\S]/gu) ?? []
+}
+
 /** A line of code as a permission prompt shows it: `visibleLines` without
  * the counting of blank runs, which only a command needs. */
 export function visibleCode(text: string): string {
