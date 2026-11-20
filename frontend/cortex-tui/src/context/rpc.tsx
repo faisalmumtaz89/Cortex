@@ -134,6 +134,7 @@ export function RpcProvider(props: ParentProps) {
     })
     const session = await client.request("session.create_or_resume", {})
     store.setSessionID(String(session.session_id ?? ""))
+    store.clearError() // connected: "Still connecting" is over
     await refreshModels()
     await refreshSkills()
   }
@@ -170,7 +171,7 @@ export function RpcProvider(props: ParentProps) {
       1_800_000,
     )
 
-    store.clearError()
+    // An error stays while commands are run: it says what to do next.
     // /help is rendered from the registry (single source of truth) — no round-trip.
     if (lowerCommand === "/help") {
       store.setCommandResult({ command: "/help", ok: true, ...buildHelp() })
@@ -206,6 +207,13 @@ export function RpcProvider(props: ParentProps) {
       if (lowerCommand === "/clear" && ok) {
         store.clearTranscript()
       }
+      // A model chosen or a key saved changes what the error was about
+      // (/clear resets it with the transcript); the forms that only list do not.
+      const [name, ...given] = lowerCommand.split(/\s+/)
+      const chosen = name === "/model" && given.length > 0 && !["list", "ls"].includes(given[0])
+      if (ok && (chosen || (name === "/login" && given.length > 1))) {
+        store.clearError()
+      }
       await refreshModels()
       return true
     } catch (error) {
@@ -225,12 +233,12 @@ export function RpcProvider(props: ParentProps) {
     if (!sessionID || !normalized) {
       return false
     }
-    store.clearError()
     try {
       const maybeCommand = isSkillInput(normalized) ? null : slashCommandFor(normalized)
       if (maybeCommand) {
         return runCommand(maybeCommand)
       }
+      store.clearError()
 
       if (store.state.activeModelLabel === "No model loaded") {
         store.setError("No model loaded. Pick one with /model, or add a key with /login.")
