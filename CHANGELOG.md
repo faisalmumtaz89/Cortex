@@ -34,6 +34,8 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
 - An error stays on screen while you run `/status`, `/help` and the other
   commands, so what it says to do next can still be read. It goes when you
   send the next message, choose a model, save a key, or run `/clear`.
+- Ctrl+O shows the folded steps and long diffs above a permission prompt
+  while it waits. The key did nothing there, though the screen named it.
 
 ## 2.0.13
 

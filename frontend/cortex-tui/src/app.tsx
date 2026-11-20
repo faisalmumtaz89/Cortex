@@ -42,6 +42,15 @@ function SessionScreen() {
       exitCortex(0)
       return
     }
+    // Ctrl+O toggles tool detail, also under a permission prompt (what ran
+    // before it is what the answer depends on), but not while a command
+    // overlay is showing.
+    if (ctrl && key === "o") {
+      if (!store.state.paletteOpen && !store.state.commandResult) {
+        store.toggleToolsExpanded()
+      }
+      return
+    }
     if (store.state.pendingPermission) {
       // The global handler answers the prompt: arrow-select + Enter, no
       // numbers. Typing still goes to the input, for a message sent after it.
@@ -68,7 +77,7 @@ function SessionScreen() {
         void rpc.replyPermission(requestId, "reject") // Esc always rejects
         return
       }
-      // Permission prompt is modal: ignore all other keys until resolved.
+      // The prompt is modal: every other key waits until it is answered.
       return
     }
 
@@ -81,14 +90,6 @@ function SessionScreen() {
     }
     if (isEsc && store.state.commandResult) {
       store.clearCommandResult()
-      return
-    }
-
-    // Ctrl+O toggles tool detail, but not while a command overlay is showing.
-    if (ctrl && key === "o") {
-      if (!store.state.paletteOpen && !store.state.commandResult) {
-        store.toggleToolsExpanded()
-      }
       return
     }
 

@@ -2239,3 +2239,31 @@ def test_an_error_stays_while_commands_are_run(tui_project) -> None:
 
     session.send_line("second")
     session.wait_for("FINE_NOW", timeout=20)
+
+
+def test_ctrl_o_shows_the_folded_steps_while_a_permission_prompt_waits(tui_project) -> None:
+    """The transcript above a prompt says "Ctrl+O to expand": what the model
+    did before it asked is what the answer depends on. The key shows it, and
+    the prompt stays as it was."""
+    project, start = tui_project
+    for i in range(12):
+        (project / f"module_{i}.py").write_text(f"VALUE = {i}\n", encoding="utf-8")
+    reads = [{"name": "read_file", "arguments": {"path": f"module_{i}.py"}} for i in range(12)]
+    session = start([[
+        {"text": "Scanning.", "tool_calls": reads},
+        {"tool_calls": [{"name": "write_file", "arguments": {"path": "new.txt", "content": "x\n"}}]},
+        {"text": "WROTE_IT"},
+    ]])
+    _select_scripted_model(session)
+    session.send_line("review modules")
+    prompt = session.wait_for("❯ Allow once")
+    assert "earlier steps (Ctrl+O to expand)" in prompt, prompt
+
+    session.send_key("C-o")
+    expanded = session.wait_until(lambda frame: "earlier steps" not in frame,
+                                  description="the folded steps shown", timeout=10)
+    assert "❯ Allow once" in expanded and "new.txt" in expanded, expanded
+
+    session.send_key("Enter")
+    session.wait_for("WROTE_IT")
+    assert (project / "new.txt").read_text(encoding="utf-8") == "x\n"
