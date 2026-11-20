@@ -3251,6 +3251,37 @@ def _assert_sleep_ends() -> None:
     assert not _sleeping(), "the command outlived Cortex"
 
 
+def test_the_log_and_conversations_are_readable_by_their_owner_only(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The log and the conversations hold prompts, replies and command
+    output. They are private files, not only files in a private folder: a
+    copy or a backup of ~/.cortex, or a log_file set elsewhere, keeps the
+    mode. A log an earlier version left readable by others is tightened."""
+    script = _write_script(tmp_path / "script.json", [[{"text": "Hi."}]])
+    env = _worker_env(tmp_path, script)
+    home = tmp_path / "home" / ".cortex"
+    home.mkdir()
+    log = home / "cortex.log"
+    log.write_text("from an earlier version\n", encoding="utf-8")
+    log.chmod(0o644)
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        harness.wait_response(harness.send("session.submit_user_input", {
+            "session_id": session_id, "user_input": "hi", "active_target": CLOUD_TARGET}))
+        saved = harness.wait_response(harness.send(
+            "command.execute", {"session_id": session_id, "command": "/save"}))["result"]
+    finally:
+        harness.close()
+
+    conversations = home / "conversations"
+    files = [log, conversations / "conversations.db", Path(saved["path"])]
+    assert [(file.name, oct(file.stat().st_mode & 0o777)) for file in files] == [
+        (file.name, "0o600") for file in files]
+    assert "from an earlier version" in log.read_text(encoding="utf-8")
+
+
 def test_a_password_in_the_url_reaches_neither_the_log_nor_debug_output(
     tmp_path: Path, scratch_repo: Path
 ) -> None:

@@ -14,6 +14,15 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   URL in Cortex's own messages only. If your URL carried a password or a
   key, an earlier log and any CI output captured with `debug_mode` may
   hold it: delete the log and replace that password or key.
+- The log, the conversation history and conversations saved with `/save`
+  are created as files only you can read, not only as files in the private
+  `~/.cortex` folder: a copy or backup of the folder, or a `log_file` set
+  elsewhere, no longer leaves a new one readable by other users (a path
+  that is a link is left as you set it). The log and history an earlier
+  version wrote in `~/.cortex` are tightened when Cortex next opens them
+  (one with a second hard link is not); conversations saved earlier keep
+  their mode (in the default folder,
+  `chmod 600 ~/.cortex/conversations/*.json` tightens them).
 
 ## 2.0.13
 

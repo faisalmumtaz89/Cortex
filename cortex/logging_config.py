@@ -9,7 +9,7 @@ from logging import Handler
 from pathlib import Path
 
 from cortex.cloud.router import SECRET_PARAMETER
-from cortex.config import Config
+from cortex.config import Config, keep_private
 
 _USERINFO = re.compile(r"(://)[^/?#\s]+@")
 # The name cannot hold a ?, or a long run of them is matched from every one.
@@ -41,6 +41,7 @@ def configure_logging(config: Config) -> None:
         getattr(config.logging, "log_file", Path.home() / ".cortex" / "cortex.log")
     ).expanduser()
     log_file.parent.mkdir(parents=True, exist_ok=True)
+    keep_private(log_file)
 
     file_handler: Handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setLevel(log_level)

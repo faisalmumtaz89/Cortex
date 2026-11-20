@@ -2,6 +2,7 @@
 
 import logging
 import os
+import stat
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type
 
@@ -86,6 +87,37 @@ _RETIRED = {
     "timeout, and a permission prompt waits for your answer",
     **{key: "it has no effect in Cortex, and can be deleted" for key in _NO_EFFECT},
 }
+
+
+def keep_private(path: Path) -> None:
+    """Create a file that holds what the user typed, read or ran (the log,
+    the conversations) readable by its owner only when it is missing: a
+    copy or backup of ~/.cortex, or a path set elsewhere, keeps the file's
+    own mode. A file Cortex left readable by others before 2.0.14 is
+    tightened (it loses what others may do, and gains nothing), which means a regular file of the user's, with no other name,
+    inside ~/.cortex. Anything else is not even opened: a file shared on
+    purpose elsewhere, a link, a device, or a pipe, whose reader would take
+    an open and close for the end of the log."""
+    try:
+        try:
+            found = os.lstat(path)
+        except FileNotFoundError:
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+            return
+        if not stat.S_ISREG(found.st_mode):
+            return
+        if not Path(path).resolve().is_relative_to((Path.home() / ".cortex").resolve()):
+            return
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(descriptor)
+            ours = stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+            if ours and info.st_nlink == 1 and info.st_mode & 0o077:
+                os.fchmod(descriptor, info.st_mode & 0o700)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        pass  # opening the file for use says why it cannot be written
 
 
 class Config:
