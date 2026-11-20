@@ -4,7 +4,7 @@
 // drive the real event path (tests/store_notices.test.ts). The Solid
 // context/provider wrapper lives in ./store.tsx.
 import { batch, onCleanup } from "solid-js"
-import { createStore } from "solid-js/store"
+import { createStore, reconcile } from "solid-js/store"
 import { isOutOfBandNotice } from "../lib/notices"
 import type { EventEnvelope, SessionStatus } from "../protocol"
 import { permissionLayout } from "../lib/permission_prompt"
@@ -719,7 +719,9 @@ export function createSessionStore() {
     hang?: number
     background?: boolean
   }) => {
-    setState("commandResult", result)
+    // A store merges an object into the one it holds: each result replaces
+    // the last whole, or /help's indent and a background flag would carry over.
+    setState("commandResult", reconcile(result))
     setState("resultScroll", 0)
   }
 

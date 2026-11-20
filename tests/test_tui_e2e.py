@@ -1748,6 +1748,9 @@ def test_update_notice_status_panel_and_live_update_narration(tui_project, tmp_p
             timeout=20,
         )
         assert "Working…" not in live  # background op: never the turn spinner
+        # A panel opened meanwhile is not the update's: it stays when the update ends.
+        session.send_line("/help")
+        session.wait_for("✓ /help", timeout=10)
 
         # Resolves in place: final message, no lingering live indicator.
         final = "Cortex 9.9.9 installed, its checksum verified — restart Cortex to apply."
@@ -1758,6 +1761,8 @@ def test_update_notice_status_panel_and_live_update_narration(tui_project, tmp_p
             description="update indicator resolved into the final message",
             timeout=10,
         )
+        time.sleep(1)
+        assert "✓ /help" in session.capture()
 
 
 def test_working_spinner_and_queued_input_dispatch(tui_project) -> None:
@@ -2267,3 +2272,22 @@ def test_ctrl_o_shows_the_folded_steps_while_a_permission_prompt_waits(tui_proje
     session.send_key("Enter")
     session.wait_for("WROTE_IT")
     assert (project / "new.txt").read_text(encoding="utf-8") == "x\n"
+
+
+def test_a_result_starts_at_the_panel_edge_after_help(tui_project) -> None:
+    """/help indents the rows a description wraps to. The result of the next
+    command, shown in the same panel while /help is still open, is a result
+    of its own: a line of it that wraps goes on at the panel's edge."""
+    project, start = tui_project
+    session = start([[{"text": "IGNORED"}]])
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", "60", "-y", "30"],
+                   check=True)  # narrow enough that the saved file's path wraps
+    session.wait_for("Session ready")
+    session.send_line("/help")
+    session.wait_for("✓ /help", timeout=15)
+    session.send_line("/save")
+    frame = session.wait_for("Saved conversation", timeout=15)
+    saved = frame[frame.index("Saved conversation"):]
+    rows = [row for row in saved.splitlines() if "┃" in row and row.split("┃", 1)[1].strip()]
+    assert len(rows) >= 3, frame  # the path wrapped
+    assert all(re.match(r"\s*┃  \S", row) for row in rows), frame
