@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { alwaysCovers } from "../src/lib/permission_prompt"
 import { shellSummary } from "../src/lib/shell_summary"
 import { gitSummary } from "../src/lib/git_summary"
 
@@ -30,5 +31,27 @@ describe("git row summary", () => {
     expect(gitSummary({ command: "diff", staged: true })).toBe("diff --staged")
     expect(gitSummary({ command: "diff", revision: "main...HEAD", stat: true })).toBe("diff main...HEAD --stat")
     expect(gitSummary({ command: "log", patch: true, paths: ["src/app.py"] })).toBe("log -p -- src/app.py")
+  })
+})
+
+describe("what Allow always would cover", () => {
+  const prompt = (permission: string, pattern: string) => ({ permission, patterns: [pattern], metadata: {} })
+
+  test("is the exact command, or the file", () => {
+    expect(alwaysCovers(prompt("bash", "ls | wc"), "Allow always", { columns: 80, rows: 24 }))
+      .toBe(" · this exact command")
+    expect(alwaysCovers(prompt("edit", "a.py"), "Allow always", { columns: 80, rows: 24 })).toBe(" · this file")
+  })
+
+  test("is not said when no rule would be saved, or for another kind of call", () => {
+    expect(alwaysCovers(prompt("bash", "*"), "Allow always", { columns: 80, rows: 24 })).toBeUndefined()
+    expect(alwaysCovers(prompt("doom_loop", "x"), "Allow always", { columns: 80, rows: 24 })).toBeUndefined()
+  })
+
+  test("is not said where it would make the choice wrap", () => {
+    expect(alwaysCovers(prompt("bash", "ls"), "Allow always", { columns: 42, rows: 24 })).toBe(" · this exact command")
+    expect(alwaysCovers(prompt("bash", "ls"), "Allow always", { columns: 41, rows: 24 })).toBeUndefined()
+    expect(alwaysCovers(prompt("edit", "a.py"), "Allow always", { columns: 33, rows: 24 })).toBe(" · this file")
+    expect(alwaysCovers(prompt("edit", "a.py"), "Allow always", { columns: 32, rows: 24 })).toBeUndefined()
   })
 })

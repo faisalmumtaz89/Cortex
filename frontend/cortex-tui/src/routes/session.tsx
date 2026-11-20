@@ -21,7 +21,7 @@ import {
 import { useStore } from "../context/store"
 import { readGitBranch } from "../lib/git_branch"
 import { spinnerFrame } from "../lib/spinner"
-import { permissionLayout } from "../lib/permission_prompt"
+import { alwaysCovers, permissionLayout } from "../lib/permission_prompt"
 import { resultLayout } from "../lib/result_layout"
 import { panelRows } from "../lib/screen_rows"
 import { promptHasDraft, registerPromptDraft } from "../lib/prompt_draft"
@@ -76,9 +76,9 @@ const OVERLAY_BORDER = {
 }
 
 // Permission choices, in highlight order; index maps to the reply string.
-const PERMISSION_OPTIONS: { label: string; danger?: boolean }[] = [
+const PERMISSION_OPTIONS: { label: string; danger?: boolean; always?: boolean }[] = [
   { label: "Allow once" },
-  { label: "Allow always" },
+  { label: "Allow always", always: true },
   { label: "Reject", danger: true },
 ]
 const PERMISSION_REPLIES = ["allow_once", "allow_always", "reject"] as const
@@ -1142,7 +1142,12 @@ export function SessionRoute(props: {
               items={PERMISSION_OPTIONS}
               selectedIndex={store.state.permissionChoiceIndex}
               getPrimary={(option) => option.label}
+              getSecondary={(option) => {
+                const pending = store.state.pendingPermission
+                return option.always && pending ? alwaysCovers(pending, option.label, store.screen()) : undefined
+              }}
               getDanger={(option) => Boolean(option.danger)}
+              oneRowEach
             />
           </box>
         </Show>

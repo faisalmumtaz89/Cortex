@@ -10,6 +10,9 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   wraps to the panel's left edge; it was indented like the help list's.
   `/help` opened while `/update cortex` runs stays open when the update
   ends.
+- "Allow always" says what it covers: this exact command, or this file. It
+  says so beside the choice, where the screen has room, and on the call's
+  row once saved. What it covers has not changed.
 
 ## 2.0.14
 

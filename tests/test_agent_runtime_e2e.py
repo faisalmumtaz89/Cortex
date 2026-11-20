@@ -596,7 +596,8 @@ def test_workdir_pattern_cannot_run_anywhere_else(
         (part,) = [part for part in harness.tool_parts() if part.get("state") != "running"]
         note = part["metadata"]["permission_note"]
         if saved:
-            assert note == "Allowed from now on here: saved in ~/.cortex/tool_permissions.yaml", note
+            assert note == ("Allowed from now on here, for this exact command: saved in "
+                            "~/.cortex/tool_permissions.yaml"), note
         else:
             assert note == "Allowed this once: a call with no command or file to name is never saved", note
     finally:

@@ -76,6 +76,9 @@ interface RowProps<T> {
   getTag?: (item: T) => SelectionTag | undefined
   getDanger?: (item: T) => boolean
   maxVisibleRows?: number
+  /** A row is cut at the list's width, never wrapped: for a list whose rows
+   * are counted (the permission prompt's choices). */
+  oneRowEach?: boolean
 }
 
 /** Just the windowed selectable rows (no panel chrome) — used directly by the
@@ -108,7 +111,7 @@ export function SelectionRows<T>(props: RowProps<T>) {
               justifyContent="space-between"
               backgroundColor={selected() ? UI_PALETTE.codeBackground : undefined}
             >
-              <text>
+              <text wrapMode={props.oneRowEach ? "none" : "word"}>
                 <span style={{ fg: selected() ? UI_PALETTE.accent : UI_PALETTE.textMuted }}>
                   {selected() ? "❯ " : "  "}
                 </span>
