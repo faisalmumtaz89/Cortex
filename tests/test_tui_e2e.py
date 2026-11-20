@@ -2210,3 +2210,32 @@ def test_inline_code_that_wraps_keeps_every_character(tui_project, columns) -> N
     for line in INLINE_CODE_REPLY.replace("`", "").replace("**", "").splitlines()[1:-1]:
         expected = re.sub(r"\s+", " ", line.lstrip("- ").strip())
         assert expected in shown, f"{expected!r} not shown whole:\n{frame}"
+
+
+def test_an_error_stays_while_commands_are_run(tui_project) -> None:
+    """The error says what failed and what to do next: looking around with
+    /status or /help must not erase it. It goes when something changes what it is about:
+    the next message is sent, or another model is chosen."""
+    project, start = tui_project
+    session = start([[{"error": "The endpoint said no. END_OF_ERROR"}], [{"text": "FINE_NOW"}]])
+    _select_scripted_model(session)
+    session.send_line("first")
+    session.wait_for("END_OF_ERROR", timeout=20)
+
+    session.send_line("/status")
+    status = session.wait_for("System status", timeout=10)
+    assert "END_OF_ERROR" in status, status
+    session.send_line("/help")
+    assert "END_OF_ERROR" in session.wait_for("✓ /help", timeout=10)
+    # Neither does a list of the models, or a choice that fails.
+    session.send_line("/model list")
+    assert "END_OF_ERROR" in session.wait_for("✓ /model list", timeout=10)
+    session.send_line("/model nosuch:model")
+    assert "END_OF_ERROR" in session.wait_for("✕ /model nosuch:model", timeout=10)
+
+    session.send_line("/model azure:scripted")
+    session.wait_until(lambda frame: "END_OF_ERROR" not in frame,
+                       description="the error gone once a model is chosen", timeout=10)
+
+    session.send_line("second")
+    session.wait_for("FINE_NOW", timeout=20)

@@ -31,6 +31,9 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   full stop no longer reads "... not found.. Check the model name".
 - `cortex -p "/update"` says how to update without the app: run the
   installer again.
+- An error stays on screen while you run `/status`, `/help` and the other
+  commands, so what it says to do next can still be read. It goes when you
+  send the next message, choose a model, save a key, or run `/clear`.
 
 ## 2.0.13
 
