@@ -2988,6 +2988,8 @@ def test_headless_says_where_an_app_command_runs(
         assert "--model" in process.stderr
     if command.startswith("/login"):
         assert "cortex login PROVIDER [URL]" in process.stderr
+    if command.startswith("/update"):
+        assert "run the installer again" in process.stderr
     assert "sk-x" not in process.stderr
 
 

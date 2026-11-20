@@ -339,6 +339,8 @@ def run_headless(
             "/model": " Pick the model with --model provider:model.",
             "/login": " Here, save a key with `cortex login PROVIDER [URL]`, which reads it from "
             "stdin.",
+            "/update": " Here, run the installer again to update (in a source checkout, after "
+            "`git pull`): it keeps your settings and keys.",
         }
         hint = hints.get(command, "")
         print(
