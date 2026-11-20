@@ -27,6 +27,8 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   SIGINT) ends it at once whichever of its threads the system delivers it
   to. One delivered to a thread other than the main one was not acted on
   until Cortex's input closed: a process whose input stayed open lived on.
+- A 403 or 404 error whose message from the server already ends with a
+  full stop no longer reads "... not found.. Check the model name".
 
 ## 2.0.13
 
