@@ -37,10 +37,9 @@ class HandshakeResult(BaseModel):
 
 
 class SessionCreateOrResumeParams(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    """A session starts a new conversation: there is none to name."""
 
-    conversation_id: Optional[str] = None
-    title: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
 
 
 class SessionCreateOrResumeResult(BaseModel):
@@ -48,7 +47,6 @@ class SessionCreateOrResumeResult(BaseModel):
 
     session_id: str
     conversation_id: str
-    restored: bool = False
     active_model_label: str
 
 

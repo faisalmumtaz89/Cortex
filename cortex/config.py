@@ -47,7 +47,6 @@ class ConversationConfig(BaseModel):
     """Conversation settings."""
     auto_save: bool = True
     save_directory: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "conversations")
-    max_conversation_history: int = Field(default=100, ge=1)
 
 class SystemConfig(BaseModel):
     """System settings."""
@@ -74,9 +73,10 @@ _SECTIONS: Dict[str, Type[BaseModel]] = {
 # config file is named once at startup, so it can be deleted.
 _NO_EFFECT = frozenset({
     "auto_scroll", "copy_on_select", "crash_recovery", "enable_branching", "log_rotation",
-    "markdown_rendering", "max_log_size", "mouse_support", "performance_logging",
-    "plugins_dir", "save_format", "show_performance_metrics", "shutdown_timeout",
-    "syntax_highlighting", "templates_dir", "tools_continue_on_reject", "ui_theme",
+    "markdown_rendering", "max_conversation_history", "max_log_size", "mouse_support",
+    "performance_logging", "plugins_dir", "save_format", "show_performance_metrics",
+    "shutdown_timeout", "syntax_highlighting", "templates_dir", "tools_continue_on_reject",
+    "ui_theme",
 })
 # Read by the OpenAI and Anthropic SDKs, not by Cortex: those providers
 # always use their official hosts (cortex/cloud/types.py), so a variable left in

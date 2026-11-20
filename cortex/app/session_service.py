@@ -125,25 +125,26 @@ class SessionService:
         self.model_service.active_target = target
         return target
 
-    def _get_or_create_conversation(self, session_id: str, conversation_id: Optional[str] = None):
+    def _conversation_of(self, session_id: str):
+        """The session's conversation, a new one when it has none yet: Cortex
+        has no way to reopen an earlier one."""
         with self._lock:
-            mapped_id = conversation_id or self._session_to_conversation.get(session_id)
+            mapped_id = self._session_to_conversation.get(session_id)
 
         if mapped_id and mapped_id in self.conversation_manager.conversations:
             self.conversation_manager.switch_conversation(mapped_id)
-            return self.conversation_manager.conversations[mapped_id], True
+            return self.conversation_manager.conversations[mapped_id]
 
         conversation = self.conversation_manager.new_conversation()
         with self._lock:
             self._session_to_conversation[session_id] = conversation.conversation_id
-        return conversation, False
+        return conversation
 
-    def create_or_resume(self, *, session_id: str, conversation_id: Optional[str] = None):
-        conversation, restored = self._get_or_create_conversation(session_id, conversation_id)
+    def create_or_resume(self, *, session_id: str):
+        conversation = self._conversation_of(session_id)
         return {
             "session_id": session_id,
             "conversation_id": conversation.conversation_id,
-            "restored": restored,
             "active_model_label": self.model_service.get_active_model_label(),
         }
 
@@ -175,7 +176,7 @@ class SessionService:
         stop_sequences: Optional[List[str]],
         emit_event,
     ) -> Dict[str, object]:
-        conversation, _ = self._get_or_create_conversation(session_id)
+        conversation = self._conversation_of(session_id)
         active_target = self._resolve_active_target(active_target_input)
         active_model_label = self.model_service.get_active_model_label()
         turn_started_ms = self._now_ms()

@@ -149,6 +149,25 @@ def test_worker_command_execute_emits_system_notice_event() -> None:
         process.wait(timeout=5)
 
 
+def test_a_session_start_takes_no_conversation_to_resume(tmp_path: Path) -> None:
+    """Cortex cannot reopen a conversation, so the protocol does not offer
+    it: the request has no conversation to name, and the answer does not say
+    one was restored."""
+    process, send, recv_until = _worker_session(_worker_env(tmp_path))
+    try:
+        send(1, "app.handshake", {"protocol_version": "1.0.0"})
+        recv_until(1)
+        send(2, "session.create_or_resume", {"conversation_id": "an-earlier-one"})
+        refused, _events = recv_until(2)
+        assert refused.get("error", {}).get("code") == -32602, refused
+        send(3, "session.create_or_resume", {})
+        started, _events = recv_until(3)
+        assert sorted(started["result"]) == ["active_model_label", "conversation_id", "session_id"], started
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
 def test_worker_session_start_reports_no_model_without_keys(tmp_path: Path) -> None:
     process, send, recv_until = _worker_session(_worker_env(tmp_path))
     try:

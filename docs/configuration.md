@@ -89,7 +89,6 @@ auto_update_check: true      # false: no daily check for a new release
 
 - `auto_save` (default: `true`) — persist conversations to `~/.cortex/conversations/conversations.db`.
 - `save_directory` (default: `~/.cortex/conversations`)
-- `max_conversation_history` (default: `100`).
 
 ### Logging
 

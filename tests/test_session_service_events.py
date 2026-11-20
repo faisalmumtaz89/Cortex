@@ -117,7 +117,7 @@ def test_session_service_emits_single_idle_transition_after_finish_event(tmp_pat
     )
 
     session_id = "session-1"
-    service.create_or_resume(session_id=session_id, conversation_id=None)
+    service.create_or_resume(session_id=session_id)
 
     events: list[tuple[str, dict[str, object]]] = []
 
@@ -181,7 +181,7 @@ def test_interrupt_mid_turn_finalizes_partial_text(tmp_path: Path) -> None:
     orchestrator.service = service
 
     session_id = "session-3"
-    service.create_or_resume(session_id=session_id, conversation_id=None)
+    service.create_or_resume(session_id=session_id)
 
     events: list[tuple[str, dict[str, object]]] = []
 
@@ -242,7 +242,7 @@ def _run_interrupted_tool_turn(tmp_path: Path, orchestrator_cls):
     )
     orchestrator.service = service
     session_id = "session-tools"
-    service.create_or_resume(session_id=session_id, conversation_id=None)
+    service.create_or_resume(session_id=session_id)
 
     events: list[tuple[str, dict[str, object]]] = []
 
@@ -372,7 +372,7 @@ def test_session_service_turn_failure_returns_structured_result_without_raise(tm
     )
 
     session_id = "session-2"
-    service.create_or_resume(session_id=session_id, conversation_id=None)
+    service.create_or_resume(session_id=session_id)
 
     events: list[tuple[str, dict[str, object]]] = []
 
@@ -424,7 +424,7 @@ def test_mid_turn_model_switch_does_not_relabel_in_flight_turn(tmp_path: Path) -
         tooling_bridge=_FakeBridge(),
     )
     session_id = "session-switch"
-    service.create_or_resume(session_id=session_id, conversation_id=None)
+    service.create_or_resume(session_id=session_id)
 
     events: list[tuple[str, dict[str, object]]] = []
 
@@ -476,7 +476,7 @@ def test_setup_failure_never_leaks_turn_registration(tmp_path: Path) -> None:
     """A raise in the pre-turn setup span (here: the very first emit_event —
     the user-message frame) must never leak the interrupt registration."""
     service = _build_service(tmp_path)
-    service.create_or_resume(session_id="s1", conversation_id=None)
+    service.create_or_resume(session_id="s1")
 
     def exploding_emit(*, session_id: str, event_type: str, payload: dict[str, object]) -> None:
         raise RuntimeError("event pipe broken during setup")
@@ -501,7 +501,7 @@ def test_bind_turn_failure_never_leaks_turn_registration(tmp_path: Path) -> None
             raise RuntimeError("bridge bind failed")
 
     service = _build_service(tmp_path, bridge=_ExplodingBridge())
-    service.create_or_resume(session_id="s1", conversation_id=None)
+    service.create_or_resume(session_id="s1")
 
     with pytest.raises(RuntimeError, match="bridge bind failed"):
         service.submit_user_input(
@@ -535,7 +535,7 @@ def test_turn_registration_spans_the_turn_and_clears_after_success_and_failure(
     orchestrator = _ObservingOrchestrator()
     service = _build_service(tmp_path, orchestrator=orchestrator)
     orchestrator.service = service
-    service.create_or_resume(session_id="s1", conversation_id=None)
+    service.create_or_resume(session_id="s1")
     result = service.submit_user_input(
         session_id="s1",
         user_input="hello",
@@ -549,7 +549,7 @@ def test_turn_registration_spans_the_turn_and_clears_after_success_and_failure(
 
     # Orchestrator failure (caught → structured error result): still empty.
     failing = _build_service(tmp_path, orchestrator=_RaisingOrchestrator())
-    failing.create_or_resume(session_id="s2", conversation_id=None)
+    failing.create_or_resume(session_id="s2")
     failure = failing.submit_user_input(
         session_id="s2",
         user_input="hello",
@@ -577,7 +577,7 @@ def test_cut_off_reply_keeps_its_text_and_parts_in_the_conversation(tmp_path: Pa
             raise ReplyCutOffError("The model reached the output limit", parts)
 
     service = _build_service(tmp_path, orchestrator=_CutOffOrchestrator())
-    service.create_or_resume(session_id="s1", conversation_id=None)
+    service.create_or_resume(session_id="s1")
     result = service.submit_user_input(
         session_id="s1",
         user_input="fix it",
@@ -599,7 +599,7 @@ def test_failed_turn_does_not_keep_its_text(tmp_path: Path) -> None:
             raise RuntimeError("Model provenance mismatch")
 
     service = _build_service(tmp_path, orchestrator=_FailingAfterTextOrchestrator())
-    service.create_or_resume(session_id="s1", conversation_id=None)
+    service.create_or_resume(session_id="s1")
     service.submit_user_input(
         session_id="s1",
         user_input="fix it",

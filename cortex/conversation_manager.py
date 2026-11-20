@@ -197,8 +197,6 @@ class ConversationManager:
         if config.conversation.auto_save:
             self._init_database()
 
-        self._load_recent_conversations()
-
     def _init_database(self) -> None:
         """Initialize SQLite database for persistence."""
         self.db_path = self.save_dir / "conversations.db"
@@ -241,57 +239,6 @@ class ConversationManager:
                 CREATE INDEX IF NOT EXISTS idx_messages_conversation
                 ON messages(conversation_id)
             """)
-
-    def _load_recent_conversations(self) -> None:
-        """Load recent conversations from storage."""
-        if not hasattr(self, 'db_path') or not self.db_path.exists():
-            return
-
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.execute("""
-                    SELECT conversation_id, title, created_at, updated_at, parent_id, metadata
-                    FROM conversations
-                    ORDER BY updated_at DESC
-                    LIMIT ?
-                """, (self.config.conversation.max_conversation_history,))
-
-                for row in cursor:
-                    conv_id = row[0]
-
-                    messages_cursor = conn.execute("""
-                        SELECT role, content, timestamp, tokens, metadata, message_id, parts
-                        FROM messages
-                        WHERE conversation_id = ?
-                        ORDER BY timestamp ASC
-                    """, (conv_id,))
-
-                    messages = []
-                    for msg_row in messages_cursor:
-                        messages.append(Message(
-                            role=MessageRole(msg_row[0]),
-                            content=msg_row[1],
-                            timestamp=datetime.fromisoformat(msg_row[2]),
-                            tokens=msg_row[3],
-                            metadata=json.loads(msg_row[4]) if msg_row[4] else {},
-                            message_id=msg_row[5],
-                            parts=json.loads(msg_row[6]) if len(msg_row) > 6 and msg_row[6] else [],
-                        ))
-
-                    conversation = Conversation(
-                        conversation_id=conv_id,
-                        title=row[1],
-                        created_at=datetime.fromisoformat(row[2]),
-                        updated_at=datetime.fromisoformat(row[3]),
-                        messages=messages,
-                        metadata=json.loads(row[5]) if row[5] else {},
-                        parent_id=row[4]
-                    )
-
-                    self.conversations[conv_id] = conversation
-
-        except Exception as e:
-            print(f"Warning: Failed to load conversations: {e}")
 
     def new_conversation(self, title: Optional[str] = None) -> Conversation:
         """Create a new conversation."""
