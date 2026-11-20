@@ -1075,12 +1075,15 @@ def test_allow_always_says_what_it_saved_and_where(tui_project) -> None:
     session = start([turn, turn])
     _select_scripted_model(session)
     session.send_line("log it")
-    session.wait_for("Permission required")
+    prompt = session.wait_for("Permission required")
+    # The choice says what it would cover, before it is made.
+    assert re.search(r"Allow always · this exact command *\n", prompt), prompt
     session.send_key("Down")  # Allow always
     time.sleep(0.4)
     session.send_key("Enter")
     frame = session.wait_for("RAN_MARKER")
-    assert "⎿ Allowed from now on here: saved in ~/.cortex/tool_permissions.yaml" in frame, frame
+    assert ("⎿ Allowed from now on here, for this exact command: saved in "
+            "~/.cortex/tool_permissions.yaml") in " ".join(frame.split()), frame
     session.send_line("log it again")
     session.wait_until(lambda f: f.count("RAN_MARKER") == 2, description="the second run", timeout=20)
     assert (project / "log.txt").read_text(encoding="utf-8") == "again\nagain\n"
@@ -2291,3 +2294,45 @@ def test_a_result_starts_at_the_panel_edge_after_help(tui_project) -> None:
     rows = [row for row in saved.splitlines() if "┃" in row and row.split("┃", 1)[1].strip()]
     assert len(rows) >= 3, frame  # the path wrapped
     assert all(re.match(r"\s*┃  \S", row) for row in rows), frame
+
+
+def test_allow_always_on_an_edit_names_the_file(tui_project) -> None:
+    """An edit's "Allow always" covers that file: the choice says so before
+    it is made, and the call's row once the rule is saved."""
+    project, start = tui_project
+    session = start([[
+        {"tool_calls": [{"name": "write_file", "arguments": {"path": "new.txt", "content": "x\n"}}]},
+        {"text": "ALL_DONE"},
+    ]])
+    _select_scripted_model(session)
+    session.send_line("write it")
+    edit = session.wait_for("Write file: new.txt")
+    assert re.search(r"Allow always · this file *\n", edit), edit
+    session.send_key("Down")  # Allow always
+    time.sleep(0.4)
+    session.send_key("Enter")
+    done = session.wait_for("ALL_DONE")
+    assert ("⎿ Allowed from now on here, for this file: saved in "
+            "~/.cortex/tool_permissions.yaml") in " ".join(done.split()), done
+
+
+@pytest.mark.parametrize(
+    ("columns", "always"),
+    [(41, "Allow always"), (42, "Allow always · this exact command")],
+)
+def test_the_choices_take_one_row_each_on_a_narrow_screen(tui_project, columns: int, always: str) -> None:
+    """The prompt's rows are counted, so that its call and the choice Enter
+    takes are on screen: what "Allow always" covers is said beside it only
+    where the row has room for all of it."""
+    project, start = tui_project
+    session = start([[{"tool_calls": [{"name": "bash", "arguments": {"command": "echo hi"}}]}, {"text": "DONE"}]])
+    _select_scripted_model(session)
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name, "-x", str(columns), "-y", "14"],
+                   check=True)
+    session.wait_until(lambda frame: max(len(row) for row in frame.splitlines()) <= columns,
+                       description="the resize", timeout=10)
+    session.send_line("run")
+    frame = session.wait_for("Permission required")
+    choices = [row.split("┃", 1)[1].strip() for row in frame.splitlines()
+               if "┃" in row and re.search(r"Allow once|Allow always|Reject", row)]
+    assert [choice.lstrip("❯ ") for choice in choices] == ["Allow once", always, "Reject"], frame

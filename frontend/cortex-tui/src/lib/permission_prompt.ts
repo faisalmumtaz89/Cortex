@@ -87,6 +87,19 @@ const DIFF_INDENT = 2
 const PROMPT_ROWS = 5
 const MIN_BODY_ROWS = 3
 
+// What "Allow always" would save a rule for.
+const ALWAYS_COVERS: Record<string, string> = { bash: "this exact command", edit: "this file" }
+
+/** What "Allow always" would cover, said beside the choice before it is
+ * made. Nothing when no rule would be saved (a call with no command or file
+ * to name), or when it would make the choice wrap: the prompt's rows are
+ * counted, and a choice takes exactly one. */
+export function alwaysCovers(pending: PermissionPrompt, label: string, screen: Screen): string | undefined {
+  const covers = pending.patterns[0] !== "*" ? ALWAYS_COVERS[pending.permission] : undefined
+  const room = Math.max(10, screen.columns - TEXT_INDENT) - "❯ ".length - label.length
+  return covers && ` · ${covers}`.length <= room ? ` · ${covers}` : undefined
+}
+
 function textRows(text: string, tone: PromptTone, columns: number): PromptRow[] {
   return visibleLines(text).flatMap((line) => wrapSpans([], [], [{ text: line, tone }], columns))
 }

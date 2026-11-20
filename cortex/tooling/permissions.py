@@ -289,7 +289,8 @@ class PermissionManager:
             return (f"Allowed in this session only: could not save it to "
                     f"{_shown(self.store.path)} ({type(exc).__name__}: {exc})")
         self._loaded_stamp = _STALE  # reload: the file now holds the merged rules
-        return f"Allowed from now on here: saved in {_shown(self.store.path)}"
+        covered = {"bash": ", for this exact command", "edit": ", for this file"}.get(permission, "")
+        return f"Allowed from now on here{covered}: saved in {_shown(self.store.path)}"
 
     def request(
         self,

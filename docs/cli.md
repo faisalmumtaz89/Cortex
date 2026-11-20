@@ -224,7 +224,7 @@ With tools enabled (the default: `tools_enabled: true`, `tools_profile: full`), 
 File tools work only inside the directory Cortex was started in (a call for a file elsewhere is refused without a prompt), and `bash` runs there or in a directory below it; `bash` commands are not otherwise sandboxed. When permission is needed, the TUI shows an arrow menu (↑↓ to choose, Enter to confirm):
 
 - **Allow once** — allows this one call; the next call asks again
-- **Allow always** — allows this exact command, run in the same directory (for `bash`), or this file (for edits) from now on, only in the directory Cortex was started in; saved in `~/.cortex/tool_permissions.yaml`, as the call's row then says (or that it could not be saved, and why: the rule then holds until Cortex exits). A call with no command or file to name is allowed this once only, and its row says so.
+- **Allow always** — allows this exact command, run in the same directory (for `bash`), or this file (for edits) from now on, as the choice says beside it where the screen has room, only in the directory Cortex was started in; saved in `~/.cortex/tool_permissions.yaml`, as the call's row then says (or that it could not be saved, and why: the rule then holds until Cortex exits). A call with no command or file to name is allowed this once only, and its row says so.
 - **Reject** (or `Esc`) — the model continues without the tool result
 
 An edit's prompt shows the file and the size of the change (`+3 -2`), and the change itself as a diff with line numbers before anything is written, starting just before the first changed line; a long line wraps under its code. Invisible and control characters in the new text show as markers such as `⟨U+202E⟩`, a tab as `⟨tab⟩`.
