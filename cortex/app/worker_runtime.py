@@ -661,8 +661,33 @@ class WorkerRuntime:
                 except (ValueError, OSError):
                     pass  # non-main thread / unsupported: EOF path still covers us
 
+        # The system may hand a signal to any thread, and Python runs the
+        # handler on the main thread only, between two of its instructions:
+        # a main thread blocked reading stdin would never run it. So requests
+        # are read on another thread, and the main one waits on a pipe that
+        # every handled signal, and the end of stdin, writes to.
+        woken, wake = os.pipe()
+        os.set_blocking(wake, False)
         try:
-            self.rpc_server.run_forever()
+            signal.set_wakeup_fd(wake, warn_on_full_buffer=False)
+        except ValueError:
+            pass  # non-main thread: no handler was installed either
+        served = threading.Event()
+
+        def _serve() -> None:
+            try:
+                self.rpc_server.run_forever()
+            except Exception:
+                # Stdin or stdout failed: the worker ends, as at the end of stdin.
+                logger.debug("The request loop ended on an error", exc_info=True)
+            finally:
+                served.set()
+                os.write(wake, b"\0")
+
+        try:
+            threading.Thread(target=_serve, name="cortex-rpc-reader", daemon=True).start()
+            while not served.is_set():
+                os.read(woken, 1)
         finally:
             # Quitting Cortex must never orphan an in-flight installer (the
             # update thread is a daemon; os._exit skips its finally cleanup).

@@ -23,6 +23,10 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   (one with a second hard link is not); conversations saved earlier keep
   their mode (in the default folder,
   `chmod 600 ~/.cortex/conversations/*.json` tightens them).
+- A signal that ends the Cortex process behind the app (SIGTERM, SIGHUP,
+  SIGINT) ends it at once whichever of its threads the system delivers it
+  to. One delivered to a thread other than the main one was not acted on
+  until Cortex's input closed: a process whose input stayed open lived on.
 
 ## 2.0.13
 

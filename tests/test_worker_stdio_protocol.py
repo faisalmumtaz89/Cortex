@@ -1,10 +1,14 @@
+import ctypes
 import json
 import os
+import platform
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import pytest
 from chat_completions_server import ChatCompletionsServer
 
 from cortex.cloud.credentials import ENV_KEY_MAP
@@ -453,4 +457,30 @@ def test_scripted_override_banners_loudly_at_session_start(tmp_path: Path) -> No
         assert finals[-1]["provenance_verified"] is True
     finally:
         process.terminate()
+        process.wait(timeout=5)
+
+
+_TGKILL = {"x86_64": 234, "aarch64": 131}.get(platform.machine())
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or _TGKILL is None,
+    reason="needs tgkill, to choose the thread a signal lands on",
+)
+def test_a_signal_that_lands_on_another_thread_still_ends_the_worker(tmp_path: Path) -> None:
+    """The system may hand SIGTERM to any thread of the worker, and Python
+    runs the handler on the main thread only: one blocked waiting for the
+    next request did not run it until stdin closed."""
+    process, send, recv_until = _worker_session(_worker_env(tmp_path))
+    try:
+        _start_session(send, recv_until)
+        others = [
+            int(thread) for thread in os.listdir(f"/proc/{process.pid}/task")
+            if int(thread) != process.pid
+        ]
+        assert others, "the worker has one thread only"
+        ctypes.CDLL(None).syscall(_TGKILL, process.pid, others[0], signal.SIGTERM)
+        assert process.wait(timeout=5) == 0
+    finally:
+        process.kill()
         process.wait(timeout=5)
