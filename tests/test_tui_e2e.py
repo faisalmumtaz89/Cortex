@@ -2446,3 +2446,39 @@ def test_a_tool_row_shows_nothing_invisible(tui_project) -> None:
     session.send_key("C-o")
     opened = session.wait_for("second⟨U+001B⟩[31m", timeout=10)  # output, with details open
     assert "first    x" in opened and "⟨CR⟩" not in opened, opened  # a tab is 4 spaces, CRLF a line break
+
+
+def test_clear_is_refused_while_a_reply_is_running(tui_project) -> None:
+    """/clear during a reply clears nothing and says why. Esc then closes
+    the message and the reply goes on, still shown as running; the next Esc
+    stops it, and the message queued behind it runs; then /clear clears."""
+    project, start = tui_project
+    read = {"tool_calls": [{"name": "read_file", "arguments": {"path": "calc.py"}}]}
+    session = start([
+        [{"text": "PART_ONE", **read},
+         {"delay_ms": 3000, "text": "PART_TWO", **read},
+         {"delay_ms": 8000, "text": "PART_THREE"}],
+        [{"text": "QUEUED_RAN"}],
+    ])
+    _select_scripted_model(session)
+    session.send_line("go")
+    session.wait_for("PART_ONE")
+    session.send_line("and then this")
+    session.wait_for("↳ queued: and then this", timeout=10)
+    session.send_line("/clear")
+    refused = session.wait_for("A reply is running: /clear works once it ends", timeout=10)
+    assert "or after you stop it with Esc." in " ".join(refused.split()), refused
+    assert "PART_ONE" in refused and "↳ queued: and then this" in refused, refused
+
+    session.send_key("Escape")  # closes the message; had it stopped the reply,
+    went_on = session.wait_for("PART_TWO", timeout=15)  # this part would not come
+    assert "A reply is running" not in went_on and "Working…" in went_on, went_on
+    session.send_key("Escape")  # stops the reply: its third part never shows
+    session.wait_for("QUEUED_RAN", timeout=30)
+    ended = session.wait_until(lambda frame: "QUEUED_RAN" in frame and "Working…" not in frame,
+                               description="the queued reply ended", timeout=15)
+    assert "PART_THREE" not in ended and "PART_ONE" in ended, ended
+
+    session.send_line("/clear")
+    session.wait_until(lambda frame: "PART_ONE" not in frame and "QUEUED_RAN" not in frame,
+                       description="the screen cleared", timeout=10)

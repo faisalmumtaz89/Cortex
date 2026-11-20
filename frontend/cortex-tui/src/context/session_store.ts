@@ -681,10 +681,11 @@ export function createSessionStore() {
 
   const clearTranscript = () => {
     // Reset the on-screen conversation (the worker starts a fresh conversation
-    // on /clear); keep model/session identity and dedupe counters harmless.
-    setState("messages", {})
+    // on /clear); the model and the session stay. A store merges an object
+    // into the one it holds, so an empty one is put in its place whole.
+    setState("messages", reconcile({}))
     setState("orderedMessageIDs", [])
-    setState("toolDedupe", {})
+    setState("toolDedupe", reconcile({}))
     setState("error", undefined)
     setState("queuedInputs", [])
     setState("lastInterrupted", false)

@@ -84,11 +84,15 @@ function SessionScreen() {
     const isEsc = key === "escape" || key === "esc"
 
     // Esc precedence (highest first): palette → result panel → busy-interrupt.
+    // One press does one of them: marked as handled, so that the prompt's
+    // own handler, which runs next and would find the panel gone, leaves it.
     if (isEsc && store.state.paletteOpen) {
+      evt.preventDefault()
       store.dismissPalette()
       return
     }
     if (isEsc && store.state.commandResult) {
+      evt.preventDefault()
       store.clearCommandResult()
       return
     }
@@ -100,6 +104,7 @@ function SessionScreen() {
       !store.state.commandResult &&
       !store.state.commandInFlight
     ) {
+      evt.preventDefault()
       void rpc.interrupt()
       return
     }
