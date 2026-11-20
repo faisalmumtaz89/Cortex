@@ -150,6 +150,9 @@ def _status_error(status: int, message: str) -> Exception:
         (_status_error(401, "Really?"), "", "Really? The URL in use, http://***@h/v1, is set in X."),
         (_status_error(401, "Wait...\n"), "", "Wait... The URL in use, http://***@h/v1, is set in X."),
         (_status_error(401, "Denied"), "", "Denied. The URL in use, http://***@h/v1, is set in X."),
+        (_status_error(404, "No such model.\n"), "",
+         "No such model. Check the model name and that your key may use it. "
+         "The URL in use, http://***@h/v1, is set in X."),
         (_status_error(400, "Bad request"), "http://u:p@h/v1", "Bad request"),
         (_status_error(429, "Slow down"), "http://u:p@h/v1", "Slow down"),
     ],

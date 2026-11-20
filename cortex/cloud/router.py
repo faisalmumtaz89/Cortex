@@ -293,7 +293,7 @@ def _describe_failure(
     if status in (403, 404):
         # The usual cause: a model name the provider does not know, or one
         # this key may not use; with a URL of your own, also the URL.
-        text = f"{text}. Check the model name and that your key may use it"
+        text = f"{_ended(text)} Check the model name and that your key may use it"
         if custom_url and endpoint:
             text += f", and that {shown_url(endpoint)} is where the API's paths start (often /v1)"
         return _where_set(text, url, origin, named=endpoint) or f"{text}."
@@ -309,6 +309,10 @@ def _where_set(failure: str, url: str, origin: str, *, named: str = "") -> str:
     if not origin:
         return ""
     which = "That URL" if named == url else f"The URL in use, {shown_url(url)},"
-    failure = failure.rstrip()  # a server's message, as it ends it
-    ended = failure.endswith((".", "?", "!"))
-    return f"{failure}{' ' if ended else '. '}{which} is {origin}."
+    return f"{_ended(failure)} {which} is {origin}."
+
+
+def _ended(sentence: str) -> str:
+    """A server's message ends as it ended it, or with a full stop."""
+    sentence = sentence.rstrip()
+    return sentence if sentence.endswith((".", "?", "!")) else f"{sentence}."
