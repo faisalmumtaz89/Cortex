@@ -46,9 +46,9 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   levels, such as `low` or `high`. It is sent as `reasoning_effort` to an
   OpenAI-compatible endpoint, as `reasoning.effort` to OpenAI and Azure,
   and as `output_config.effort` to Anthropic. Unset, nothing is sent, as
-  before. `/status` lists it. When a provider answers 400 to a request
-  that carried it, the error says what was asked and where it is set;
-  the request is not sent again without it.
+  before. `/status` lists it. When a provider answers 400 or 422 to a
+  request that carried it, the error says what was asked and where it is
+  set; the request is not sent again without it.
 - A `CORTEX_*` variable for a setting that is text, such as a model's
   name, is taken as written: `4.10` was read as the number 4.1 and
   ignored.
