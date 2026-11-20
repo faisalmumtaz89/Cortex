@@ -8,34 +8,32 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
 
 - A password or key in an Azure endpoint or OpenAI-compatible base URL no
   longer reaches the log (`~/.cortex/cortex.log`, or your `log_file`), or
-  the terminal with `debug_mode` on. The HTTP library, and some versions
-  of the provider SDKs, log requests with their whole URL; every log line
-  now has the credentials of the URLs in it masked. 2.0.13 masked such a
-  URL in Cortex's own messages only. If your URL carried a password or a
-  key, an earlier log and any CI output captured with `debug_mode` may
+  the terminal with `debug_mode` on. 2.0.13 masked it in Cortex's own
+  messages only, not in the requests its libraries log. If your URL
+  carried one, an earlier log or CI output captured with `debug_mode` may
   hold it: delete the log and replace that password or key.
 - The log, the conversation history and conversations saved with `/save`
-  are created as files only you can read, not only as files in the private
-  `~/.cortex` folder: a copy or backup of the folder, or a `log_file` set
-  elsewhere, no longer leaves a new one readable by other users (a path
-  that is a link is left as you set it). The log and history an earlier
-  version wrote in `~/.cortex` are tightened when Cortex next opens them
-  (one with a second hard link is not); conversations saved earlier keep
-  their mode (in the default folder,
-  `chmod 600 ~/.cortex/conversations/*.json` tightens them).
-- A signal that ends the Cortex process behind the app (SIGTERM, SIGHUP,
-  SIGINT) ends it at once whichever of its threads the system delivers it
-  to. One delivered to a thread other than the main one was not acted on
-  until Cortex's input closed: a process whose input stayed open lived on.
-- A 403 or 404 error whose message from the server already ends with a
-  full stop no longer reads "... not found.. Check the model name".
-- `cortex -p "/update"` says how to update without the app: run the
-  installer again.
+  are created readable only by you. A copy or backup of `~/.cortex`, or a
+  `log_file` set elsewhere, no longer leaves a new one readable by other
+  users. A path that is a link is left as you set it. An existing log or
+  history in `~/.cortex` is tightened when Cortex next opens it, unless
+  it has a second hard link. Conversations saved earlier keep their mode:
+  `chmod 600 ~/.cortex/conversations/*.json` tightens those in the
+  default folder.
+- SIGTERM, SIGHUP or SIGINT ends the Cortex process behind the app at
+  once. One delivered to a thread other than the main one used to be
+  ignored until Cortex's input closed, so the process could live on.
 - An error stays on screen while you run `/status`, `/help` and the other
   commands, so what it says to do next can still be read. It goes when you
   send the next message, choose a model, save a key, or run `/clear`.
 - Ctrl+O shows the folded steps and long diffs above a permission prompt
   while it waits. The key did nothing there, though the screen named it.
+- `cortex -p "/update"` says how to update without the app: run the
+  installer again.
+- A 403 or 404 error whose message from the server already ends with a
+  full stop no longer reads "... not found.. Check the model name".
+- The CI example in the CLI docs shows where the version to pin goes; it
+  named 2.0.10.
 
 ## 2.0.13
 

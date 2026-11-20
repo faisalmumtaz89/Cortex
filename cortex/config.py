@@ -90,14 +90,14 @@ _RETIRED = {
 
 
 def keep_private(path: Path) -> None:
-    """Create a file that holds what the user typed, read or ran (the log,
-    the conversations) readable by its owner only when it is missing: a
-    copy or backup of ~/.cortex, or a path set elsewhere, keeps the file's
-    own mode. A file Cortex left readable by others before 2.0.14 is
-    tightened (it loses what others may do, and gains nothing), which means a regular file of the user's, with no other name,
-    inside ~/.cortex. Anything else is not even opened: a file shared on
-    purpose elsewhere, a link, a device, or a pipe, whose reader would take
-    an open and close for the end of the log."""
+    """Keep a file that holds what the user typed, read or ran (the log,
+    the conversations) readable by its owner only. A missing file is created
+    that way, wherever it is. A file that exists is tightened (it loses
+    what others may do, and gains nothing) only when it is a regular file
+    of the user's, with no other name, inside ~/.cortex: one an earlier
+    version left readable there. Anything else is not even opened: a file
+    shared on purpose elsewhere, a link, a device, or a pipe, whose reader
+    would take an open and close for the end of the log."""
     try:
         try:
             found = os.lstat(path)

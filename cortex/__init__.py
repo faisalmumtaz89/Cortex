@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-__version__ = "2.0.13"
+__version__ = "2.0.14"
 __author__ = "Cortex Development Team"
 __license__ = "MIT"
 
