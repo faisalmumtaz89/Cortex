@@ -257,3 +257,46 @@ def test_an_installer_choice_that_cannot_be_met_stops_before_anything_is_install
         assert message in run.stderr, (assignments, run.stderr)
         assert list(home.iterdir()) == [], assignments
         home.rmdir()
+
+
+def _stub(directory: Path, name: str, script: str) -> None:
+    program = directory / name
+    program.write_text(f"#!/bin/sh\n{script}\n")
+    program.chmod(0o755)
+
+
+def test_the_installer_says_why_it_stops_on_a_musl_system(tmp_path: Path) -> None:
+    """On Alpine `ldd --version` names musl and exits 1, and there is no
+    getconf: the install stops with the reason, having written nothing. A
+    glibc system is not taken for one, with or without getconf, and one too
+    old is told so."""
+    import subprocess
+
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    _stub(stubs, "uname", 'case "$1" in -m) echo x86_64 ;; *) echo Linux ;; esac')
+    env = {"HOME": str(home), "PATH": f"{stubs}:/usr/bin:/bin",
+           "CORTEX_PYTHON": "/no/such/python"}
+    next_check = "CORTEX_PYTHON=/no/such/python is not a command"  # reached: not stopped here
+
+    def install(ldd: str, getconf: str) -> str:
+        _stub(stubs, "ldd", ldd)
+        _stub(stubs, "getconf", getconf)
+        run = subprocess.run(["bash", str(REPO_ROOT / "install.sh"), "2.0.0"], env=env,
+                             capture_output=True, text=True, timeout=60)
+        assert run.returncode == 1, (run.stdout, run.stderr)
+        assert list(home.iterdir()) == []
+        return run.stderr
+
+    musl = install('echo "musl libc (x86_64)" >&2; echo "Version 1.2.5" >&2; exit 1', "exit 127")
+    assert "This Linux uses musl libc (for example Alpine)." in musl, musl
+
+    gnu = 'echo "ldd (GNU libc) 2.39"'
+    for getconf in ("exit 127", 'echo "glibc 2.39"'):
+        stderr = install(gnu, getconf)
+        assert next_check in stderr and "musl" not in stderr, stderr
+
+    old = install(gnu, 'echo "glibc 2.17"')
+    assert "Cortex needs glibc 2.28 or later" in old and "this system has 2.17" in old, old
