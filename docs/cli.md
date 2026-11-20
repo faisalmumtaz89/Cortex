@@ -58,7 +58,7 @@ A GitHub Actions job that installs a pinned version and asks about the change:
 
 ```yaml
 - name: Install Cortex
-  run: curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | CORTEX_NO_MODIFY_PATH=1 bash -s -- 2.0.10
+  run: curl -fsSL https://raw.githubusercontent.com/faisalmumtaz89/Cortex/main/install.sh | CORTEX_NO_MODIFY_PATH=1 bash -s -- X.Y.Z
 - name: Summarize the change
   env:
     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
