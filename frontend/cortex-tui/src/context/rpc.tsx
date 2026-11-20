@@ -171,7 +171,9 @@ export function RpcProvider(props: ParentProps) {
       1_800_000,
     )
 
-    // An error stays while commands are run: it says what to do next.
+    // An error shown above the input (that of a reply that failed, say) stays
+    // while commands are run: it says what to do next. A command's own
+    // failure is its result, set below.
     // /help is rendered from the registry (single source of truth) — no round-trip.
     if (lowerCommand === "/help") {
       store.setCommandResult({ command: "/help", ok: true, ...buildHelp() })
