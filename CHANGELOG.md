@@ -36,6 +36,11 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   nothing. `max_conversation_history`, which set that number, has no
   effect and is named at startup if a config file still sets it. The
   app's protocol no longer accepts a conversation to resume.
+- Selecting a model by a name the picker did not list says "Saved as your
+  model once it answers". A name saved that way is removed when the
+  provider answers that it does not know the model (a 404 that says so):
+  the error says it was removed, in the app and in a `-p` run, and the
+  next start does not restore it. It is saved again once it answers.
 - A new setting, `reasoning_effort` (`CORTEX_REASONING_EFFORT` for one
   run), asks the model for that much reasoning: one of the provider's
   levels, such as `low` or `high`. It is sent as `reasoning_effort` to an

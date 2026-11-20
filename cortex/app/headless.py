@@ -415,6 +415,8 @@ def run_headless(
     if model and not ok and not (printer.wrote_text or printer.after_tool):
         for key, value in saved_state.items():
             config.set_state_value(key, value)
+        if result.get("model_removed"):  # from what was put back, too
+            runtime.model_service.model_rejected(runtime.model_service.active_target.cloud_model)
     if printer.denied and not full_auto:
         print(
             f"note: {printer.denied} edit or command call(s) were not allowed; "

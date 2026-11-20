@@ -79,10 +79,14 @@ def _build(*, cloud_authenticated: bool = False) -> tuple[CommandService, ModelS
 
 def test_model_routes_cloud_selector_to_cloud() -> None:
     service, model_service = _build(cloud_authenticated=True)
-    result = service.execute(session_id="s1", command="/model openai:gpt-5.1")
+    result = service.execute(session_id="s1", command="/model openai:gpt-5.5")
     assert result["ok"] is True
-    assert result["message"] == "openai:gpt-5.1 — now active."
-    assert model_service.active_target.label == "openai:gpt-5.1"
+    assert result["message"] == "openai:gpt-5.5 — now active."
+    assert model_service.active_target.label == "openai:gpt-5.5"
+    # A name the catalog does not list may be one the provider does not serve.
+    result = service.execute(session_id="s1", command="/model openai:gpt-5.1")
+    assert result["message"] == (
+        "openai:gpt-5.1 — now active. Saved as your model once it answers.")
 
 
 @pytest.mark.parametrize("command", ["/model openai:", "/model gpt-5.5"])

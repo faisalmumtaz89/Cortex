@@ -221,14 +221,13 @@ class ModelService:
         ref = CloudModelRef(provider=provider_enum, model_id=normalized_model_id)
         self.active_target = ActiveModelTarget.cloud(ref)
 
-        result = {"ok": True, "message": f"{ref.selector} — now active.", "active_model": ref.selector}
-        if not remember:
-            return result
-        if self._known(ref):
+        message = f"{ref.selector} — now active."
+        if remember and self._known(ref):
             self._save(ref)
-        else:
+        elif remember:
             self._unanswered = [ref, *(other for other in self._unanswered if other != ref)]
-        return result
+            message += " Saved as your model once it answers."
+        return {"ok": True, "message": message, "active_model": ref.selector}
 
     def _known(self, ref: CloudModelRef) -> bool:
         """Whether the model is one the catalog lists or one that answered before."""
@@ -260,6 +259,28 @@ class ModelService:
         if ref is not None and ref in self._unanswered:
             self._unanswered.remove(ref)
             self._save(ref, to_restore=ref == self.active_target.cloud_model)
+
+    def model_rejected(self, ref: CloudModelRef | None) -> str:
+        """The provider answered that it does not know this model. A name
+        saved for it is removed, so that the next start does not restore it,
+        and is saved again once it answers. Returns what to tell the user:
+        nothing when no such name was saved."""
+        if ref is None or ref.selector not in self._selected_selectors():
+            return ""
+        kept = [selector for selector in self._selected_selectors() if selector != ref.selector]
+        self.config.set_state_value("selected_models", kept)
+        if (
+            self.config.get_state_value("last_used_cloud_provider") == ref.provider.value
+            and self.config.get_state_value("last_used_cloud_model") == ref.model_id
+        ):
+            self.config.set_state_value("last_used_cloud_provider", "")
+            self.config.set_state_value("last_used_cloud_model", "")
+        if ref not in self._unanswered:
+            self._unanswered.insert(0, ref)
+        return (
+            f"{ref.selector} was removed from your saved models because the provider "
+            "answered that it does not know this model."
+        )
 
     def unanswered_hint(self, ref: CloudModelRef | None) -> str:
         """What a turn that failed before the model answered adds to its error."""

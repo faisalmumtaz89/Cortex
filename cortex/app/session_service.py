@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, cast
 
+from cortex.cloud.router import UnknownModelError
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
 from cortex.config import keep_private
 from cortex.conversation_manager import MessageRole
@@ -426,10 +427,15 @@ class SessionService:
                     )
                 if isinstance(exc, ReplyCutOffError):  # the model replied, to its limit
                     self.model_service.model_answered(active_target.cloud_model)
+                error = str(exc)
+                removed = ""
+                if isinstance(exc, UnknownModelError):
+                    removed = self.model_service.model_rejected(active_target.cloud_model)
+                    error = f"{error} {removed}".rstrip()
                 emit_event(
                     session_id=session_id,
                     event_type="session.error",
-                    payload={"error": str(exc)},
+                    payload={"error": error},
                 )
                 emit_event(
                     session_id=session_id,
@@ -461,7 +467,8 @@ class SessionService:
                     "elapsed_seconds": 0.0,
                     "active_model_label": active_model_label,
                     "ok": False,
-                    "error": str(exc),
+                    "error": error,
+                    "model_removed": bool(removed),
                     # The app's next step; a headless run, which has no /model,
                     # does not print it.
                     "hint": self.model_service.unanswered_hint(active_target.cloud_model),

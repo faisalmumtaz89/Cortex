@@ -272,3 +272,56 @@ def test_status_reads_only_a_url_setting_as_a_url_without_a_scheme(key, value, s
     from cortex.app.command_service import _setting_text
 
     assert _setting_text(key, value) == shown
+
+
+@pytest.mark.parametrize("sdk, status, body, unknown", [
+    ("openai", 404, {"message": "no such model", "type": "invalid_request_error",
+                     "code": "model_not_found"}, True),
+    ("openai", 404, {"code": "DeploymentNotFound", "message": "No such deployment."}, True),
+    ("anthropic", 404, {"type": "error", "error": {"type": "not_found_error",
+                                                   "message": "model: gone"}}, True),
+    # Another thing that is missing, said in the same type by an OpenAI-style server.
+    ("openai", 404, {"message": "Previous response not found", "type": "not_found_error"}, False),
+    ("openai", 404, {"message": "Not Found"}, False),  # a wrong URL answers 404 too
+    ("openai", 404, None, False),
+    ("anthropic", 404, None, False),
+    ("openai", 403, {"message": "no access", "code": "model_not_found"}, False),
+    ("openai", 400, {"message": "bad", "code": "model_not_found"}, False),
+])
+def test_only_a_404_that_names_the_model_as_unknown_counts_as_unknown(sdk, status, body, unknown):
+    import anthropic
+    import httpx2 as httpx
+    import openai
+
+    from cortex.cloud.router import _unknown_model
+
+    response = httpx.Response(status, request=httpx.Request("POST", "http://h/v1"))
+    error_type = {"openai": openai.APIStatusError, "anthropic": anthropic.APIStatusError}[sdk]
+    assert _unknown_model(error_type("refused", response=response, body=body)) is unknown
+
+
+@pytest.mark.parametrize("kind, answer, unknown", [
+    ("chat", {"error": {"message": "no such model", "code": "model_not_found"}}, True),
+    ("responses", {"error": {"code": "DeploymentNotFound", "message": "No such deployment."}}, True),
+    ("anthropic", {"type": "error", "error": {"type": "not_found_error",
+                                              "message": "model: gone"}}, True),
+    ("chat", {"error": {"message": "Not Found"}}, False),
+    ("responses", {"error": {"message": "Not Found", "type": "not_found_error"}}, False),
+])
+def test_each_client_delivers_the_answer_that_names_the_model_as_unknown(kind, answer, unknown):
+    """Through the real clients: the error they raise for a 404 still carries
+    what the provider said."""
+    from cortex.cloud.router import _unknown_model
+    from tests.provider_server import ProviderServer, make_client
+
+    server = ProviderServer(kind, [{"status": 404, "answer": answer}])
+    try:
+        with pytest.raises(Exception) as raised:
+            list(make_client(kind, server.base_url).stream_events(
+                model_id="gone", messages=[{"role": "user", "content": "hi"}],
+                max_tokens=100, temperature=0, top_p=1,
+            ))
+    finally:
+        server.close()
+    assert len(server.bodies) == 1  # not asked again
+    assert _unknown_model(raised.value) is unknown

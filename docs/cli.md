@@ -166,9 +166,15 @@ those keys scroll it.
 
 The model you select is the one the next session starts with. A model picked
 by typing a name the picker did not list (an OpenAI-compatible model, an Azure
-deployment) is saved only after it answers, so a mistyped name is not restored.
-Until then, a failed reply says the model is not saved, and the picker lists it
-in this session only.
+deployment) is saved only after it answers, so a mistyped name is not restored: selecting
+it says "Saved as your model once it answers". Until then, a failed reply says
+the model is not saved, and the picker lists it in this session only. A saved
+name is removed when the provider answers that it does not know the model (a
+404 that says so, as when a model is retired or a deployment deleted): the
+error says it was removed, and it is saved again once it answers. Any other
+404, and any 403, removes nothing, since a wrong URL can answer the same way.
+Some providers answer a 404 "unknown model" for a model your key may not use,
+too: such a name is removed as well, and saved again once it answers.
 
 ### `/login` — credentials
 

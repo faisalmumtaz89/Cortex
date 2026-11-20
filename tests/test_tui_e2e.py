@@ -1469,6 +1469,42 @@ def test_reply_cut_off_at_the_output_limit_shows_the_limit_error(tui_project) ->
         server.close()
 
 
+def test_a_saved_name_the_provider_no_longer_knows_is_shown_as_removed(tui_project) -> None:
+    from tests.chat_completions_server import ChatCompletionsServer
+
+    unknown = {"message": "The model does not exist", "type": "invalid_request_error",
+               "code": "model_not_found"}
+    server = ChatCompletionsServer([{"text": "FIRST_OK"}, {"status": 404, "error": unknown}])
+    project, start = tui_project
+    try:
+        session = start(
+            [[{"text": "IGNORED"}]],
+            extra_env={
+                "CORTEX_SCRIPTED_MODEL": "",
+                "OPENAI_COMPATIBLE_BASE_URL": server.base_url,
+                "OPENAI_COMPATIBLE_API_KEY": "sk-compatible-test",
+            },
+        )
+        session.wait_for("Session ready")
+        session.send_line("/model openai-compatible:gone")
+        session.wait_for("Saved as your model once it answers.")
+        session.send_key("Escape")
+        time.sleep(0.5)
+        session.send_line("hello")
+        session.wait_for("FIRST_OK", timeout=30)
+        state = project.parent / "home" / ".cortex" / "state.yaml"
+        assert "openai-compatible:gone" in state.read_text(encoding="utf-8")
+
+        session.send_line("again")
+        frame = session.wait_for("If the name is wrong, choose another with /model.", timeout=30)
+        said = " ".join(line.strip(" │┃") for line in frame.splitlines())
+        assert ("openai-compatible:gone was removed from your saved models because the provider "
+                "answered that it does not know this model.") in " ".join(said.split()), frame
+        assert "gone" not in state.read_text(encoding="utf-8")
+    finally:
+        server.close()
+
+
 def test_turn_at_its_request_limit_shows_the_limit_and_can_continue(tui_project) -> None:
     project, start = tui_project
     session = start(
@@ -1510,7 +1546,7 @@ def test_a_model_name_that_fails_before_answering_says_how_to_choose_another(
     session = start([[{"error": "Error code: 400 - no such model"}], [{"text": "SECOND_OK"}]])
     session.wait_for("Session ready")
     session.send_line("/model azure:no-such-model")
-    session.wait_for("azure:no-such-model — now active.")
+    session.wait_for("azure:no-such-model — now active. Saved as your model once it answers.")
     session.send_key("Escape")
     time.sleep(0.5)
 
