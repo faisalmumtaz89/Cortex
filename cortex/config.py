@@ -2,12 +2,13 @@
 
 import logging
 import os
+import re
 import stat
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,21 @@ class InferenceConfig(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.95, ge=0.0, le=1.0)
     max_tokens: int = Field(default=32768, ge=1)
+    # How much reasoning to ask of the model: a level such as low or high.
+    # Unset, nothing is asked and the provider's default applies. The levels
+    # are the provider's own (one calls no reasoning "none", another "off"),
+    # so any one word is passed on, and a level the provider does not take
+    # fails the request with the provider's message.
+    reasoning_effort: Optional[str] = None
+
+    @field_validator("reasoning_effort", mode="before")
+    @classmethod
+    def _one_word(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError('YAML reads this word as a switch: write it in quotes, as in "off"')
+        if value is not None and not (isinstance(value, str) and re.fullmatch("[a-z]+", value)):
+            raise ValueError("a level is one lower-case word, such as high")
+        return value
 
 
 class CloudConfig(BaseModel):
@@ -212,7 +228,18 @@ class Config:
                 overrides[key] = yaml.safe_load(raw)
             except Exception:
                 overrides[key] = raw
+            # A setting that is text takes its value as written: YAML would
+            # read off as a switch, 4.10 as the number 4.1 and [a] as a list.
+            if not isinstance(overrides[key], (str, type(None))) and self._is_text(key):
+                overrides[key] = raw.strip()
         return overrides
+
+    @staticmethod
+    def _is_text(key: str) -> bool:
+        return any(
+            section.model_fields[key].annotation in (str, Optional[str])
+            for section in _SECTIONS.values() if key in section.model_fields
+        )
 
     def _parse_config(self) -> None:
         """Build each section from its settings. A setting that is not valid

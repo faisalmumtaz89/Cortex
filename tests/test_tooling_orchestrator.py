@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
+from cortex.config import InferenceConfig
 from cortex.conversation_manager import MessageRole
 from cortex.tooling.orchestrator import NO_TOOLS_SYSTEM_INSTRUCTION, ToolingOrchestrator
 from cortex.tooling.types import FinishEvent, TextDeltaEvent
@@ -30,11 +31,7 @@ class _DummyCloudRouter:
 def _make_cli(*, cloud_router, tools_enabled=False, tools_profile="off"):
     return SimpleNamespace(
         config=SimpleNamespace(
-            inference=SimpleNamespace(
-                max_tokens=256,
-                temperature=0.2,
-                top_p=1.0,
-            ),
+            inference=InferenceConfig(max_tokens=256, temperature=0.2, top_p=1.0),
             tools=SimpleNamespace(
                 tools_enabled=tools_enabled,
                 tools_profile=tools_profile,

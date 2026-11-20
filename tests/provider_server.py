@@ -119,6 +119,7 @@ class ProviderServer:
     def __init__(self, kind: str, script: List[Dict[str, object]]):
         self.script = list(script)
         self.requests: List[float] = []
+        self.bodies: List[Dict[str, object]] = []
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -128,7 +129,8 @@ class ProviderServer:
                 pass
 
             def do_POST(self) -> None:
-                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                server.bodies.append(json.loads(body))
                 server.requests.append(time.time())
                 step = server.script.pop(0) if server.script else {}
                 time.sleep(float(step.get("header_delay", 0)))

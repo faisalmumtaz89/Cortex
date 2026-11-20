@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from cortex.cloud.types import ActiveModelTarget, CloudModelRef, CloudProvider
+from cortex.config import InferenceConfig
 from cortex.conversation_manager import MessageRole
 from cortex.tooling.orchestrator import ToolingOrchestrator
 from cortex.tooling.provenance import normalize_model_name, verify_turn_provenance
@@ -283,7 +284,7 @@ class _Router:
 def _cli(router) -> SimpleNamespace:
     return SimpleNamespace(
         config=SimpleNamespace(
-            inference=SimpleNamespace(max_tokens=64, temperature=0.0, top_p=1.0),
+            inference=InferenceConfig(max_tokens=64, temperature=0.0, top_p=1.0),
             tools=SimpleNamespace(
                 tools_enabled=False, tools_profile="off", tools_max_iterations=4
             ),

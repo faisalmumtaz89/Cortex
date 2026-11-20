@@ -28,8 +28,8 @@ keywords = ["llm", "coding-agent", "ai", "terminal", "openai", "anthropic"]
 dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.5.0",
-    "openai>=1.54.0",
-    "anthropic>=0.42.0",
+    "openai>=1.66.0",
+    "anthropic>=0.78.0",
     "keyring>=24.3.0",
 ]
 

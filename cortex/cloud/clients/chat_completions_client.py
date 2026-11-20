@@ -96,6 +96,7 @@ class ChatCompletionsClient:
         interrupt: Optional[TurnInterrupt] = None,
         retries: int = 0,
         on_retry: Optional[RetryCallback] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         """Yield normalized events from a (possibly multi-hop) tool loop."""
         interrupt = interrupt or TurnInterrupt()
@@ -115,6 +116,8 @@ class ChatCompletionsClient:
             }
             if use_tools:
                 kwargs["tools"] = serialized_tools
+            if reasoning_effort:
+                kwargs["reasoning_effort"] = reasoning_effort
 
             step = yield from with_retries(
                 lambda: self._request(kwargs, interrupt),
