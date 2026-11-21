@@ -13,6 +13,14 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   reply shown as running: Esc closes the command's result, and the next
   Esc stops the reply. Before, the "Working…" line went away and Esc did
   nothing until the reply ended.
+- A reply from an OpenAI-compatible model that stops at the output limit
+  (`max_tokens`) is continued: the model is told its reply was cut off
+  and goes on from where it stopped, with what it had written kept. A
+  tool call that was cut off does not run, and the model is told to make
+  it again. Before, one such reply ended the turn, or a `-p` run; now the
+  turn ends with that error only when three replies in a row are cut off.
+  With OpenAI, Azure and Anthropic models the first cut-off reply still
+  ends the turn.
 - Cortex writes no history of conversations: `conversations.db`, which
   every message was written to and nothing read, is gone from new
   installs. One an earlier version left holds what you typed and what
