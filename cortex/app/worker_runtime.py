@@ -689,13 +689,19 @@ class WorkerRuntime:
             while not served.is_set():
                 os.read(woken, 1)
         finally:
-            # Quitting Cortex must never orphan an in-flight installer (the
-            # update thread is a daemon; os._exit skips its finally cleanup).
-            self.update_service.shutdown()
-            # In-flight turn threads (non-daemon) would otherwise keep this
-            # process alive long after stdin EOF; everything that must be
-            # persisted is already flushed per-turn.
-            os._exit(0)
+            try:
+                # The end of input is all a worker sees when the app that
+                # started it is killed: as on a signal, a command the agent
+                # runs must not run on after it.
+                stop_running_commands()
+                # Quitting Cortex must never orphan an in-flight installer (the
+                # update thread is a daemon; os._exit skips its finally cleanup).
+                self.update_service.shutdown()
+            finally:
+                # In-flight turn threads (non-daemon) would otherwise keep this
+                # process alive long after stdin EOF; everything that must be
+                # persisted is already flushed per-turn.
+                os._exit(0)
 
     def __del__(self) -> None:
         return

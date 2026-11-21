@@ -13,6 +13,9 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   reply shown as running: Esc closes the command's result, and the next
   Esc stops the reply. Before, the "Working…" line went away and Esc did
   nothing until the reply ended.
+- A command the agent is running ends when Cortex does, also when the
+  app is killed without a signal reaching its worker. Before, the
+  command ran on.
 - The installer says why it stops on a system with musl libc, such as
   Alpine. Before, it ended there with no message.
 - What a background update writes after `/clear` is shown. It was left
