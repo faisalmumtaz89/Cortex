@@ -1,5 +1,5 @@
 import type { RGBA } from "@opentui/core"
-import { For, Show } from "solid-js"
+import { createMemo, For, Show } from "solid-js"
 import type { DiffData } from "../context/store"
 import { createFadeIn, createMinDwell, mixRgba } from "../lib/animation"
 import { gitSummary } from "../lib/git_summary"
@@ -7,7 +7,7 @@ import { displayPath } from "../lib/paths"
 import { shellSummary } from "../lib/shell_summary"
 import { spinnerFrame } from "../lib/spinner"
 import { proseColumns, terminalColumns } from "../lib/terminal_size"
-import { drawn, visibleCode, visibleRow } from "../lib/visible_text"
+import { cappedLines, drawn, visibleCode, visibleLines, visibleRow } from "../lib/visible_text"
 import { DiffView } from "./diff_view"
 import { UI_PALETTE } from "./ui_palette"
 import { WrappedText } from "./wrapped_text"
@@ -138,6 +138,7 @@ export function ToolBlock(props: {
   expanded: boolean
   diff?: DiffData
   note?: string
+  patterns?: string[]
   completedAtMs?: number
 }) {
   // DISPLAY state: mirrors props.state but holds each live transition for a
@@ -189,11 +190,19 @@ export function ToolBlock(props: {
     }
     const lines = String(props.output).replace(/\r\n/g, "\n").split("\n")
       .map((line) => visibleCode(line.replace(/\t/g, "    ")))
-    if (lines.length <= 40) {
-      return lines.join("\n")
-    }
-    return `${lines.slice(0, 40).join("\n")}\n… (${lines.length - 40} more lines)`
+    return cappedLines(lines).join("\n")
   }
+
+  // With details open, a command's row shows what its permission was matched
+  // against, as the prompt showed it: the row above is a summary, cut at the
+  // first pipe, and two commands a rule tells apart can share it.
+  const matchedCommand = createMemo(() => {
+    const pattern = props.patterns?.[0]
+    if (!props.expanded || props.tool !== "bash" || !pattern || pattern === "*") {
+      return undefined
+    }
+    return cappedLines(visibleLines(pattern))
+  })
 
   return (
     <box flexDirection="column" flexShrink={0}>
@@ -211,6 +220,21 @@ export function ToolBlock(props: {
           <span style={{ fg: eased(UI_PALETTE.textMuted) }}>{` · ${resultHint(props.tool, props.output)}`}</span>
         </Show>
       </text>
+
+      <Show when={matchedCommand()}>
+        <box paddingLeft={2}>
+          <For each={matchedCommand()}>
+            {(line, i) => (
+              <WrappedText
+                text={i() === 0 ? `⎿ ${line}` : `  ${line}`}
+                columns={proseColumns() - 2}
+                hang={2}
+                fg={UI_PALETTE.textMuted}
+              />
+            )}
+          </For>
+        </box>
+      </Show>
 
       {/* What "Allow always" did: the rule saved, and where, or why not. */}
       <Show when={props.note}>

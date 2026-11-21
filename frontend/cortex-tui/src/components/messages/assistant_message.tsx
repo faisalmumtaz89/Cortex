@@ -182,6 +182,7 @@ export function AssistantMessage(props: {
                     error={(segment as { kind: "tool"; part: ToolPart }).part.error}
                     diff={(segment as { kind: "tool"; part: ToolPart }).part.diff}
                     note={(segment as { kind: "tool"; part: ToolPart }).part.note}
+                    patterns={(segment as { kind: "tool"; part: ToolPart }).part.patterns}
                     completedAtMs={(segment as { kind: "tool"; part: ToolPart }).part.completedAtMs}
                     expanded={props.toolsExpanded}
                   />

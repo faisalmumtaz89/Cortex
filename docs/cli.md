@@ -25,7 +25,7 @@ Type a message to run an agent turn with the active model, or a slash command to
 | `↑` / `↓`, `Enter` / `Esc` | Choose an answer to a pending permission prompt / reject it. With a message typed in the input, `Enter` queues the message and the prompt stays open; `Esc` still rejects, and the message stays in the input |
 | `↑` / `↓` (empty input) | Recall earlier prompts |
 | `Esc` | Close the palette or result panel; otherwise interrupt the running turn |
-| `Ctrl+O` | Show or hide tool details |
+| `Ctrl+O` | Show or hide tool details: a finished tool's output, and under a command the whole text its permission was matched against |
 | `PageUp` / `PageDown` | Scroll a permission prompt's call or a command's result when it has more rows than it shows; otherwise the transcript |
 | `Home` / `End` | Jump to the first or last rows of such a call or result (with text typed, they move in the text instead) |
 | `Ctrl+U` | Delete the typed text before the caret |
