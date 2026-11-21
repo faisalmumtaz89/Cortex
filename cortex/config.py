@@ -61,7 +61,6 @@ class LoggingConfig(BaseModel):
 
 class ConversationConfig(BaseModel):
     """Conversation settings."""
-    auto_save: bool = True
     save_directory: Path = Field(default_factory=lambda: Path.home() / ".cortex" / "conversations")
 
 class SystemConfig(BaseModel):
@@ -88,11 +87,11 @@ _SECTIONS: Dict[str, Type[BaseModel]] = {
 # Settings earlier versions accepted without acting on them: one still in a
 # config file is named once at startup, so it can be deleted.
 _NO_EFFECT = frozenset({
-    "auto_scroll", "copy_on_select", "crash_recovery", "enable_branching", "log_rotation",
-    "markdown_rendering", "max_conversation_history", "max_log_size", "mouse_support",
-    "performance_logging", "plugins_dir", "save_format", "show_performance_metrics",
-    "shutdown_timeout", "syntax_highlighting", "templates_dir", "tools_continue_on_reject",
-    "ui_theme",
+    "auto_scroll", "copy_on_select", "crash_recovery", "enable_branching",
+    "log_rotation", "markdown_rendering", "max_conversation_history", "max_log_size",
+    "mouse_support", "performance_logging", "plugins_dir", "save_format",
+    "show_performance_metrics", "shutdown_timeout", "syntax_highlighting", "templates_dir",
+    "tools_continue_on_reject", "ui_theme",
 })
 # Read by the OpenAI and Anthropic SDKs, not by Cortex: those providers
 # always use their official hosts (cortex/cloud/types.py), so a variable left in
@@ -101,6 +100,9 @@ _SDK_BASE_URL_VARIABLES = {"OPENAI_BASE_URL": "openai", "ANTHROPIC_BASE_URL": "a
 _RETIRED = {
     "tools_idle_timeout_seconds": "it has no effect; cloud_timeout_seconds sets the request "
     "timeout, and a permission prompt waits for your answer",
+    # It was acted on: say what stopped, to whoever set it to keep a history.
+    "auto_save": "Cortex writes no history of conversations, so it has no effect and can be "
+    "deleted",
     **{key: "it has no effect in Cortex, and can be deleted" for key in _NO_EFFECT},
 }
 

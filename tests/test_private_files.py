@@ -40,7 +40,7 @@ def test_a_missing_file_is_created_for_its_owner_only(cortex_home, tmp_path, whe
 def test_a_file_left_readable_inside_the_cortex_folder_is_tightened(cortex_home, mode, tightened):
     """Only what others may do is taken away: a file its owner made
     read-only stays read-only."""
-    path = cortex_home / "conversations.db"
+    path = cortex_home / "cortex.log"
     path.write_text("kept", encoding="utf-8")
     path.chmod(mode)
     keep_private(path)

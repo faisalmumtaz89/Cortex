@@ -1450,28 +1450,50 @@ def test_a_slash_command_runs_a_skill_and_the_worker_lists_skills(
     assert {"name": "look-only", "description": "Use to look around."} in listed
 
 
-def test_a_start_reads_no_earlier_conversation(tmp_path: Path, scratch_repo: Path) -> None:
-    """A start is a new conversation: what the history database holds is not
-    read, so a row in it that cannot be read is no matter and no warning."""
-    import sqlite3
-
+@pytest.mark.parametrize("earlier_version", [False, True])
+def test_no_history_database_is_written(
+    tmp_path: Path, scratch_repo: Path, earlier_version: bool
+) -> None:
+    """Cortex cannot reopen a conversation, so it keeps none on disk: a turn
+    and a /save leave the conversations folder with the saved file alone. A
+    database an earlier version left there is neither read (this one is no
+    database: reading it would fail) nor changed, and the setting that kept
+    that history is named as having no effect."""
     script = _write_script(tmp_path / "script.json", [[{"text": "REPLY"}]])
     env = _worker_env(tmp_path, script)
-    database = tmp_path / "home" / ".cortex" / "conversations" / "conversations.db"
-    said = []
-    for _start in range(2):
-        harness = WorkerHarness(cwd=scratch_repo, env=env)
-        try:
-            session_id = _start_session(harness)
-            harness.wait_response(harness.send("session.submit_user_input", {
-                "session_id": session_id, "user_input": "hi", "active_target": CLOUD_TARGET}))
-        finally:
-            harness.close()
-        assert harness.process.stderr is not None
-        said.append(harness.process.stderr.read())
-        with sqlite3.connect(database) as connection:  # the second start meets this
-            connection.execute("UPDATE conversations SET created_at = 'not a date'")
-    assert said[1] == "", said[1]
+    home = tmp_path / "home" / ".cortex"
+    folder = home / "conversations"
+    earlier = folder / "conversations.db"
+    if earlier_version:
+        folder.mkdir(parents=True)
+        earlier.write_bytes(b"what an earlier version wrote, which is no database")
+    home.mkdir(exist_ok=True)
+    (home / "config.yaml").write_text("auto_save: true\n", encoding="utf-8")
+
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        harness.wait_response(harness.send("session.submit_user_input", {
+            "session_id": session_id, "user_input": "hi", "active_target": CLOUD_TARGET}))
+        saved = Path(harness.wait_response(harness.send(
+            "command.execute", {"session_id": session_id, "command": "/save"}))["result"]["path"])
+        notices = " ".join(str(event["payload"].get("message"))
+                           for event in harness.events_of("system.notice"))
+    finally:
+        harness.close()
+
+    kept = {earlier.name} if earlier_version else set()
+    assert {path.name for path in folder.iterdir()} == kept | {saved.name}
+    if earlier_version:
+        assert earlier.read_bytes() == b"what an earlier version wrote, which is no database"
+    # Nowhere else under ~/.cortex either: the config, the log and the state.
+    assert not [path.name for path in home.rglob("*")
+                if path.is_file() and path.parent != folder
+                and path.name not in ("config.yaml", "cortex.log", "state.yaml")]
+    text = saved.read_text(encoding="utf-8")
+    assert "hi" in text and "REPLY" in text
+    assert "Ignored auto_save" in notices, notices
+    assert "Cortex writes no history of conversations, so it has no effect" in notices, notices
 
 
 def test_each_start_is_a_new_conversation(tmp_path: Path, scratch_repo: Path) -> None:
@@ -3563,8 +3585,7 @@ def test_the_log_and_conversations_are_readable_by_their_owner_only(
     finally:
         harness.close()
 
-    conversations = home / "conversations"
-    files = [log, conversations / "conversations.db", Path(saved["path"])]
+    files = [log, Path(saved["path"])]
     assert [(file.name, oct(file.stat().st_mode & 0o777)) for file in files] == [
         (file.name, "0o600") for file in files]
     assert "from an earlier version" in log.read_text(encoding="utf-8")

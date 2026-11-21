@@ -2,15 +2,11 @@
 
 ## Overview
 
-Cortex keeps each session's conversation and, by default, saves it to `~/.cortex/conversations/conversations.db`; `/save` also writes it as a JSON file, and `/clear` starts over. In the interactive app a session's conversation continues across turns; each headless `-p` run starts a new one. Each start of the app is a new conversation too: Cortex cannot reopen an earlier one, from the database or from a file `/save` wrote. At the start it names the model you last chose, and remembers nothing else.
+Cortex keeps each session's conversation in memory while it runs, and writes it to disk only when asked: `/save` writes it as a JSON file, and `/clear` starts over. In the interactive app a session's conversation continues across turns; each headless `-p` run starts a new one. Each start of the app is a new conversation too: Cortex cannot reopen an earlier one, from a file `/save` wrote or from a database an earlier version left. At the start it names the model you last chose, and remembers nothing else.
 
-## Storage and Autosave
+## Storage
 
-When `auto_save` is `true` (the default), conversations are written to:
-
-```
-~/.cortex/conversations/conversations.db
-```
+Cortex keeps no history of conversations on disk. Versions before 2.0.16 wrote every message to `~/.cortex/conversations/conversations.db`, a file nothing reads. One that exists holds what you typed and what commands printed: Cortex leaves it as it is, and you can delete it. The `auto_save` setting, which could turn that writing off, has no effect.
 
 The `/save` command exports the current conversation as JSON to:
 
