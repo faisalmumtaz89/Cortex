@@ -3492,23 +3492,51 @@ def test_a_run_ended_by_a_signal_stops_the_command_it_runs(
     assert not (scratch_repo / "late.txt").exists()
 
 
-def _sleeping() -> bool:
+def test_a_worker_whose_input_ends_stops_the_command_it_runs(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The app that started the worker is gone without sending a signal
+    (killed, or crashed): the end of the worker's input is all it sees, and
+    the command it is running must end with it."""
+    script = _write_script(tmp_path / "script.json", [[
+        {"tool_calls": [{"name": "bash", "arguments": {
+            "command": "sleep 31.27; touch late.txt"}}]},
+        {"text": "done"},
+    ]])
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    session_id = _start_session(harness)
+    harness.send("session.submit_user_input", {
+        "session_id": session_id, "user_input": "wait", "active_target": CLOUD_TARGET})
+    harness.send("permission.reply", {"session_id": session_id, "request_id": harness.wait_event(
+        "permission.asked")["payload"]["request_id"], "reply": "allow_once"})
+    try:
+        _wait_for_sleep(harness.process, "sleep 31.27")
+        assert harness.process.stdin is not None
+        harness.process.stdin.close()
+        harness.process.wait(timeout=30)
+        _assert_sleep_ends("sleep 31.27")
+        assert not (scratch_repo / "late.txt").exists()
+    finally:
+        subprocess.run(["pkill", "-f", "sleep 31.27"])
+
+
+def _sleeping(command: str = "sleep 31.25") -> bool:
     table = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
-    return any(line.startswith("sleep 31.25") for line in table.splitlines())
+    return any(line.startswith(command) for line in table.splitlines())
 
 
-def _wait_for_sleep(process: subprocess.Popen) -> None:
+def _wait_for_sleep(process: subprocess.Popen, command: str = "sleep 31.25") -> None:
     deadline = time.time() + 60
-    while not _sleeping():
+    while not _sleeping(command):
         assert time.time() < deadline and process.poll() is None, "the command did not start"
         time.sleep(0.2)
 
 
-def _assert_sleep_ends() -> None:
+def _assert_sleep_ends(command: str = "sleep 31.25") -> None:
     deadline = time.time() + 10
-    while _sleeping() and time.time() < deadline:
+    while _sleeping(command) and time.time() < deadline:
         time.sleep(0.2)
-    assert not _sleeping(), "the command outlived Cortex"
+    assert not _sleeping(command), "the command outlived Cortex"
 
 
 def test_the_log_and_conversations_are_readable_by_their_owner_only(
