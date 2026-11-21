@@ -24,7 +24,6 @@ from cortex.tooling.types import (
     TextDeltaEvent,
     ToolCall,
     ToolCallEvent,
-    ToolResult,
     ToolResultEvent,
     TurnInterrupt,
 )
@@ -84,19 +83,6 @@ class ChatCompletionsClient:
                 }
             )
         return serialized
-
-    @staticmethod
-    def _format_tool_output(result: ToolResult) -> str:
-        # metadata.diff is a UI-only payload (up to 400 rows) — never feed it
-        # back into the model's context.
-        metadata = {k: v for k, v in (result.metadata or {}).items() if k != "diff"}
-        payload = {
-            "ok": result.ok,
-            "output": result.output,
-            "error": result.error,
-            "metadata": metadata,
-        }
-        return json.dumps(payload, ensure_ascii=True)
 
     def stream_events(
         self,
@@ -225,7 +211,7 @@ class ChatCompletionsClient:
                     {
                         "role": "tool",
                         "tool_call_id": call.id,
-                        "content": self._format_tool_output(result),
+                        "content": result.for_model(),
                     }
                 )
 

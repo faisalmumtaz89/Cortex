@@ -266,15 +266,7 @@ class AnthropicClient:
                     {
                         "type": "tool_result",
                         "tool_use_id": call.id,
-                        "content": json.dumps(
-                            {
-                                "ok": result.ok,
-                                "output": result.output,
-                                "error": result.error,
-                                "metadata": result.metadata,
-                            },
-                            ensure_ascii=True,
-                        ),
+                        "content": result.for_model(),
                     }
                 )
 

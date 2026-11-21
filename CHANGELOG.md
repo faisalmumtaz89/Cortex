@@ -13,6 +13,10 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   reply shown as running: Esc closes the command's result, and the next
   Esc stops the reply. Before, the "Working…" line went away and Esc did
   nothing until the reply ended.
+- The model is sent a tool's result without what is for the app's row of
+  the call: an edit's diff (which OpenAI, Azure and Anthropic models were
+  sent, up to 400 rows a call) and the line that says what "Allow always"
+  saved (which every model was sent).
 - A reply from an OpenAI-compatible model that stops at the output limit
   (`max_tokens`) is continued: the model is told its reply was cut off
   and goes on from where it stopped, with what it had written kept. A

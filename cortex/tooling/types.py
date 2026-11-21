@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import socket
 import threading
 from contextlib import contextmanager
@@ -59,6 +60,9 @@ class ToolCall:
     arguments: Dict[str, Any]
 
 
+_FOR_THE_APP = frozenset({"diff", "permission_note", "permission_patterns"})
+
+
 @dataclass
 class ToolResult:
     """Normalized tool result payload."""
@@ -70,6 +74,18 @@ class ToolResult:
     output: str = ""
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def for_model(self) -> str:
+        """The result as the model is sent it: without what is for the app's
+        row of the call only (an edit's diff, of up to 400 rows; what "Allow
+        always" did; what the permission was matched against)."""
+        metadata = {
+            key: value for key, value in (self.metadata or {}).items() if key not in _FOR_THE_APP
+        }
+        return json.dumps(
+            {"ok": self.ok, "output": self.output, "error": self.error, "metadata": metadata},
+            ensure_ascii=True,
+        )
 
 
 @dataclass(frozen=True)
