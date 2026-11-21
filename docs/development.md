@@ -32,7 +32,7 @@ Cortex/
 ├── cortex/
 │   ├── __main__.py                 # Entry point: TUI launch, --worker-stdio, -p headless
 │   ├── config.py                   # Configuration loading (Config class)
-│   ├── conversation_manager.py     # Chat history and persistence
+│   ├── conversation_manager.py     # The run's conversations, in memory
 │   ├── logging_config.py           # Log file setup
 │   ├── runtime_io.py               # Worker stdio hygiene
 │   ├── update_check.py             # Release discovery for /update
@@ -118,7 +118,7 @@ ruff check cortex/ tests/
 | Class | Module | Purpose |
 |---|---|---|
 | `Config` | `cortex.config` | Loads and holds runtime configuration |
-| `ConversationManager` | `cortex.conversation_manager` | Chat history and persistence |
+| `ConversationManager` | `cortex.conversation_manager` | The run's conversations, in memory |
 | `WorkerRuntime` | `cortex.app.worker_runtime` | JSON-RPC session runtime |
 | `CommandService` | `cortex.app.command_service` | Slash command execution |
 | `ToolingOrchestrator` | `cortex.tooling.orchestrator` | Agent loop: generation, tools, permissions |

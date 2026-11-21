@@ -1,15 +1,12 @@
 """Conversation management for Cortex."""
 
 import json
-import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-from cortex.config import keep_private
 
 
 class MessageRole(Enum):
@@ -48,19 +45,6 @@ class Message:
             'message_id': self.message_id,
             'parts': self.parts,
         }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Message':
-        """Create from dictionary."""
-        return cls(
-            role=MessageRole(data['role']),
-            content=data['content'],
-            timestamp=datetime.fromisoformat(data['timestamp']),
-            tokens=data.get('tokens'),
-            metadata=data.get('metadata', {}),
-            message_id=data.get('message_id'),
-            parts=data.get('parts', []),
-        )
 
 @dataclass
 class Conversation:
@@ -141,19 +125,6 @@ class Conversation:
             'parent_id': self.parent_id
         }
 
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Conversation':
-        """Create from dictionary."""
-        return cls(
-            conversation_id=data['conversation_id'],
-            title=data.get('title'),
-            created_at=datetime.fromisoformat(data['created_at']),
-            updated_at=datetime.fromisoformat(data['updated_at']),
-            messages=[Message.from_dict(msg) for msg in data['messages']],
-            metadata=data.get('metadata', {}),
-            parent_id=data.get('parent_id')
-        )
-
     def to_markdown(self) -> str:
         """Export conversation to Markdown format."""
         lines = []
@@ -183,62 +154,15 @@ class Conversation:
         return "\n".join(lines)
 
 class ConversationManager:
-    """Manage conversations and persistence."""
+    """The conversations of this run, in memory: none is written to disk
+    but the one /save is asked for."""
 
     def __init__(self, config: Any):
-        """Initialize conversation manager."""
-        self.config = config
         self.conversations: Dict[str, Conversation] = {}
         self.current_conversation_id: Optional[str] = None
 
         self.save_dir = Path(config.conversation.save_directory)
         self.save_dir.mkdir(parents=True, exist_ok=True)
-
-        if config.conversation.auto_save:
-            self._init_database()
-
-    def _init_database(self) -> None:
-        """Initialize SQLite database for persistence."""
-        self.db_path = self.save_dir / "conversations.db"
-        keep_private(self.db_path)
-
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS conversations (
-                    conversation_id TEXT PRIMARY KEY,
-                    title TEXT,
-                    created_at TEXT,
-                    updated_at TEXT,
-                    parent_id TEXT,
-                    metadata TEXT,
-                    FOREIGN KEY (parent_id) REFERENCES conversations(conversation_id)
-                )
-            """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    message_id TEXT PRIMARY KEY,
-                    conversation_id TEXT,
-                    role TEXT,
-                    content TEXT,
-                    timestamp TEXT,
-                    tokens INTEGER,
-                    metadata TEXT,
-                    parts TEXT,
-                    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
-                )
-            """)
-
-            # Backward-compatible migration for existing DBs.
-            try:
-                conn.execute("ALTER TABLE messages ADD COLUMN parts TEXT")
-            except sqlite3.OperationalError:
-                pass
-
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_messages_conversation
-                ON messages(conversation_id)
-            """)
 
     def new_conversation(self, title: Optional[str] = None) -> Conversation:
         """Create a new conversation."""
@@ -253,10 +177,6 @@ class ConversationManager:
 
         self.conversations[conversation.conversation_id] = conversation
         self.current_conversation_id = conversation.conversation_id
-
-        if self.config.conversation.auto_save:
-            self._save_conversation(conversation)
-
         return conversation
 
     def get_current_conversation(self) -> Optional[Conversation]:
@@ -290,58 +210,7 @@ class ConversationManager:
         if target_conversation is None:
             raise ValueError(f"Conversation {conv_id} not found")
 
-        message = target_conversation.add_message(role, content, **kwargs)
-
-        if self.config.conversation.auto_save:
-            self._save_message(conv_id, message)
-
-        return message
-
-    def _save_conversation(self, conversation: Conversation) -> None:
-        """Save conversation to database."""
-        if not hasattr(self, 'db_path'):
-            return
-
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO conversations
-                    (conversation_id, title, created_at, updated_at, parent_id, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    conversation.conversation_id,
-                    conversation.title,
-                    conversation.created_at.isoformat(),
-                    conversation.updated_at.isoformat(),
-                    conversation.parent_id,
-                    json.dumps(conversation.metadata)
-                ))
-        except Exception as e:
-            print(f"Warning: Failed to save conversation: {e}")
-
-    def _save_message(self, conversation_id: str, message: Message) -> None:
-        """Save message to database."""
-        if not hasattr(self, 'db_path'):
-            return
-
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO messages
-                    (message_id, conversation_id, role, content, timestamp, tokens, metadata, parts)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    message.message_id,
-                    conversation_id,
-                    message.role.value,
-                    message.content,
-                    message.timestamp.isoformat(),
-                    message.tokens,
-                    json.dumps(message.metadata),
-                    json.dumps(message.parts or []),
-                ))
-        except Exception as e:
-            print(f"Warning: Failed to save message: {e}")
+        return target_conversation.add_message(role, content, **kwargs)
 
     def export_conversation(
         self,
@@ -363,23 +232,6 @@ class ConversationManager:
         else:
             raise ValueError(f"Unsupported format: {format}")
 
-    def import_conversation(self, data: str, format: str = "json") -> Conversation:
-        """Import conversation from string."""
-        if format == "json":
-            conv_dict = json.loads(data)
-            conversation = Conversation.from_dict(conv_dict)
-        else:
-            raise ValueError(f"Unsupported format: {format}")
-
-        self.conversations[conversation.conversation_id] = conversation
-
-        if self.config.conversation.auto_save:
-            self._save_conversation(conversation)
-            for message in conversation.messages:
-                self._save_message(conversation.conversation_id, message)
-
-        return conversation
-
     def list_conversations(self) -> List[Dict[str, Any]]:
         """List all conversations."""
         return [
@@ -397,36 +249,3 @@ class ConversationManager:
                 reverse=True
             )
         ]
-
-    def delete_conversation(self, conversation_id: str) -> bool:
-        """Delete a conversation."""
-        if conversation_id not in self.conversations:
-            return False
-
-        del self.conversations[conversation_id]
-
-        if self.current_conversation_id == conversation_id:
-            self.current_conversation_id = None
-
-        if hasattr(self, 'db_path'):
-            try:
-                with sqlite3.connect(self.db_path) as conn:
-                    conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
-                    conn.execute("DELETE FROM conversations WHERE conversation_id = ?", (conversation_id,))
-            except Exception as e:
-                print(f"Warning: Failed to delete conversation from database: {e}")
-
-        return True
-
-    def clear_all(self) -> None:
-        """Clear all conversations."""
-        self.conversations.clear()
-        self.current_conversation_id = None
-
-        if hasattr(self, 'db_path'):
-            try:
-                with sqlite3.connect(self.db_path) as conn:
-                    conn.execute("DELETE FROM messages")
-                    conn.execute("DELETE FROM conversations")
-            except Exception as e:
-                print(f"Warning: Failed to clear database: {e}")

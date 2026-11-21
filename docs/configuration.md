@@ -14,7 +14,7 @@ Files Cortex writes outside the project (the folder `~/.cortex` opens only for y
 - `~/.cortex/state.yaml` — runtime state, kept separate from `config.yaml` so Cortex never rewrites your configuration: the last-used model, and the Azure endpoint and OpenAI-compatible base URL saved with `/login` or `cortex login`, readable only by you (a URL can carry credentials). A URL set in `AZURE_OPENAI_ENDPOINT`/`OPENAI_COMPATIBLE_BASE_URL` is not saved here: a later session without it uses the saved URL, if any. `AZURE_OPENAI_ENDPOINT`/`OPENAI_COMPATIBLE_BASE_URL` and the `config.yaml` keys take precedence over the saved ones. A default model Cortex picks at startup, for a key it finds when no model is saved, is used but not saved here.
 - `~/.cortex/credentials.json` — API keys saved with `/login` where no system keyring works, readable only by you.
 - `~/.cortex/cortex.log` — the log, created readable only by you, also where `log_file` puts it (one already in `~/.cortex` is tightened; one already elsewhere, or a path that is a link, keeps its mode); `~/.cortex/cortex-tui.log` — errors the interactive app hit, if any; `~/.cortex/update-check.json` — when Cortex last checked for a new release.
-- `~/.cortex/conversations/` — conversation history (`conversations.db`) and conversations saved with `/save`, each created readable only by you (a `conversations.db` already there is tightened).
+- `~/.cortex/conversations/` — conversations saved with `/save`, each created readable only by you. A `conversations.db` there is from a version before 2.0.16 and holds what you typed and what commands printed in every conversation since: nothing reads it, Cortex leaves it as it is, and you can delete it.
 - A temporary folder `cortex-tui-<pid>-…` in your temp directory, where the TUI unpacks its native library; it is removed when Cortex exits (or at the next start, after a crash).
 - `~/.cortex/tool_permissions.yaml` — persisted tool permission rules. "Allow always" adds a rule for one exact command or one file, in the directory Cortex was started in (`repo:`). A command run in another directory is saved with it, as `cd ./<dir> || exit 1` (the directory quoted when its name needs it) and the command on the next line. File patterns are paths relative to the start directory, such as `src/app.py`. Saved patterns escape wildcard characters, so `ls *.py` is saved as `ls [*].py` and matches only itself. A call with no command or file to name is never saved. Changes to the file apply at once, also in running sessions; while the file cannot be parsed, sessions keep the rules they last read. A rule you write without `repo:` applies everywhere; `repo:` takes an absolute path (or one starting with `~`), the directory Cortex is started in for the rule to apply: not a directory below it (a headless run that refuses such a command says which rule exists and where it applies). When several rules match, the last one in the file wins. "Allow always" answers this session could not save still apply until it ends. Its `pattern` may use the wildcards `*`, `?` and `[...]`, but a wildcard in a `bash` pattern matches anything, including further commands: `git *` also allows `git log; rm -rf ~`. Files with `version: 1` were written by older Cortex versions, whose "Allow always" covered every command or file in every repository: their allow rules for `bash` and edits are ignored and removed at the next save, so those tools ask again. A lock file, `.tool_permissions.yaml.lock`, sits next to it. For example, to let `cortex -p` run the tests and `git diff` in one repository without `--full-auto`:
 
@@ -89,7 +89,6 @@ auto_update_check: true      # false: no daily check for a new release
 
 ### Conversation
 
-- `auto_save` (default: `true`) — persist conversations to `~/.cortex/conversations/conversations.db`.
 - `save_directory` (default: `~/.cortex/conversations`)
 
 ### Logging
@@ -105,7 +104,7 @@ auto_update_check: true      # false: no daily check for a new release
 
 - `debug_mode` (default: `false`) — also writes the log to stderr.
 
-A setting earlier versions accepted without acting on it (`ui_theme`, `save_format`, `log_rotation`, `tools_continue_on_reject`, `tools_idle_timeout_seconds` and others) is named in the startup notice as having no effect, so you can delete it from `config.yaml`. For `tools_idle_timeout_seconds`, the notice adds that `cloud_timeout_seconds` sets the request timeout and that a permission prompt waits for your answer.
+A setting earlier versions accepted without acting on it (`ui_theme`, `save_format`, `log_rotation`, `tools_continue_on_reject`, `tools_idle_timeout_seconds` and others), or whose feature is gone (`auto_save`), is named in the startup notice as having no effect, so you can delete it from `config.yaml`. For `tools_idle_timeout_seconds`, the notice adds that `cloud_timeout_seconds` sets the request timeout and that a permission prompt waits for your answer.
 
 ## Notes
 

@@ -13,6 +13,13 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   reply shown as running: Esc closes the command's result, and the next
   Esc stops the reply. Before, the "Working…" line went away and Esc did
   nothing until the reply ended.
+- Cortex writes no history of conversations: `conversations.db`, which
+  every message was written to and nothing read, is gone from new
+  installs. One an earlier version left holds what you typed and what
+  commands printed; it is not touched, and can be deleted. `auto_save`,
+  which could turn the writing off, has no effect and
+  is named at startup if a config file still sets it; a
+  `CORTEX_AUTO_SAVE` variable is ignored. `/save` works as before.
 - A command the agent is running ends when Cortex does, also when the
   app is killed without a signal reaching its worker. Before, the
   command ran on.
