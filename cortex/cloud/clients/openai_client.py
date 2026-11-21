@@ -14,7 +14,6 @@ from cortex.tooling.types import (
     TextDeltaEvent,
     ToolCall,
     ToolCallEvent,
-    ToolResult,
     ToolResultEvent,
     TurnInterrupt,
 )
@@ -182,15 +181,6 @@ class OpenAIClient:
 
         return calls
 
-    def _format_tool_output(self, result: ToolResult) -> str:
-        payload = {
-            "ok": result.ok,
-            "output": result.output,
-            "error": result.error,
-            "metadata": result.metadata,
-        }
-        return json.dumps(payload, ensure_ascii=True)
-
     def _build_response_kwargs(
         self,
         *,
@@ -341,7 +331,7 @@ class OpenAIClient:
                     {
                         "type": "function_call_output",
                         "call_id": call.id,
-                        "output": self._format_tool_output(tool_result),
+                        "output": tool_result.for_model(),
                     }
                 )
 
