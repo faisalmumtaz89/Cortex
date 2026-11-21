@@ -110,7 +110,7 @@ Every turn is rejected unless the response proves it came from the selected prov
 
 ### Reply cut off at the output limit
 
-"The model reached the output limit (max_tokens=N)" means the reply, including the model's reasoning, used the whole output budget. The partial reply stays in the conversation, so you can ask the model to continue; to give it more room, raise `max_tokens` in `~/.cortex/config.yaml`. Some OpenAI-compatible servers (for example a local vLLM with a small context window) reject a `max_tokens` larger than they support; lower it for those endpoints.
+"The model reached the output limit (max_tokens=N)" means the reply, including the model's reasoning, used the whole output budget. With an OpenAI-compatible model Cortex first asks the model to continue, and shows this only after three replies in a row were cut off; with OpenAI, Azure and Anthropic models it shows it at the first. What the model had written stays in the conversation, so you can ask it to continue; to give it more room, raise `max_tokens` in `~/.cortex/config.yaml`. Some OpenAI-compatible servers (for example a local vLLM with a small context window) reject a `max_tokens` larger than they support; lower it for those endpoints.
 
 ### Poor response quality
 

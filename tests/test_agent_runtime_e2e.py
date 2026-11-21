@@ -1660,12 +1660,135 @@ def _run_against_gateway(tmp_path: Path, repo: Path, script, *, full_auto: bool 
     return process, server
 
 
+CUT_OFF_NOTE = (
+    "Your reply was cut off at the output limit before it finished. Continue from where it "
+    "stopped. A tool call that was cut off did not run: make it again in full."
+)
+
+
+NOTHING_WRITTEN_NOTE = (
+    "Your reply reached the output limit before you wrote anything: all of it was reasoning, "
+    "and none of it was kept. Reason more briefly, then answer or make your tool call."
+)
+
+
+def _tail(request: dict, count: int) -> list:
+    return [(message["role"], message.get("content")) for message in request["messages"]][-count:]
+
+
+def test_a_reply_cut_off_at_the_output_limit_is_continued(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """An OpenAI-compatible model whose reply stops at the output limit is
+    told so and goes on: what it had written is kept, and the run succeeds."""
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo,
+        [{"text": "First, open the parser ", "finish": "length"}, {"text": "and fix it."}],
+    )
+    assert process.returncode == 0, process.stderr
+    assert process.stdout.strip() == "First, open the parser and fix it."
+    assert "output limit" not in process.stderr
+    assert len(server.requests) == 2
+    assert _tail(server.requests[1], 3) == [
+        ("user", "fix the bug"), ("assistant", "First, open the parser "), ("user", CUT_OFF_NOTE)]
+
+
+def test_what_a_cut_off_reply_wrote_goes_back_with_its_reasoning(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """As every reply of a reasoning model goes back to it."""
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo,
+        [{"reasoning": "The parser is where it breaks.", "text": "Open the parser ",
+          "finish": "length"}, {"text": "and fix it."}],
+    )
+    assert process.returncode == 0, process.stderr
+    kept = server.requests[1]["messages"][-2]
+    assert (kept["role"], kept["content"], kept["reasoning_content"]) == (
+        "assistant", "Open the parser ", "The parser is where it breaks.")
+
+
+def test_a_server_that_refuses_the_continued_conversation_ends_the_turn_on_the_cut_off_reply(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """Some servers take no two user messages in a row: the user is told of
+    the output limit, which is what happened, not of the server's refusal."""
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo,
+        [{"text": "The fix is to", "finish": "length"}, {"status": 400}],
+    )
+    assert process.returncode == 1, process.stdout
+    assert "reached the output limit (max_tokens=32768)" in process.stderr, process.stderr
+    assert "scripted 400" not in process.stderr
+    assert len(server.requests) == 2
+
+
+def test_a_reply_cut_off_on_the_turns_last_request_names_the_output_limit(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    server = ChatCompletionsServer([{"text": "The fix is to", "finish": "length"}] * 2)
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env.update(OPENAI_COMPATIBLE_BASE_URL=server.base_url,
+               OPENAI_COMPATIBLE_API_KEY="sk-compatible-test", CORTEX_TOOLS_MAX_ITERATIONS="1")
+    try:
+        process = subprocess.run(
+            [sys.executable, "-P", "-m", "cortex", "-p", "fix the bug",
+             "--model", "openai-compatible:test-model"],
+            cwd=scratch_repo, env=env, capture_output=True, text=True, timeout=120)
+    finally:
+        server.close()
+    assert process.returncode == 1
+    assert "reached the output limit" in process.stderr, process.stderr
+    assert "tools_max_iterations" not in process.stderr
+    assert len(server.requests) == 1
+
+
+def test_a_reply_that_was_all_reasoning_when_cut_off_is_continued(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """Nothing was written to keep: the model is told, and no empty reply is
+    put in the conversation."""
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo,
+        [{"reasoning": "Let me think about every case...", "text": "", "finish": "length"},
+         {"text": "Fixed."}],
+    )
+    assert process.returncode == 0, process.stderr
+    assert process.stdout.strip() == "Fixed."
+    assert _tail(server.requests[1], 2) == [
+        ("user", "fix the bug"), ("user", NOTHING_WRITTEN_NOTE)]
+
+
+def test_a_tool_call_cut_off_at_the_output_limit_does_not_run_and_is_asked_again(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    def touch(name: str) -> dict:
+        return {"name": "bash", "arguments": {"command": f"touch {name}"}}
+
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo,
+        [{"tool_calls": [touch("cut-off.txt")], "finish": "length"},
+         {"tool_calls": [touch("whole.txt")]},
+         {"text": "Made it."}],
+        full_auto=True,
+    )
+    assert process.returncode == 0, process.stderr
+    assert not (scratch_repo / "cut-off.txt").exists()
+    assert (scratch_repo / "whole.txt").exists()
+    assert _tail(server.requests[1], 2) == [
+        ("user", "fix the bug"), ("user", NOTHING_WRITTEN_NOTE)]
+    assert [role for role, _content in _tail(server.requests[2], 4)] == [
+        "user", "user", "assistant", "tool"]
+    assert len(server.requests) == 3
+
+
 @pytest.mark.parametrize("text", ["", "The fix is to"])
-def test_reply_cut_off_at_the_output_limit_fails_the_turn(
+def test_three_replies_in_a_row_cut_off_at_the_output_limit_fail_the_turn(
     tmp_path: Path, scratch_repo: Path, text: str
 ) -> None:
     process, server = _run_against_gateway(
-        tmp_path, scratch_repo, [{"text": text, "finish": "length"}]
+        tmp_path, scratch_repo, [{"text": text, "finish": "length"}] * 4
     )
 
     assert process.returncode == 1, process.stdout
@@ -1673,15 +1796,33 @@ def test_reply_cut_off_at_the_output_limit_fails_the_turn(
     assert process.stdout == "", process.stdout
     limit = process.stderr.index("reached the output limit (max_tokens=32768)")
     assert text in process.stderr[:limit], process.stderr
+    assert len(server.requests) == 3
     assert server.requests[0]["max_tokens"] == 32768
 
 
-def test_reply_cut_off_at_the_output_limit_stays_in_the_conversation(
+def test_a_whole_reply_between_cut_off_ones_starts_the_count_again(
     tmp_path: Path, scratch_repo: Path
 ) -> None:
-    server = ChatCompletionsServer(
-        [{"text": "First, open the parser", "finish": "length"}, {"text": "and fix it."}]
+    cut = {"text": "and ", "finish": "length"}
+    look = {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}]}
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo, [cut, cut, look, cut, cut, {"text": "done."}]
     )
+    assert process.returncode == 0, process.stderr
+    assert process.stdout.strip().endswith("done.")
+    assert len(server.requests) == 6
+    # After the tool's result, the count starts again: two more are continued.
+    assert [role for role, _content in _tail(server.requests[5], 4)] == [
+        "assistant", "user", "assistant", "user"]
+
+
+def test_a_continued_reply_stays_whole_in_the_conversation(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    server = ChatCompletionsServer([
+        {"text": "First, open the parser ", "finish": "length"}, {"text": "and fix it."},
+        {"text": "You are welcome."},
+    ])
     env = _worker_env(tmp_path, tmp_path / "unused.json")
     env.pop("CORTEX_SCRIPTED_MODEL")
     env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
@@ -1697,42 +1838,20 @@ def test_reply_cut_off_at_the_output_limit_stays_in_the_conversation(
                     {"session_id": session_id, "user_input": text, "active_target": target},
                 )
             )["result"]
-            for text in ("how do I fix the bug?", "continue")
+            for text in ("how do I fix the bug?", "thanks")
         ]
     finally:
         harness.close()
         server.close()
 
-    assert results[0]["ok"] is False
-    assert "reached the output limit" in results[0]["error"]
-    assert results[1].get("ok", True) is not False
-    history = [
-        (message["role"], message["content"])
-        for message in server.requests[1]["messages"]
-        if message["role"] != "system"
-    ]
-    assert history == [
+    assert results[0].get("ok", True) is not False, results[0]
+    assert results[0]["assistant_text"] == "First, open the parser and fix it."
+    # The model's note is the turn's own: the next turn sends the reply whole.
+    assert _tail(server.requests[2], 3) == [
         ("user", "how do I fix the bug?"),
-        ("assistant", "First, open the parser"),
-        ("user", "continue"),
+        ("assistant", "First, open the parser and fix it."),
+        ("user", "thanks"),
     ]
-
-
-def test_tool_call_cut_off_at_the_output_limit_is_not_executed(
-    tmp_path: Path, scratch_repo: Path
-) -> None:
-    process, server = _run_against_gateway(
-        tmp_path,
-        scratch_repo,
-        [{"tool_calls": [{"name": "bash", "arguments": {"command": "touch made.txt"}}],
-          "finish": "length"}],
-        full_auto=True,
-    )
-
-    assert process.returncode == 1
-    assert "reached the output limit" in process.stderr
-    assert not (scratch_repo / "made.txt").exists()
-    assert len(server.requests) == 1
 
 
 def test_repository_config_cannot_redirect_provider_endpoint(
@@ -3124,7 +3243,7 @@ def test_a_reply_cut_off_before_any_text_still_counts_as_an_answer(
 ) -> None:
     """A model that spends its whole output limit thinking did respond: its
     name is right, so the error must not say to choose another."""
-    server = ChatCompletionsServer([{"text": "", "finish": "length"}])
+    server = ChatCompletionsServer([{"text": "", "finish": "length"}] * 3)
     env = _worker_env(tmp_path, tmp_path / "unused.json")
     env.pop("CORTEX_SCRIPTED_MODEL")
     env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"

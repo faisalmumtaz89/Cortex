@@ -9,10 +9,12 @@ ReasoningEvent for each step whose reasoning the model streams.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, cast
 
+import openai
 from openai import OpenAI
 
 from cortex.cloud.retry import RetryCallback, StreamCutOffError, with_retries
@@ -31,6 +33,21 @@ from cortex.tooling.types import (
 # reasoning_content; vLLM and OpenRouter-style gateways use reasoning.
 _REASONING_FIELDS = ("reasoning_content", "reasoning")
 
+
+logger = logging.getLogger(__name__)
+
+_CUT_OFFS_THAT_END_A_TURN = 3
+# What the model is told when its reply stopped at the output limit: after
+# what it had written, which is kept, or when all of it was reasoning, which
+# is not.
+_CUT_OFF_NOTE = (
+    "Your reply was cut off at the output limit before it finished. Continue from where it "
+    "stopped. A tool call that was cut off did not run: make it again in full."
+)
+_NOTHING_WRITTEN_NOTE = (
+    "Your reply reached the output limit before you wrote anything: all of it was reasoning, "
+    "and none of it was kept. Reason more briefly, then answer or make your tool call."
+)
 
 class ChatCompletionsClient:
     """Chat Completions client bound to one base URL."""
@@ -104,8 +121,10 @@ class ChatCompletionsClient:
         serialized_tools = self._serialize_tools(tools)
         use_tools = bool(serialized_tools) and tool_executor is not None
         step = _Step()
+        cut_off = 0  # replies in a row that stopped at the output limit
 
-        for _ in range(max(1, max_tool_iterations)):
+        requests_allowed = max(1, max_tool_iterations)
+        for request_number in range(1, requests_allowed + 1):
             kwargs: Dict[str, object] = {
                 "model": model_id,
                 "messages": conversation,
@@ -119,12 +138,24 @@ class ChatCompletionsClient:
             if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
 
-            step = yield from with_retries(
-                lambda: self._request(kwargs, interrupt),
-                retries=retries,
-                interrupt=interrupt,
-                on_retry=on_retry,
-            )
+            try:
+                step = yield from with_retries(
+                    lambda: self._request(kwargs, interrupt),
+                    retries=retries,
+                    interrupt=interrupt,
+                    on_retry=on_retry,
+                )
+            except openai.APIStatusError as exc:
+                if not cut_off or exc.status_code not in (400, 422):
+                    raise
+                # A server that will not take the conversation as continued:
+                # the turn ends on the cut-off reply, as it did before.
+                logger.info("The continued conversation was refused (%s)", exc.status_code)
+                yield FinishEvent(
+                    reason="length",
+                    provenance=self._provenance(step.reported_model, step.response_id),
+                )
+                return
 
             # The reasoning goes back with the step it led to, in this turn and
             # every later one: models that think between tool steps continue
@@ -132,8 +163,22 @@ class ChatCompletionsClient:
             if step.reasoning:
                 yield ReasoningEvent(field=step.reasoning_field, text=step.reasoning)
 
-            # A reply cut off by max_tokens ends the turn: its tool calls may
-            # be incomplete and must not run.
+            # A reply cut off by max_tokens is told so and goes on: one burst
+            # of reasoning must not end a turn that is working. What it wrote
+            # is kept; its tool calls may be incomplete and do not run. A
+            # model that is cut off again and again is not asked for ever.
+            cut_off = cut_off + 1 if step.finish_reason == "length" else 0
+            if 0 < cut_off < _CUT_OFFS_THAT_END_A_TURN and request_number < requests_allowed:
+                logger.info("A reply stopped at the output limit (%s in a row): continuing", cut_off)
+                if step.text:
+                    kept: Dict[str, object] = {"role": "assistant", "content": step.text}
+                    if step.reasoning:
+                        kept[step.reasoning_field] = step.reasoning
+                    conversation.append(kept)
+                note = _CUT_OFF_NOTE if step.text else _NOTHING_WRITTEN_NOTE
+                conversation.append({"role": "user", "content": note})
+                continue
+
             if not step.calls or not use_tools or step.finish_reason == "length":
                 yield FinishEvent(
                     reason=step.finish_reason,

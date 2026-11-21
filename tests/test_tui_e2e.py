@@ -1442,7 +1442,7 @@ def test_absolute_tool_paths_display_repo_relative(tui_project) -> None:
 def test_reply_cut_off_at_the_output_limit_shows_the_limit_error(tui_project) -> None:
     from tests.chat_completions_server import ChatCompletionsServer
 
-    server = ChatCompletionsServer([{"text": "The fix is to", "finish": "length"}])
+    server = ChatCompletionsServer([{"text": "The fix is to", "finish": "length"}] * 3)
     project, start = tui_project
     try:
         session = start(
@@ -1501,6 +1501,34 @@ def test_a_saved_name_the_provider_no_longer_knows_is_shown_as_removed(tui_proje
         assert ("openai-compatible:gone was removed from your saved models because the provider "
                 "answered that it does not know this model.") in " ".join(said.split()), frame
         assert "gone" not in state.read_text(encoding="utf-8")
+    finally:
+        server.close()
+
+
+def test_a_reply_cut_off_at_the_output_limit_goes_on_in_the_transcript(tui_project) -> None:
+    from tests.chat_completions_server import ChatCompletionsServer
+
+    server = ChatCompletionsServer([
+        {"text": "CUT_OFF_PART ", "finish": "length"}, {"text": "AND_THE_REST"}])
+    project, start = tui_project
+    try:
+        session = start(
+            [[{"text": "IGNORED"}]],
+            extra_env={
+                "CORTEX_SCRIPTED_MODEL": "",
+                "OPENAI_COMPATIBLE_BASE_URL": server.base_url,
+                "OPENAI_COMPATIBLE_API_KEY": "sk-compatible-test",
+            },
+        )
+        session.wait_for("Session ready")
+        session.send_line("/model openai-compatible:test-model")
+        session.wait_for("openai-compatible:test-model — now active.")
+        session.send_key("Escape")
+        time.sleep(0.5)
+
+        session.send_line("fix the bug")
+        frame = session.wait_for("CUT_OFF_PART AND_THE_REST", timeout=30)
+        assert "output limit" not in frame, frame
     finally:
         server.close()
 

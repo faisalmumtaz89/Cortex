@@ -76,7 +76,7 @@ auto_update_check: true      # false: no daily check for a new release
 
 - `temperature` (default: `0.7`, 0 to 2)
 - `top_p` (default: `0.95`, 0 to 1)
-- `max_tokens` (default: `32768`) — output budget per model request, including reasoning tokens. A reply that reaches it fails the turn with a message naming the limit.
+- `max_tokens` (default: `32768`) — output budget per model request, including reasoning tokens. With an OpenAI-compatible model, a reply that reaches it is continued: the model is told its reply was cut off and goes on from there, and the turn fails, with a message naming the limit, only when three replies in a row are cut off. With OpenAI, Azure and Anthropic models, a reply that reaches it fails the turn with that message.
 - `reasoning_effort` (default: unset) — how much reasoning to ask of the model, as one of the provider's levels, such as `low` or `high`. It is sent as `reasoning_effort` to an OpenAI-compatible endpoint, as `reasoning.effort` to OpenAI and Azure, and as `output_config.effort` to Anthropic. Unset, nothing is sent and the provider's default applies. The levels are the provider's own, so Cortex passes on any one lower-case word: a level the provider does not take fails the request with the provider's message, and the error says what was asked and where it is set (Cortex does not send the request again without it). In `config.yaml`, write `"off"`, `"no"` or `"false"` in quotes, since YAML reads them as a switch; `CORTEX_REASONING_EFFORT` takes the word as written, and set to nothing it unsets the file's level for that run.
 
 ### Cloud
