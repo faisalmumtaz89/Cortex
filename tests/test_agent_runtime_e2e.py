@@ -571,6 +571,53 @@ def test_allow_always_for_a_command_in_one_directory_asks_in_another(
         harness.close()
 
 
+def test_a_commands_result_carries_what_its_permission_was_matched_against(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """For the app's row of the call: the text a rule is matched against, as
+    the prompt showed it, on a call that ran and on one that was refused.
+    The model is not sent it."""
+    (scratch_repo / "sub").mkdir()
+    command = {"name": "bash", "arguments": {"command": "echo hi | wc -c", "workdir": "sub"}}
+    script = _write_script(tmp_path / "script.json", [
+        [{"tool_calls": [command]}, {"text": "Ran it."}],
+        [{"tool_calls": [command]}, {"text": "Refused."}],
+    ])
+    harness = WorkerHarness(cwd=scratch_repo, env=_worker_env(tmp_path, script))
+    try:
+        session_id = _start_session(harness)
+        asked = []
+        for reply in ("allow_once", "reject"):
+            before = len(harness.events)
+            turn = harness.send("session.submit_user_input", {
+                "session_id": session_id, "user_input": "go", "active_target": CLOUD_TARGET})
+            prompt = harness.wait_event("permission.asked", after=before)["payload"]
+            asked.append(prompt["patterns"])
+            harness.send("permission.reply", {"session_id": session_id,
+                                              "request_id": prompt["request_id"], "reply": reply})
+            harness.wait_response(turn)
+        results = [part for part in harness.tool_parts() if part.get("state") in ("completed", "error")]
+    finally:
+        harness.close()
+
+    assert asked[0] == asked[1] == ["cd ./sub || exit 1\necho hi | wc -c"]
+    assert [part["state"] for part in results] == ["completed", "error"]
+    assert [part["metadata"]["permission_patterns"] for part in results] == asked
+
+
+def test_what_a_permission_was_matched_against_is_not_sent_to_the_model(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo,
+        [{"tool_calls": [{"name": "bash", "arguments": {"command": "echo hi"}}]},
+         {"text": "Ran it."}],
+        full_auto=True,
+    )
+    assert process.returncode == 0, process.stderr
+    assert "permission_patterns" not in json.dumps(server.requests[1])
+
+
 @pytest.mark.parametrize(
     "workdir, pattern",
     [(5, "*"), (["src"], "*"), ("src\x00", "*"), ("/elsewhere", "*"), ("~", "*"),

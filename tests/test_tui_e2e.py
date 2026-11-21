@@ -381,6 +381,77 @@ def test_many_tool_calls_collapse_with_compact_lines(tui_project) -> None:
     assert expanded.count("Read module_") > visible_tools
 
 
+def test_details_show_the_whole_command_a_permission_was_matched_against(tui_project) -> None:
+    """Two commands that differ after their first pipe have the same row.
+    With details open (Ctrl+O) each row shows what its permission was matched
+    against, as the prompt showed it: the whole command, after the line for
+    the directory it named; also on a call that was refused."""
+    project, start = tui_project
+    (project / "sub").mkdir()
+    session = start([[
+        {"tool_calls": [{"name": "bash", "arguments": {
+            "command": "echo one | tr a-z A-Z", "workdir": "sub"}}]},
+        {"tool_calls": [{"name": "bash", "arguments": {"command": "echo one | wc -c"}}]},
+        {"text": "DETAIL_DONE"},
+    ]])
+    _select_scripted_model(session)
+    session.send_key("Escape")
+    time.sleep(0.5)
+    session.send_line("go")
+    session.wait_for("tr a-z A-Z")  # the prompt for the first
+    session.send_key("Enter")  # allow once
+    session.wait_for("wc -c")  # the prompt for the second
+    session.send_key("Escape")  # refuse it
+    closed = session.wait_for("DETAIL_DONE", timeout=30)
+    assert "tr a-z A-Z" not in closed and "wc -c" not in closed, closed
+    assert closed.count("Bash echo one") == 2, closed
+
+    session.send_key("C-o")
+    opened = session.wait_for("echo one | wc -c", timeout=10)
+    rows = [line.strip() for line in opened.splitlines()]
+    first = rows.index("⎿ cd ./sub || exit 1 ↵")
+    assert rows[first + 1] == "echo one | tr a-z A-Z", opened
+    assert "⎿ echo one | wc -c" in rows, opened
+
+
+def test_details_cap_a_long_command_and_long_output_with_a_count_no_text_can_draw(
+    tui_project,
+) -> None:
+    """Past 40 lines, the command under its row and the output each end in a
+    count in the app's own brackets; a tool that is no command has no such
+    row for what its permission was matched against."""
+    project, start = tui_project
+    command = "\n".join(f"echo row{number}" for number in range(1, 46))
+    session = start([[
+        {"tool_calls": [{"name": "read_file", "arguments": {"path": "calc.py"}}]},
+        {"tool_calls": [{"name": "bash", "arguments": {"command": command}}]},
+        {"text": "LONG_DONE"},
+    ]])
+    _select_scripted_model(session)
+    session.send_key("Escape")
+    time.sleep(0.5)
+    session.send_line("go")
+    # A command longer than the prompt's window starts on Reject.
+    session.wait_for("❯ Reject")
+    session.send_key("Up")
+    session.send_key("Up")
+    session.wait_for("❯ Allow once")
+    session.send_key("Enter")
+    done = session.wait_for("LONG_DONE", timeout=30)
+    assert "Rejected" not in done, done
+    # A screen tall enough for both blocks of 41 rows.
+    subprocess.run(["tmux", "-L", TMUX_SOCKET, "resize-window", "-t", session.name,
+                    "-x", "130", "-y", "120"], check=True)
+    session.send_key("C-o")
+    opened = session.wait_until(lambda frame: frame.count("⟨5 more lines⟩") == 2,
+                                description="both blocks capped", timeout=15)
+    rows = [line.strip() for line in opened.splitlines()]
+    assert rows.count("⟨5 more lines⟩") == 2, opened  # the command, then its output
+    assert "echo row40 ↵" in rows and "echo row41 ↵" not in rows, opened
+    assert "row40" in rows and "row41" not in rows, opened
+    assert "⎿ calc.py" not in rows, opened
+
+
 def test_slash_palette_opens_filters_executes_without_polluting_transcript(tui_project) -> None:
     project, start = tui_project
     session = start([[{"text": "IGNORED"}]])

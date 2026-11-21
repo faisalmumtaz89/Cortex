@@ -336,6 +336,10 @@ class ToolingOrchestrator:
                     error=str(exc),
                 )
         patterns = self._extract_permission_patterns(call, registry.repo_root)
+        # For the call's row, on a call that ran and on one that was refused:
+        # what its permission was matched against (ToolResult.for_model
+        # leaves it out).
+        matched = {"permission_patterns": patterns}
 
         try:
             note = self.permission_manager.request(
@@ -352,10 +356,12 @@ class ToolingOrchestrator:
                 state=ToolExecutionState.ERROR,
                 ok=False,
                 error=str(exc),
+                metadata=matched,
             )
 
         result = registry.execute(call=call, session_id=session_id, interrupt=interrupt)
-        if note:  # for the call's row; the model is not told
+        result.metadata = {**result.metadata, **matched}
+        if note:  # what "Allow always" did, for the row too
             result.metadata = {**result.metadata, "permission_note": note}
         return result
 

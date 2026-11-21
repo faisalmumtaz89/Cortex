@@ -51,12 +51,21 @@ export type MessagePart =
       diff?: DiffData
       /** What an "Allow always" answer to the call's prompt did. */
       note?: string
+      /** What the call's permission was matched against, as the prompt showed it. */
+      patterns?: string[]
       /** Wall-clock ms when a LIVE terminal state was ingested. Absent on
        * historical fills (restored transcripts), letting the UI distinguish a
        * just-finished tool (animate the transition) from an old one (render
        * as-is). */
       completedAtMs?: number
     }
+
+function patternsOf(metadata: unknown): string[] | undefined {
+  const patterns = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).permission_patterns : undefined
+  return Array.isArray(patterns) && patterns.every((pattern) => typeof pattern === "string") && patterns.length
+    ? (patterns as string[])
+    : undefined
+}
 
 function noteOf(metadata: unknown): string | undefined {
   const note = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).permission_note : undefined
@@ -239,6 +248,7 @@ export function normalizeServerParts(rawParts: unknown[]): MessagePart[] {
       error: typed.error as string | undefined,
       diff: parseDiff(typed.metadata),
       note: noteOf(typed.metadata),
+      patterns: patternsOf(typed.metadata),
     }
 
     const existingIndex = part.call_id ? toolIndexByCall[part.call_id] : undefined
@@ -450,6 +460,9 @@ export function createSessionStore() {
     if (part.note) {
       updates.note = part.note
     }
+    if (part.patterns) {
+      updates.patterns = part.patterns
+    }
     if (part.completedAtMs !== undefined) {
       updates.completedAtMs = part.completedAtMs
     }
@@ -486,6 +499,7 @@ export function createSessionStore() {
       error: rawPart.error as string | undefined,
       diff: parseDiff(rawPart.metadata),
       note: noteOf(rawPart.metadata),
+      patterns: patternsOf(rawPart.metadata),
       // Live-ingest timestamp for terminal states (NOT set on historical
       // fills) — lets the UI animate just-finished tools only.
       completedAtMs: terminal ? Date.now() : undefined,

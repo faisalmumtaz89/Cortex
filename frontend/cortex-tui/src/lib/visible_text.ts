@@ -63,3 +63,16 @@ export function drawn(marked: string): string[] {
 export function visibleCode(text: string): string {
   return text.replace(CODE_MARKED, marker)
 }
+
+/** At most `limit` of the lines, then the count of the rest in the brackets
+ * that mark what is not the text's own: no line of a command or of output
+ * can be taken for it, since a bracket in them is drawn as its code. An
+ * empty last line, left by a final line break, is not a line. */
+export function cappedLines(lines: string[], limit = 40): string[] {
+  const kept = lines.length > 1 && lines[lines.length - 1] === "" ? lines.slice(0, -1) : lines
+  if (kept.length <= limit) {
+    return kept
+  }
+  const more = kept.length - limit
+  return [...kept.slice(0, limit), `⟨${more} more ${more === 1 ? "line" : "lines"}⟩`]
+}

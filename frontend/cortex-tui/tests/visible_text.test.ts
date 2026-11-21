@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { visibleCode, visibleLines } from "../src/lib/visible_text"
+import { cappedLines, visibleCode, visibleLines } from "../src/lib/visible_text"
 
 describe("visibleLines", () => {
   test("keeps ordinary text as written, backslashes and accents included", () => {
@@ -39,5 +39,32 @@ describe("visibleCode", () => {
 
   test("marks control and invisible characters", () => {
     expect(visibleCode("ok\u202e = 1\u200b\u00a0\u001b⟨")).toBe("ok⟨U+202E⟩ = 1⟨U+200B⟩⟨U+00A0⟩⟨U+001B⟩⟨U+27E8⟩")
+  })
+})
+
+describe("the lines of a command or of output, capped", () => {
+  const lines = (count: number) => Array.from({ length: count }, (_, index) => `line ${index + 1}`)
+
+  test("up to the limit they are all shown, and a final line break is not a line", () => {
+    expect(cappedLines(lines(40))).toEqual(lines(40))
+    expect(cappedLines([...lines(40), ""])).toEqual(lines(40))
+    expect(cappedLines([""])).toEqual([""])
+  })
+
+  test("past it, the rest is counted in the brackets no text can draw", () => {
+    expect(cappedLines(lines(41)).slice(-2)).toEqual(["line 40", "⟨1 more line⟩"])
+    expect(cappedLines(lines(45)).slice(-1)).toEqual(["⟨5 more lines⟩"])
+    expect(cappedLines([...lines(45), ""]).slice(-1)).toEqual(["⟨5 more lines⟩"])
+  })
+
+  test("a line that reads like the count is drawn as text, not as the count", () => {
+    expect(cappedLines(visibleLines("echo a\n⟨5 more lines⟩"))).toEqual([
+      "echo a ↵",
+      "⟨U+27E8⟩5 more lines⟨U+27E9⟩",
+    ])
+    expect(cappedLines(["out", visibleCode("⟨5 more lines⟩")])).toEqual([
+      "out",
+      "⟨U+27E8⟩5 more lines⟨U+27E9⟩",
+    ])
   })
 })

@@ -13,6 +13,14 @@ has none. Releases before 2.0.9 are described on their GitHub release pages.
   reply shown as running: Esc closes the command's result, and the next
   Esc stops the reply. Before, the "Working…" line went away and Esc did
   nothing until the reply ended.
+- With details open (Ctrl+O), a command's row shows the whole text its
+  permission was matched against, as the prompt showed it: line by line,
+  after the `cd` line for a directory the call named. The row itself is a
+  summary, cut at the first pipe, so two commands that "Allow always"
+  tells apart could look the same. It is there once the command has run
+  or been refused, up to 40 lines, then `⟨N more lines⟩`; a tool's output
+  with details open ends the same way, where it ended in
+  `… (N more lines)`, which output could imitate.
 - The model is sent a tool's result without what is for the app's row of
   the call: an edit's diff (which OpenAI, Azure and Anthropic models were
   sent, up to 400 rows a call) and the line that says what "Allow always"
