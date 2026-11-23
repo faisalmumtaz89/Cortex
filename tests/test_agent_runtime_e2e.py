@@ -4048,3 +4048,22 @@ def test_the_system_prompt_says_nothing_false_about_approving_commands(
     assert "waits for the user to approve" not in system["content"]
     assert ("they need no permission, while a bash command may need the user's approval "
             "or be refused") in system["content"]
+
+
+def test_the_model_is_told_how_long_a_command_may_run(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """A command that runs past its timeout is stopped, and a timeout past the
+    maximum is refused: the model is told both numbers, and how to run a
+    longer job, before it chooses a timeout."""
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo, [{"text": "Done."}], full_auto=True)
+    assert process.returncode == 0, process.stderr
+    bash = next(tool["function"] for tool in server.requests[0]["tools"]
+                if tool["function"]["name"] == "bash")
+    description = bash["description"]
+    assert "120000 ms (2 minutes)" in description
+    assert "600000 ms (10 minutes)" in description
+    assert "in the background, in a call of its own" in description
+    timeout = bash["parameters"]["properties"]["timeout_ms"]
+    assert (timeout["default"], timeout["maximum"]) == (120000, 600000)

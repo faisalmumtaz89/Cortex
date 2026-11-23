@@ -36,15 +36,29 @@ _running: set[subprocess.Popen] = set()
 _running_lock = threading.RLock()
 
 
+# How long a command may run, in milliseconds: by default, and at most.
+_DEFAULT_TIMEOUT_MS = 120_000
+_MAX_TIMEOUT_MS = 600_000
+
+
 class BashArgs(BaseModel):
     command: str = Field(min_length=1)
-    timeout_ms: int = Field(default=120_000, ge=1, le=600_000)
+    timeout_ms: int = Field(default=_DEFAULT_TIMEOUT_MS, ge=1, le=_MAX_TIMEOUT_MS)
     workdir: str | None = Field(default=None)
 
 
 class BashTool(BaseTool[BashArgs]):
     name = "bash"
-    description = "Execute a shell command with timeout and output capture."
+    description = (
+        "Execute a shell command and return its output (stdout and stderr together). "
+        f"timeout_ms is how long it may run: {_DEFAULT_TIMEOUT_MS} ms "
+        f"({_DEFAULT_TIMEOUT_MS // 60_000} minutes) by default, at most {_MAX_TIMEOUT_MS} ms "
+        f"({_MAX_TIMEOUT_MS // 60_000} minutes); a command still running then is stopped. "
+        "Run a longer job (a build, a server, a training run) in the background, in a call "
+        "of its own, with its output in a file, as in `nohup make > build.log 2>&1 &`, and "
+        "check on it with later calls: a job started in the same call as a command that is "
+        "then stopped is stopped with it."
+    )
     permission = "bash"
     args_model = BashArgs
 
