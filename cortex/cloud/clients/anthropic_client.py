@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 
@@ -262,12 +263,21 @@ class AnthropicClient:
                 result: ToolResult = tool_executor(call)
                 yield ToolResultEvent(result=result)
 
+                result_content: object = result.for_model()
+                if result.images:
+                    result_content = [{"type": "text", "text": result_content}] + [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": image.media_type,
+                                "data": base64.b64encode(image.data).decode("ascii"),
+                            },
+                        }
+                        for image in result.images
+                    ]
                 tool_result_blocks.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": call.id,
-                        "content": result.for_model(),
-                    }
+                    {"type": "tool_result", "tool_use_id": call.id, "content": result_content}
                 )
 
             history.append({"role": "assistant", "content": assistant_blocks})

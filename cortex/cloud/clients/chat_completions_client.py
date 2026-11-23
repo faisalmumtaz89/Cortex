@@ -24,6 +24,7 @@ from cortex.tooling.types import (
     TextDeltaEvent,
     ToolCall,
     ToolCallEvent,
+    ToolResult,
     ToolResultEvent,
     TurnInterrupt,
 )
@@ -108,6 +109,7 @@ class ChatCompletionsClient:
         use_tools = bool(serialized_tools) and tool_executor is not None
         step = _Step()
         cut_off = 0  # replies in a row that stopped at the output limit
+        images_refused = False  # the server refused a request that had images
 
         requests_allowed = max(1, max_tool_iterations)
         for request_number in range(1, requests_allowed + 1):
@@ -132,6 +134,17 @@ class ChatCompletionsClient:
                     on_retry=on_retry,
                 )
             except openai.APIStatusError as exc:
+                refused = exc.status_code in (400, 422)
+                if (refused and not images_refused and request_number < requests_allowed
+                        and any(_shows_images(message) for message in conversation)):
+                    # A server that takes no images (or this one): it is sent
+                    # the request again without them, and the rest of the turn
+                    # has none.
+                    logger.info("A request with images was refused (%s): sending it without them",
+                                exc.status_code)
+                    images_refused = True
+                    conversation[:] = _without_images(conversation)
+                    continue
                 if not cut_off or exc.status_code not in (400, 422):
                     raise
                 # A server that will not take the conversation as continued:
@@ -192,6 +205,7 @@ class ChatCompletionsClient:
             if step.reasoning:
                 assistant_step[step.reasoning_field] = step.reasoning
             conversation.append(assistant_step)
+            shown: List[Dict[str, object]] = []
             for _, slot in ordered:
                 raw_args = slot["args"] or "{}"
                 try:
@@ -207,13 +221,22 @@ class ChatCompletionsClient:
                 yield ToolCallEvent(call=call)
                 result = tool_executor(call)
                 yield ToolResultEvent(result=result)
+                content = result.for_model()
+                if result.images and images_refused:
+                    content = f"{content}\n{_NO_IMAGES_NOTE}"
+                elif result.images:
+                    shown.extend(_image_parts(result))
                 conversation.append(
                     {
                         "role": "tool",
                         "tool_call_id": call.id,
-                        "content": result.for_model(),
+                        "content": content,
                     }
                 )
+            # Pictures follow the step's tool results in a message of their
+            # own: a tool message carries text only on most servers.
+            if shown:
+                conversation.append({"role": "user", "content": shown})
 
         # The step limit ends the turn; its tool calls and results are kept.
         yield FinishEvent(
@@ -282,3 +305,40 @@ class _Step:
     finish_reason: str = "stop"
     reported_model: str = ""
     response_id: str = ""
+
+
+_NO_IMAGES_NOTE = (
+    "(The server refused a request that had an image in it, so images are left out "
+    "for the rest of this turn.)"
+)
+
+
+def _image_parts(result: ToolResult) -> List[Dict[str, object]]:
+    """A tool result's pictures as message parts, each after a line naming
+    the call."""
+    parts: List[Dict[str, object]] = []
+    for image in result.images:
+        parts.append({"type": "text", "text": result.image_label()})
+        parts.append({"type": "image_url", "image_url": {"url": image.data_url()}})
+    return parts
+
+
+def _shows_images(message: Dict[str, object]) -> bool:
+    content = message.get("content")
+    return isinstance(content, list) and any(
+        isinstance(part, dict) and part.get("type") == "image_url" for part in content
+    )
+
+
+def _without_images(conversation: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    """The conversation as a server that takes no images is sent it: each
+    message of pictures is dropped, and the tool results before it say so.
+    No message is left after a step's tool results that some servers refuse."""
+    kept: List[Dict[str, object]] = []
+    for message in conversation:
+        if not _shows_images(message):
+            kept.append(message)
+            continue
+        if kept and kept[-1].get("role") == "tool":
+            kept[-1] = {**kept[-1], "content": f"{kept[-1]['content']}\n{_NO_IMAGES_NOTE}"}
+    return kept

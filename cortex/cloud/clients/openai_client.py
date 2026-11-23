@@ -322,7 +322,8 @@ class OpenAIClient:
                 )
                 return
 
-            outputs = []
+            outputs: List[Dict[str, object]] = []
+            shown: List[Dict[str, object]] = []
             for call in calls:
                 yield ToolCallEvent(call=call)
                 tool_result = tool_executor(call)
@@ -334,6 +335,15 @@ class OpenAIClient:
                         "output": tool_result.for_model(),
                     }
                 )
+                for image in tool_result.images:
+                    shown.append({"type": "input_text", "text": tool_result.image_label()})
+                    shown.append(
+                        {"type": "input_image", "image_url": image.data_url(), "detail": "auto"}
+                    )
+            # Pictures follow the step's tool results as a message of their
+            # own; the response chain keeps them for the rest of the turn.
+            if shown:
+                outputs.append({"type": "message", "role": "user", "content": shown})
 
             request_input = outputs
 

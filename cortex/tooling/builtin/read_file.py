@@ -4,18 +4,70 @@ from __future__ import annotations
 
 import codecs
 import re
+from pathlib import Path
 from typing import BinaryIO, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
 from cortex.tooling.base import BaseTool, ToolContext, ToolExecutionError
 from cortex.tooling.builtin.common import is_binary_file, resolve_repo_path
-from cortex.tooling.types import ToolExecutionState, ToolResult
+from cortex.tooling.types import Image, ToolExecutionState, ToolResult
 
 # One call shows at most this many lines, characters per line, and bytes.
 _MAX_LINES = 2000
 _MAX_LINE_CHARS = 2000
 _MAX_OUTPUT_BYTES = 100_000
+
+
+# The largest image shown: base64 makes it 5 MB, the most Anthropic takes for
+# one image (OpenAI takes more).
+_MAX_IMAGE_BYTES = 3_750_000
+
+# How each image format begins, and its media type.
+_IMAGE_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def image_type(path: Path) -> Optional[str]:
+    """The media type of an image the model can be shown, from the file's
+    first bytes (not its name), or None."""
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(12)
+    except OSError:
+        return None
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    return next((kind for start, kind in _IMAGE_SIGNATURES if head.startswith(start)), None)
+
+
+def _image_result(target: Path, media_type: str, context: ToolContext) -> ToolResult:
+    shown = str(target.relative_to(context.repo_root))
+    # One open and a bounded read: the size seen is the size sent.
+    with target.open("rb") as handle:
+        data = handle.read(_MAX_IMAGE_BYTES + 1)
+    if len(data) > _MAX_IMAGE_BYTES:
+        size = max(target.stat().st_size, len(data))
+        raise ToolExecutionError(
+            f"image too large to show: {shown} is {size:,} bytes, "
+            f"the limit is {_MAX_IMAGE_BYTES:,}; make a smaller copy and read that"
+        )
+    return ToolResult(
+        id=context.call_id,
+        name="read_file",
+        state=ToolExecutionState.COMPLETED,
+        ok=True,
+        output=(
+            f"{shown}: {media_type.split('/')[1].upper()} image, {len(data):,} bytes, "
+            "shown to you as an image"
+        ),
+        metadata={"path": shown, "media_type": media_type, "bytes": len(data)},
+        images=(Image(media_type, data),),
+    )
 
 
 class ReadFileArgs(BaseModel):
@@ -30,7 +82,8 @@ class ReadFileTool(BaseTool[ReadFileArgs]):
         "Read a UTF-8 text file, optionally a line range. Each line is shown as "
         '"<line number>: <text>"; the number and ": " are not part of the file, so leave '
         f"them out of edit_file's old_text. At most {_MAX_LINES} lines are shown per call; "
-        "when lines are left out, the last line of the output says how to read on."
+        "when lines are left out, the last line of the output says how to read on. "
+        "A PNG, JPEG, GIF or WebP image is shown to you as the picture itself."
     )
     permission = "read"
     args_model = ReadFileArgs
@@ -43,6 +96,9 @@ class ReadFileTool(BaseTool[ReadFileArgs]):
 
         if not target.exists() or not target.is_file():
             raise ToolExecutionError(f"path does not exist or is not a file: {parsed_args.path}")
+        media_type = image_type(target)
+        if media_type is not None:
+            return _image_result(target, media_type, context)
         if is_binary_file(target):
             raise ToolExecutionError(f"cannot read binary file: {parsed_args.path}")
         if parsed_args.end_line is not None and parsed_args.end_line < parsed_args.start_line:

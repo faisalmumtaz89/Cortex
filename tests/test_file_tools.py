@@ -85,3 +85,48 @@ def test_a_carriage_return_in_the_edit_text_is_not_a_line_break(tmp_path):
 def test_new_line_breaks_do_not_join_a_neighbouring_one(tmp_path):
     assert _edit(tmp_path, b"a\rb\nc\n", "a\nb\nc", "A\n\nC") == b"A\r\n\r\nC\n"
     assert _edit(tmp_path, b"a\rb\rc\rd\ne\n", "d", "d\n") == b"a\rb\rc\rd\r\n\ne\n"
+
+
+def _read(tmp_path, name: str, data: bytes):
+    (tmp_path / name).write_bytes(data)
+    context = ToolContext(repo_root=tmp_path.resolve(), session_id="s", call_id="c")
+    tool = read_file.ReadFileTool()
+    return tool.run(tool.args_model(path=name), context)
+
+
+@pytest.mark.parametrize(
+    "head, media_type",
+    [
+        (b"\x89PNG\r\n\x1a\n", "image/png"),
+        (b"\xff\xd8\xff\xe0", "image/jpeg"),
+        (b"GIF87a", "image/gif"),
+        (b"GIF89a", "image/gif"),
+        (b"RIFF\x10\x00\x00\x00WEBPVP8 ", "image/webp"),
+    ],
+)
+def test_an_image_is_read_as_a_picture_by_its_first_bytes(tmp_path, head, media_type):
+    data = head + b"\x00" * 64
+    shown = _read(tmp_path, "picture.dat", data)
+    assert shown.ok
+    assert [(image.media_type, image.data) for image in shown.images] == [(media_type, data)]
+    assert shown.metadata == {"path": "picture.dat", "media_type": media_type, "bytes": len(data)}
+    assert "shown to you as an image" in shown.output
+    assert "base64" not in shown.for_model()
+
+
+def test_a_text_file_named_like_an_image_is_read_as_text(tmp_path):
+    shown = _read(tmp_path, "notes.png", b"not a picture\n")
+    assert shown.images == ()
+    assert shown.output == "1: not a picture"
+
+
+def test_an_image_over_the_limit_is_refused_with_how_to_go_on(tmp_path, monkeypatch):
+    monkeypatch.setattr(read_file, "_MAX_IMAGE_BYTES", 10)
+    with pytest.raises(ToolExecutionError, match="image too large to show: big.png is 16 bytes, "
+                       "the limit is 10; make a smaller copy and read that"):
+        _read(tmp_path, "big.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
+
+
+def test_other_binary_files_are_still_refused(tmp_path):
+    with pytest.raises(ToolExecutionError, match="cannot read binary file: blob.bin"):
+        _read(tmp_path, "blob.bin", b"\x7fELF\x00\x00")

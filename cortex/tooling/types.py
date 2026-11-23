@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import socket
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Iterator, List, Literal, Optional, Union
+from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 
 class ToolExecutionState(str, Enum):
@@ -63,6 +64,17 @@ class ToolCall:
 _FOR_THE_APP = frozenset({"diff", "permission_note", "permission_patterns"})
 
 
+@dataclass(frozen=True)
+class Image:
+    """A picture a tool shows the model, as the file's own bytes."""
+
+    media_type: str
+    data: bytes
+
+    def data_url(self) -> str:
+        return f"data:{self.media_type};base64,{base64.b64encode(self.data).decode('ascii')}"
+
+
 @dataclass
 class ToolResult:
     """Normalized tool result payload."""
@@ -74,6 +86,12 @@ class ToolResult:
     output: str = ""
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Pictures for the model, sent beside the text in the turn they are read.
+    images: Tuple[Image, ...] = ()
+
+    def image_label(self) -> str:
+        """The line that goes before each of the result's pictures."""
+        return f"Image from {self.name} ({self.metadata.get('path') or self.id}):"
 
     def for_model(self) -> str:
         """The result as the model is sent it: without what is for the app's

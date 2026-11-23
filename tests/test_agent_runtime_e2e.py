@@ -3886,3 +3886,148 @@ def test_a_failed_connection_names_the_host_and_why(tmp_path: Path, scratch_repo
     assert (f"and that {server.base_url.removesuffix('/v1')} is where the API's paths start "
             "(often /v1). That URL is set in OPENAI_COMPATIBLE_BASE_URL.") in missing.stderr, \
         missing.stderr
+
+
+def _png(width: int = 4, height: int = 2) -> bytes:
+    """A small valid PNG: left half red, right half blue."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(kind + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", crc)
+
+    rows = b"".join(
+        b"\x00" + b"".join(
+            bytes((255, 0, 0) if x < width // 2 else (0, 0, 255)) for x in range(width)
+        )
+        for _ in range(height)
+    )
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def _image_parts(request: dict) -> list:
+    return [part for message in request["messages"]
+            if isinstance(message.get("content"), list)
+            for part in message["content"] if part.get("type") == "image_url"]
+
+
+def test_an_image_the_model_reads_is_shown_to_it(tmp_path: Path, scratch_repo: Path) -> None:
+    """read_file on a PNG gives the model the picture itself, as models that
+    see images take it after a tool result: the board in a chess task, a
+    screenshot of a program's window."""
+    import base64
+
+    image = _png()
+    (scratch_repo / "board.png").write_bytes(image)
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo,
+        [{"tool_calls": [{"name": "read_file", "arguments": {"path": "board.png"}}]},
+         {"text": "Red on the left, blue on the right."}],
+    )
+    assert process.returncode == 0, process.stderr
+    assert len(server.requests) == 2
+    assert _image_parts(server.requests[0]) == []
+    assert _image_parts(server.requests[1]) == [
+        {"type": "image_url",
+         "image_url": {"url": "data:image/png;base64," + base64.b64encode(image).decode()}}]
+    result = next(m for m in server.requests[1]["messages"] if m["role"] == "tool")
+    assert json.loads(result["content"])["ok"] is True
+
+
+NO_IMAGES_NOTE = (
+    "(The server refused a request that had an image in it, so images are left out "
+    "for the rest of this turn.)"
+)
+
+
+@pytest.mark.parametrize("status", [400, 422])
+def test_a_server_that_refuses_images_is_sent_the_turn_without_them(
+    tmp_path: Path, scratch_repo: Path, status: int
+) -> None:
+    """A server that refuses a request with an image gets it once more with
+    the image left out and a note in the tool result, and the rest of the
+    turn has no images and no message after a step's tool results: a
+    text-only model goes on working."""
+    (scratch_repo / "board.png").write_bytes(_png())
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo,
+        [{"tool_calls": [{"name": "read_file", "arguments": {"path": "board.png"}}]},
+         {"status": status},
+         {"tool_calls": [{"name": "read_file", "arguments": {"path": "board.png"}}]},
+         {"text": "I could not see it."}],
+    )
+    assert process.returncode == 0, process.stderr
+    assert process.stdout.strip() == "I could not see it."
+    assert len(server.requests) == 4
+    assert len(_image_parts(server.requests[1])) == 1
+    for request in server.requests[2:]:
+        assert _image_parts(request) == []
+        assert request["messages"][-1]["role"] == "tool"
+        assert all(isinstance(message.get("content"), (str, type(None)))
+                   for message in request["messages"])
+    results = [m["content"] for m in server.requests[3]["messages"] if m["role"] == "tool"]
+    assert len(results) == 2
+    assert all(content.endswith("\n" + NO_IMAGES_NOTE) for content in results)
+
+
+def test_a_refusal_of_the_turns_last_request_is_not_sent_again(
+    tmp_path: Path, scratch_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The step limit holds: a request with an image that the server refuses
+    as the turn's last allowed one ends the turn on the refusal."""
+    (scratch_repo / "board.png").write_bytes(_png())
+    monkeypatch.setenv("CORTEX_TOOLS_MAX_ITERATIONS", "2")
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo,
+        [{"tool_calls": [{"name": "read_file", "arguments": {"path": "board.png"}}]},
+         {"status": 400}],
+    )
+    assert process.returncode != 0
+    assert len(server.requests) == 2
+    assert "Error code: 400 - scripted 400" in process.stderr
+    assert "limit of model requests" not in process.stderr
+
+
+def test_a_refusal_with_no_image_in_the_request_still_fails_the_turn(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    process, server = _run_against_gateway(tmp_path, scratch_repo, [{"status": 400}])
+    assert process.returncode != 0
+    assert len(server.requests) == 1
+
+
+def test_an_image_goes_to_the_model_only_in_the_turn_it_is_read(
+    tmp_path: Path, scratch_repo: Path
+) -> None:
+    """The next turn's history keeps the call's line of text, not the picture:
+    the model reads the file again if it needs it."""
+    (scratch_repo / "board.png").write_bytes(_png())
+    server = ChatCompletionsServer([
+        {"tool_calls": [{"name": "read_file", "arguments": {"path": "board.png"}}]},
+        {"text": "Red and blue."},
+        {"text": "Still red and blue."},
+    ])
+    env = _worker_env(tmp_path, tmp_path / "unused.json")
+    env.pop("CORTEX_SCRIPTED_MODEL")
+    env["OPENAI_COMPATIBLE_BASE_URL"] = server.base_url
+    env["OPENAI_COMPATIBLE_API_KEY"] = "sk-compatible-test"
+    env.pop("OPENAI_API_KEY")
+    harness = WorkerHarness(cwd=scratch_repo, env=env)
+    try:
+        session_id = _start_session(harness)
+        harness.wait_response(harness.send("command.execute", {
+            "session_id": session_id, "command": f"/model openai-compatible:{server.model}"}))
+        for said in ("what colours is board.png?", "and now?"):
+            harness.wait_response(harness.send(
+                "session.submit_user_input", {"session_id": session_id, "user_input": said}))
+    finally:
+        harness.close()
+        server.close()
+    assert len(server.requests) == 3
+    assert len(_image_parts(server.requests[1])) == 1
+    assert _image_parts(server.requests[2]) == []
+    later = json.dumps(server.requests[2]["messages"])
+    assert "shown to you as an image" in later and "base64" not in later
