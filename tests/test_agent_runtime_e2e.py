@@ -4031,3 +4031,20 @@ def test_an_image_goes_to_the_model_only_in_the_turn_it_is_read(
     assert _image_parts(server.requests[2]) == []
     later = json.dumps(server.requests[2]["messages"])
     assert "shown to you as an image" in later and "base64" not in later
+
+
+@pytest.mark.parametrize("full_auto", [True, False])
+def test_the_system_prompt_says_nothing_false_about_approving_commands(
+    tmp_path: Path, scratch_repo: Path, full_auto: bool
+) -> None:
+    """With --full-auto no command waits for anyone, and without it they are
+    refused: a prompt that says every command waits for the user's approval
+    is wrong in both runs, and the model plans around it."""
+    process, server = _run_against_gateway(
+        tmp_path, scratch_repo, [{"text": "Done."}], full_auto=full_auto)
+    assert process.returncode == 0, process.stderr
+    system = server.requests[0]["messages"][0]
+    assert system["role"] == "system"
+    assert "waits for the user to approve" not in system["content"]
+    assert ("they need no permission, while a bash command may need the user's approval "
+            "or be refused") in system["content"]

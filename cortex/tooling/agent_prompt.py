@@ -28,8 +28,8 @@ files before describing or changing them; never guess paths, APIs, or contents.
 - Search first (search, list_dir), then read the smallest useful region \
 (read_file with line ranges), and read git state (status, diffs, history) \
 with the git tool. Use these tools, not bash (grep, find, ls, cat, git status, \
-git diff, git log): they need no permission, while every bash command waits \
-for the user to approve it.
+git diff, git log): they need no permission, while a bash command may need \
+the user's approval or be refused.
 - Prefer edit_file for surgical changes; old_text must match the file exactly. \
 Use write_file only for new files or full rewrites.
 - After changing code, verify it: re-read the edited region or run the \
